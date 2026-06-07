@@ -32,6 +32,47 @@ import db
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Costanti display
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Fuso orario locale: Supabase / Open-Meteo / METAR usano UTC; in dashboard
+# convertiamo TUTTI i timestamp a ora italiana per la lettura.
+LOCAL_TZ = "Europe/Rome"
+
+# 16 punti cardinali (rosa dei venti italiana). round(°/22.5) % 16
+# mappa direttamente sull'indice di questa lista.
+WIND_DIRECTIONS_16 = [
+    "N",   "NNE", "NE",  "ENE",
+    "E",   "ESE", "SE",  "SSE",
+    "S",   "SSO", "SO",  "OSO",
+    "O",   "ONO", "NO",  "NNO",
+]
+
+
+def to_local(series: pd.Series) -> pd.Series:
+    """
+    Converte una serie di timestamp a ora locale (Europe/Rome).
+
+    Robusta sia a stringhe ISO con offset (Supabase) sia a Series già
+    parsate: forza prima il parsing UTC, poi converte al fuso locale.
+    """
+    s = pd.to_datetime(series, utc=True, errors="coerce")
+    return s.dt.tz_convert(LOCAL_TZ)
+
+
+def degrees_to_cardinal(deg) -> str:
+    """
+    Converte gradi (0–360) in punto cardinale a 16 settori.
+
+    Formula: round(deg / 22.5) % 16  →  indice in WIND_DIRECTIONS_16.
+    Ritorna stringa vuota per NaN.
+    """
+    if pd.isna(deg):
+        return ""
+    return WIND_DIRECTIONS_16[round(float(deg) / 22.5) % 16]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Helpers cache (TTL breve: dashboard quasi real-time)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -58,8 +99,8 @@ def load_latest_forecast_per_station() -> pd.DataFrame:
     df = pd.DataFrame(res.data)
     if df.empty:
         return df
-    df["forecast_at"] = pd.to_datetime(df["forecast_at"])
-    df["valid_for"]   = pd.to_datetime(df["valid_for"])
+    df["forecast_at"] = to_local(df["forecast_at"])
+    df["valid_for"]   = to_local(df["valid_for"])
     # Una riga per stazione: la più recente per forecast_at.
     df = (
         df.sort_values("forecast_at", ascending=False)
@@ -83,8 +124,8 @@ def load_recent_forecasts(hours: int = 48) -> pd.DataFrame:
     )
     df = pd.DataFrame(res.data)
     if not df.empty:
-        df["valid_for"]   = pd.to_datetime(df["valid_for"])
-        df["forecast_at"] = pd.to_datetime(df["forecast_at"])
+        df["valid_for"]   = to_local(df["valid_for"])
+        df["forecast_at"] = to_local(df["forecast_at"])
     return df
 
 
@@ -93,7 +134,7 @@ def load_recent_observations(station_id: int, hours: int = 48) -> pd.DataFrame:
     rows = db.get_observations(station_id, hours=hours, qc_ok_only=True)
     df = pd.DataFrame(rows)
     if not df.empty:
-        df["recorded_at"] = pd.to_datetime(df["recorded_at"])
+        df["recorded_at"] = to_local(df["recorded_at"])
     return df
 
 
@@ -113,7 +154,7 @@ def load_latest_metrics() -> pd.DataFrame:
     df = pd.DataFrame(res.data)
     if df.empty:
         return df
-    df["trained_at"] = pd.to_datetime(df["trained_at"])
+    df["trained_at"] = to_local(df["trained_at"])
     df = (
         df.sort_values("trained_at", ascending=False)
           .groupby(["target", "horizon_hours"], as_index=False)
@@ -154,23 +195,29 @@ else:
         on="station_id",
         how="left",
     )
+
+    # Punto cardinale a 16 settori accanto ai gradi del vento.
+    if "wind_direction" in table.columns:
+        table["wind_dir_cardinal"] = table["wind_direction"].apply(degrees_to_cardinal)
+
     display_cols = [
         "name", "valid_for", "temperature",
-        "wind_speed", "wind_direction", "humidity",
+        "wind_speed", "wind_direction", "wind_dir_cardinal", "humidity",
         "corrected", "model_version", "forecast_at",
     ]
     display_cols = [c for c in display_cols if c in table.columns]
     table = table[display_cols].sort_values("name").reset_index(drop=True)
     table = table.rename(columns={
-        "name":           "Stazione",
-        "valid_for":      "Valido per (UTC)",
-        "temperature":    "T (°C)",
-        "wind_speed":     "Vento (km/h)",
-        "wind_direction": "Direzione (°)",
-        "humidity":       "Umidità (%)",
-        "corrected":      "Corretto",
-        "model_version":  "Versione",
-        "forecast_at":    "Emessa (UTC)",
+        "name":              "Stazione",
+        "valid_for":         "Valido per (Italia)",
+        "temperature":       "T (°C)",
+        "wind_speed":        "Vento (km/h)",
+        "wind_direction":    "Direzione (°)",
+        "wind_dir_cardinal": "Direzione",
+        "humidity":          "Umidità (%)",
+        "corrected":         "Corretto",
+        "model_version":     "Versione",
+        "forecast_at":       "Emessa (Italia)",
     })
     st.dataframe(table, use_container_width=True, hide_index=True)
 
@@ -240,7 +287,7 @@ else:
         "train_rmse":     "RMSE train",
         "n_train":        "N train",
         "n_val":          "N val",
-        "trained_at":     "Trained at (UTC)",
+        "trained_at":     "Trained at (Italia)",
     })
     st.dataframe(display, use_container_width=True, hide_index=True)
 
