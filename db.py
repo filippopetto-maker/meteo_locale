@@ -66,7 +66,16 @@ def insert_forecast(station_id, forecast_at, valid_for, temperature, wind_speed,
         "model_version": model_version,
         "corrected": corrected,
     }
-    res = get_client().table("forecasts").insert(data).execute()
+    # Upsert su (station_id, valid_for): se la previsione per quella stazione
+    # e quell'orario di validità esiste già, viene sovrascritta invece di
+    # creare un duplicato. Richiede il vincolo UNIQUE
+    # `forecasts_station_valid_unique` su (station_id, valid_for) lato DB.
+    res = (
+        get_client()
+        .table("forecasts")
+        .upsert(data, on_conflict="station_id,valid_for")
+        .execute()
+    )
     return res.data[0]["id"] if res.data else None
 
 def insert_model_metrics(target, horizon_hours, train_mae, train_rmse,

@@ -101,6 +101,13 @@ def load_latest_forecast_per_station() -> pd.DataFrame:
         return df
     df["forecast_at"] = to_local(df["forecast_at"])
     df["valid_for"]   = to_local(df["valid_for"])
+    # Dedup: previsioni multiple emesse per la stessa (stazione, valid_for)
+    # — tieni la più recente (forecast_at massimo). Il fix definitivo è un
+    # upsert lato inference.py, qui filtriamo a display time.
+    df = (
+        df.sort_values("forecast_at", ascending=False)
+          .drop_duplicates(subset=["station_id", "valid_for"], keep="first")
+    )
     # Una riga per stazione: la più recente per forecast_at.
     df = (
         df.sort_values("forecast_at", ascending=False)
@@ -126,6 +133,13 @@ def load_recent_forecasts(hours: int = 48) -> pd.DataFrame:
     if not df.empty:
         df["valid_for"]   = to_local(df["valid_for"])
         df["forecast_at"] = to_local(df["forecast_at"])
+        # Dedup come in load_latest_forecast_per_station: tieni la previsione
+        # più recente (forecast_at massimo) per ogni (station_id, valid_for).
+        df = (
+            df.sort_values("forecast_at", ascending=False)
+              .drop_duplicates(subset=["station_id", "valid_for"], keep="first")
+              .sort_values("valid_for")
+        )
     return df
 
 
