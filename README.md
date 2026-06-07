@@ -1,357 +1,480 @@
-# meteo_locale
+# 🌦️ Meteo Locale — Sistema di Previsioni Meteo Iper-Locali per Roma
 
-Previsione meteo locale per l'area di Roma — modello MOS (Model Output
-Statistics) a due stadi: LightGBM addestrato su ERA5/METAR + Random Forest
-correttore dei residui.
+Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
-## Architettura
+---
 
-```
-ERA5 (Open-Meteo Archive)  ──┐
-                              ├──► historical.py ──► training set parquet
-METAR (Iowa State IEM)    ──┘                                │
-                                                              ▼
-                                       forecast.py (LightGBM, 5 strati feature)
-                                                              │
-                                                              ▼
-                                       model/correttore.py (RF sui residui)
-                                                              │
-                                                              ▼
-Open-Meteo Forecast API  ──► model/inference.py ──► Supabase (tabella forecasts)
-                                                              │
-                                                              ▼
-                                                  output/dashboard.py (Streamlit)
-```
+## 📑 Indice
 
-## Stack
+1. [Visione del progetto](#-visione-del-progetto)  
+2. [Perché questo approccio](#-perché-questo-approccio)  
+3. [Architettura](#-architettura)  
+4. [Stack tecnologico](#-stack-tecnologico)  
+5. [Fonti dati](#-fonti-dati)  
+6. [Feature orografiche](#-feature-orografiche)  
+7. [Stato attuale](#-stato-attuale)  
+8. [Struttura del progetto](#-struttura-del-progetto)  
+9. [Database — schema](#-database--schema)  
+10. [Setup e installazione](#-setup-e-installazione)  
+11. [I moduli](#-i-moduli)  
+12. [Roadmap](#-roadmap)  
+13. [Diario degli errori risolti](#-diario-degli-errori-risolti)  
+14. [Differenziali competitivi](#-differenziali-competitivi)  
+15. [Come riprendere il lavoro](#-come-riprendere-il-lavoro)
 
-- **Python 3.12** (conda env `meteo`, installer Miniforge)
-- **Supabase** (PostgreSQL gestito) — tabelle: `stations`, `observations`,
-  `forecasts`, `model_metrics`, vista `latest_observations`
-- **LightGBM** — primo stadio, salvato in formato nativo `.txt`
-- **scikit-learn RandomForest** — secondo stadio (correttore residui)
-- **Open-Meteo** API gratuite — archive ERA5 (training) + forecast (inference)
-- **Iowa State IEM ASOS** — METAR storico (truth label) gratuito
-- **Streamlit** — dashboard read-only
-- **GitHub Actions** — scheduling inference operativa
+---
 
-Dipendenze pinnate in `requirements.txt`.
+## 🎯 Visione del progetto
 
-## Stazioni attive
+L'obiettivo è costruire un sistema di previsione meteo **iper-locale** sul comune di Roma, capace di battere le principali app meteo sulla **capillarità della conoscenza del territorio**.
 
-| id | Nome                     | ICAO METAR | Microclima      |
-|----|--------------------------|------------|-----------------|
-| 1  | Roma Nord                | LIRA       | standard        |
-| 2  | Roma Centro              | LIRA       | urban_canyon    |
-| 3  | Roma Sud (Casal Palocco) | LIRF       | verde_parco     |
-| 4  | Ostia                    | LIRF       | costiera        |
+Le grandi app usano modelli globali interpolati su griglie larghe (10–25 km), che non catturano i microclimi locali: l'isola di calore urbana del centro storico, la brezza marina di Ostia, l'inversione termica notturna nelle zone basse. Questo sistema parte invece da **dati osservati reali** stazione-per-stazione e impara le correzioni locali che i modelli globali sbagliano.
 
-Coordinate e metadati orografici in tabella `stations` su Supabase.
+**Cosa fa la scatola, in una frase:** dato lo stato meteorologico regionale (temperatura, umidità, CAPE, vento) e il profilo orografico di un punto, restituisce una previsione locale — rischio temporale, pioggia attesa, temperatura e vento con direzione.
 
-## Stato attuale
+**Prodotto finale atteso:** un sistema autonomo che raccoglie, analizza e prevede, girando su infrastruttura cloud gratuita, spendibile come progetto di portfolio nel mercato del lavoro data/ML.
 
-### Fase 1 — Modello sullo storico  · **85%**
+---
 
-- ✅ `historical.py` — ERA5 + METAR → parquet (10 anni, 331k righe)
-- ✅ `features.py` — 5 strati di feature engineering (67 feature totali)
-- ✅ `forecast.py` — LightGBM addestrato su 4 target:
-  - `temperature` — val MAE **0.869 °C**
-  - `wind_speed` — val MAE **2.717 km/h**
-  - `wind_direction` — val MAE **44.47 °**
-  - `humidity` — val MAE **5.73 %**
-- ✅ `correttore.py` — RF correttore attivo per **temperature** e **wind_direction**;
-  `wind_speed` e `humidity` usano LGBM puro (RF non migliora su residui non strutturati,
-  vedi tabella in [RF correttore (stadio 2)](#rf-correttore-stadio-2))
-- ❌ rischio temporali e pioggia puntuale — rimandato alla Fase 3
+## 🧭 Perché questo approccio
 
-### Fase 2 — Pipeline live  · **20%**
+### Cosa NON facciamo: WRF / NWP completo
 
-- ✅ `inference.py` — genera previsioni live per le 4 stazioni, scrive su Supabase
-- ✅ `.github/workflows/inference.yml` — workflow cron ogni 30 min creato,
-  **da attivare con push del repo + configurazione secrets**
-- ❌ `mainMETEO.py` — raccolta dati live Netatmo/ARPA non ancora implementata
-- ❌ Tabella `observations` su Supabase ancora vuota (nessun loop osservato vs previsto)
+Inizialmente valutato un modello numerico di previsione (WRF), poi abbandonato. Un modello fisico integra nel tempo le equazioni della fluidodinamica e pretende in input lo **stato 3D completo dell'atmosfera** su tutta una griglia: non lo si "alimenta" con quattro parametri scalari, e per girare seriamente richiede infrastruttura HPC. Impraticabile su un Mac senza server, e comunque l'attrezzo sbagliato per questo scopo.
 
-### Fase 3 — Output  · **30%**
+### Cosa facciamo: statistical downscaling \+ ML
 
-- ✅ `output/dashboard.py` — Streamlit con 3 sezioni:
-  ultime previsioni, grafico previsto vs osservato 48h, metriche correnti
-- ❌ API FastAPI per esporre le previsioni
-- ❌ Mappa Cartopy con interpolazione spaziale
-- ❌ Tuning iperparametri LGBM/RF
-- ❌ Espansione a >4 stazioni (richiesta per attivare LCZ + impermeabilità)
+Accoppiamo **due fonti diverse** nella tabella di addestramento:
 
-## Struttura del progetto
+- **Input** \= stato regionale grezzo dalla rianalisi storica (ERA5 via Open-Meteo).  
+- **Target** \= cosa è *realmente* successo in un punto preciso, misurato da una stazione vera (METAR, ARPA, Netatmo).
 
-```
-meteo_locale/
-├── db.py                    # client Supabase + CRUD
-├── qc.py                    # QC 4 livelli (range/clima/persistence/spatial)
-├── features.py              # feature engineering 5 strati
-├── historical.py            # builder training set ERA5 + METAR
-├── forecast.py              # trainer LightGBM (stadio 1)
-├── model/
-│   ├── correttore.py        # trainer RF residui (stadio 2)
-│   ├── inference.py         # previsione operativa real-time
-│   ├── lgbm_{target}.txt    # modelli LGBM nativi (artefatti)
-│   ├── rf_correttore_{target}.pkl  # modelli RF (artefatti)
-│   └── feature_importance_{target}.json
-├── output/
-│   └── dashboard.py         # dashboard Streamlit
+Il modello impara la **correzione locale**: la differenza tra il grezzo regionale e l'osservazione reale *è* il microclima.
+
+**La trappola della risoluzione (da non dimenticare mai).** Allenare l'ML *solo* sulla rianalisi è inutile: a 25 km, Ostia, Monte Mario, il centro e un parco sono la stessa cella sfocata. Un modello addestrato lì impara a riprodurre ERA5, non a batterlo. Il segnale iper-locale **non è dentro la rianalisi gratuita** — entra solo attraverso i target di stazioni reali. Per questo input e target vengono da fonti diverse.
+
+### Principio chiave: multi-stazione è necessario, non opzionale
+
+Con una sola stazione le feature orografiche (quota, distanza dal mare, esposizione) sono **costanti** → non insegnano nulla, vengono assorbite come offset fisso. Si ottiene solo una correzione di bias *site-specific*: utile, ma non orografia generalizzabile, e cieca su qualsiasi punto nuovo.
+
+Le feature orografiche diventano predittori appresi e generalizzabili **solo addestrando simultaneamente su più stazioni con profili di terreno contrastanti** (costiero, pianura, urbano denso, quota). Solo confrontandoli il modello impara la regola fisica generale. → Non si sceglie *un* punto, si sceglie un **set di 3–4 punti** che coprano l'arco orografico.
+
+### Ordine di difficoltà dei target di previsione
+
+temperatura  \<  direzione vento  ≈  rischio temporali  \<  pioggia puntuale (mm)
+
+  (facile)                                                      (più difficile)
+
+Sviluppiamo in quest'ordine per costruire risultati e momentum. La pioggia quantitativa in un punto è il problema più duro della meteorologia: da input scalari, aspettarsi al massimo una probabilità grezza, non i millimetri.
+
+### Nota metodologica: evitare il look-ahead bias
+
+Se la scatola deve *prevedere* (non solo diagnosticare il presente), l'input dev'essere lo stato all'ora **T** e il target l'osservazione a **T+N**. Mai mescolare i tempi: altrimenti il modello "bara" guardando il futuro in fase di training e poi crolla nel mondo reale.
+
+---
+
+## 🏗️ Architettura
+
+┌───────────────────────────────────────────────────┐
+
+│              LAYER 1 — INGESTION                    │
+
+│  ── Storico (per l'addestramento) ──                │
+
+│  Open-Meteo / ERA5  → input regionale (reanalisi)   │
+
+│  METAR · ARPA       → target storici stazioni       │
+
+│  ── Live (per l'operatività) ──                     │
+
+│  Netatmo API        → stazioni reali dense          │
+
+│  ARPA Lazio         → dati ufficiali validati       │
+
+└────────────────────┬────────────────────────────────┘
+
+                     │
+
+┌────────────────────▼────────────────────────────────┐
+
+│              LAYER 2 — STORAGE                      │
+
+│  Supabase PostgreSQL (hosted, gratuito)             │
+
+│  stations · observations · forecasts                │
+
+│  qc\_log · model\_metrics                             │
+
+└────────────────────┬────────────────────────────────┘
+
+                     │
+
+┌────────────────────▼────────────────────────────────┐
+
+│              LAYER 3 — PROCESSING                   │
+
+│  QC (range·climatologico·persistenza·spaziale)      │
+
+│  Feature engineering (temporali·orografiche·derivate)│
+
+│  LightGBM (previsione) \+ RF (correttore)            │
+
+└────────────────────┬────────────────────────────────┘
+
+                     │
+
+┌────────────────────▼────────────────────────────────┐
+
+│              LAYER 4 — OUTPUT                       │
+
+│  Dashboard (Streamlit) · API (FastAPI)              │
+
+│  Mappa (Cartopy)                                    │
+
+└─────────────────────────────────────────────────────┘
+
+Esecuzione automatica (live): GitHub Actions (cron ogni 30 min, gratuito)
+
+**Due percorsi dati.** Il percorso *storico* (ERA5 \+ storico stazioni) serve ad allenare il modello SUBITO, offline, senza attese. Il percorso *live* (Netatmo \+ ARPA via GitHub Actions → Supabase) serve a coprire i punti senza storico e ad alimentare le previsioni operative una volta che il modello è addestrato.
+
+---
+
+## 🛠️ Stack tecnologico
+
+| Layer | Strumento | Costo |
+| :---- | :---- | :---- |
+| Dati storici | Open-Meteo Historical API (ERA5) | €0 |
+| Raccolta dati live | Python \+ GitHub Actions (cron) | €0 |
+| Storage | Supabase PostgreSQL (free tier) | €0 |
+| Accesso DB | supabase-py (API REST su HTTPS) | €0 |
+| Quality Control | Python (logica custom) | €0 |
+| Modello ML | LightGBM \+ scikit-learn (RandomForest) | €0 |
+| Visualizzazione | Streamlit / Grafana / Cartopy | €0 |
+| Versionamento | GitHub | €0 |
+| **TOTALE** |  | **€0** |
+
+---
+
+## 📡 Fonti dati
+
+### Input — stato regionale storico
+
+- **Open-Meteo Historical Weather API** — basata su ERA5, dati orari dal **1940**, copertura globale **senza buchi**, **gratuita e senza API key**, licenza CC BY 4.0. ERA5 a 0,25° (\~25 km); ERA5-Land a 0,1° (\~9 km). Espone le variabili che ci servono come input, **incluso CAPE**. Scaricabile anche in locale via AWS Open Data per grandi volumi.
+
+### Target — osservazioni reali
+
+- **METAR aeroportuali** (Ciampino, Fiumicino, Roma Urbe) — storico pluridecennale, ideale per il primo addestramento.  
+- **ARPA Lazio** — dati ufficiali validati.  
+- **Netatmo** — rete densa di stazioni personali (ottima copertura urbana, ma dato grezzo rumoroso → motivo in più per un QC robusto, vedi sotto).
+
+**CAPE è un input, non un'osservazione di stazione.** Le stazioni misurano temperatura, vento, umidità, pioggia; CAPE e profili d'instabilità arrivano dalla rianalisi ERA5. Per il target "pioggia" lo schema `observations` andrà esteso con un campo di precipitazione.
+
+---
+
+## 🏔️ Feature orografiche
+
+Sono il vero vantaggio competitivo: traducono i meccanismi fisici del territorio in colonne della tabella di training. In ordine di importanza:
+
+- **Quota — come delta rispetto alla cella ERA5.** La feature più potente. Non conta la quota assoluta ma di quanto il punto reale si scosta dalla quota "spalmata" che ERA5 assume per quella cella. È il correttore di temperatura più grosso (l'aria si raffredda di \~6,5 °C per km).  
+- **Posizione nel terreno** (fondovalle / versante / cresta). Governa la temperatura notturna: di notte l'aria fredda scivola in basso e si accumula nei fondovalle (inversioni, sacche di freddo); le creste restano più calde ma ventose.  
+- **Esposizione** (pendenza \+ orientamento del versante). Quanto sole prende il punto; effetto diurno e stagionale (versanti a sud più caldi).  
+- **Densità urbana.** Isola di calore: asfalto e cemento rilasciano calore di notte (+2/+5 °C vs campagna). Si descrive con superficie impermeabile, densità di edificato, indice di vegetazione, geometria street-canyon.  
+- **Distanza dal mare / acqua.** Brezza di mare: di giorno richiama aria fresca e umida dalla costa verso l'interno. Forte e regolare d'estate. Analogo minore per Tevere e laghi (Bracciano, Albano).  
+- **Esposizione al vento / sollevamento orografico.** Incanalamento lungo le valli, sollevamento sui versanti sopravento → più pioggia sopravento, ombra pluviometrica sottovento. Rilevante soprattutto per il target pioggia.
+
+### Mappatura sulle etichette Supabase esistenti
+
+Le etichette di microclima già nello schema sono il vocabolario orografico di partenza: `urban_canyon`, `esposta_sole`, `quota`, `costiera`, `verde_parco`.
+
+---
+
+## 📊 Stato attuale
+
+### ✅ Blocco 1 — Storage (COMPLETATO)
+
+- [x] Schema DB progettato e creato su Supabase  
+- [x] 5 tabelle \+ 2 viste operative  
+- [x] Modulo `db.py` di connessione (via API REST)  
+- [x] `.env` configurato con credenziali  
+- [x] Connessione testata: 4 stazioni iniziali caricate
+
+### 🔄 Blocco 2 — Modello ML (IN CORSO)
+
+- [ ] `historical.py` — costruzione tabella storica (ERA5 input \+ target stazioni)  
+- [ ] `features.py` — Feature Engineering (incl. feature orografiche)  
+- [ ] `forecast.py` — Modello LightGBM  
+- [ ] `correttore.py` — RF Correttore  
+- [x] `qc.py` — Quality Control a 4 livelli (scritto)  
+- [ ] `qc.py` — installato e testato in locale
+
+### ⏳ Blocco 3 — Pipeline live (DA FARE)
+
+- [ ] `mainMETEO.py` — riscrittura con fonti multi-stazione reali  
+- [ ] Integrazione fonti Netatmo \+ ARPA  
+- [ ] GitHub Actions per esecuzione automatica
+
+---
+
+## 📁 Struttura del progetto
+
+meteo\_locale/
+
+│
+
+├── .env                  \# credenziali Supabase (NON committare)
+
+├── .gitignore            \# include .env
+
+├── README.md             \# questo file
+
+├── requirements.txt      \# dipendenze Python
+
+│
+
+├── db.py                 \# modulo connessione DB (CRUD \+ health check)
+
+├── schema.sql            \# schema database (già eseguito su Supabase)
+
+│
+
 ├── data/
-│   ├── training_10y_h1.parquet     # training set 10 anni, horizon T+1h
-│   └── training.parquet
-├── logs/
-│   └── training_log.txt
-├── .github/workflows/
-│   └── inference.yml        # cron 30 min su GitHub Actions
-└── requirements.txt
-```
 
-## Feature engineering (5 strati, `features.py`)
+│   └── historical.py     \# scarica ERA5 \+ storico stazioni → tabella training (DA FARE)
 
-1. **Temporali**: `hour_sin/cos`, `doy_sin/cos`, `month`, `is_weekend`, `is_daytime`
-2. **Lag**: `{col}_lag_{1,2,3,6}` per `temperature`, `wind_speed`, `wind_direction`, `humidity`
-3. **Rolling**: `{col}_roll_mean_{3,6,12}`, `{col}_roll_std_{3,6,12}` con `shift(1)` (no look-ahead)
-4. **Derivate**: `wind_u`, `wind_v`, `temp_trend_1h`, `pressure_trend_1h`, `wind_speed_trend_1h`, `wind_chill`
-5. **Orografiche** (statiche per stazione): `altitude`, `dist_sea_km`, `dist_center_km`, `bearing_sea`, `onshore_alignment`, `microclima_*` one-hot
+│
 
-Totale: **67 feature** dopo il merge ERA5 + 5 strati.
+├── collect/
 
-### Look-ahead bias prevention
-- ERA5 a tempo T = reanalisi, nessuna info dal futuro
-- `shift(n≥1)` per lag/rolling → solo passato
-- Target prodotto con `shift(-horizon_hours)` ma è label, non entra in X
+│   └── mainMETEO.py      \# raccolta dati live (DA RISCRIVERE)
 
-## Modelli addestrati
+│
 
-Dataset: `data/training_10y_h1.parquet` (10 anni, 331,170 righe, 76 colonne).
-Split temporale 80/20 (no shuffle): train 2015-01-01 → 2023-01-07,
-val 2023-01-07 → 2024-12-30.
+├── model/
 
-### LightGBM (stadio 1) — metriche val
+│   ├── qc.py             \# quality control 4 livelli ✅
 
-| Target           | MAE val   | RMSE val   | Best iter | Top-3 feature              |
-|------------------|-----------|------------|-----------|----------------------------|
-| `temperature`    | (trained) | (trained)  | —         | —                          |
-| `wind_speed`     | **2.7169 km/h**  | 3.7128 km/h | 432 / 1000 | wind_speed, wind_speed_lag_1, shortwave_radiation |
-| `wind_direction` | **44.4718°**     | 66.9540°    | 186 / 1000 | wind_u, wind_direction, shortwave_radiation |
-| `humidity`       | **5.7258 %**     | 7.4342 %    | 354 / 1000 | humidity, humidity_lag_1, shortwave_radiation |
+│   ├── features.py       \# feature engineering \+ orografiche (DA FARE)
 
-> `wind_direction` MAE elevato è atteso: la grandezza è circolare e non
-> gestita con perdita angolare dedicata in questa fase. La feature `wind_u`
-> domina l'importance proprio perché linearizza la componente est/ovest del
-> vettore.
+│   ├── forecast.py       \# LightGBM (DA FARE)
 
-### RF correttore (stadio 2)
+│   └── correttore.py     \# RF correttore (DA FARE)
 
-Architettura:
+│
 
-```python
-RandomForestRegressor(
-    n_estimators=200,
-    max_depth=6,          # alberi corti: i residui LGBM sono già piccoli
-    min_samples_leaf=10,  # regolarizzazione contro overfit sul rumore
-    n_jobs=-1,            # parallelismo multicore (critico su >100k righe)
-    random_state=42,
-)
-```
+└── output/
 
-Addestrato sui residui `y_train - lgbm_pred_train`, con `lgbm_pred` come
-feature aggiuntiva. Stesso split temporale di forecast.py (split row-identical
-garantito riusando `temporal_split`, `get_feature_cols` da `forecast.py`).
+    ├── mappa\_meteo.py    \# mappa Cartopy (da adattare al DB)
 
-Modelli salvati: `model/rf_correttore_{target}.pkl`.
+    └── dashboard.py      \# Streamlit (DA FARE)
 
-#### Metriche val (delta vs LGBM puro)
+---
 
-| Target | LGBM MAE | LGBM+RF MAE | Δ MAE | LGBM RMSE | LGBM+RF RMSE | Δ RMSE | File `.pkl` | Decisione |
-|---|---|---|---|---|---|---|---|---|
-| `temperature` | (in training_log) | — | — | — | — | — | 875 KB | usato a inference |
-| `wind_speed` | 2.7169 km/h | 2.7416 km/h | **+0.025** ❌ | 3.7128 km/h | 3.7658 km/h | +0.053 ❌ | **4.8 GB** ⚠️ | **scartato**: peggiora e file oversized |
-| `wind_direction` | 44.4718° | 43.5161° | **−0.956** ✅ | 66.9540° | 67.1875° | +0.234 | 1.8 MB | **usato a inference** (riaddestrato con `max_depth=6`, train ~1m46s) |
-| `humidity` | 5.7258% | 5.7297% | +0.004 ≈ | 7.4342% | 7.4597% | +0.026 ❌ | 1.8 MB | **scartato**: nessun miglioramento |
+## 🗄️ Database — schema
 
-> Il file `rf_correttore_wind_speed.pkl` da 4.8 GB è il sintomo dell'errore
-> #12 (parametri "minimal" prima del fix): alberi cresciuti completi su 264k
-> righe con residui di vento molto rumorosi → modello esploso. Il fix del
-> codice è già applicato; i file vecchi vanno cancellati e i correttori
-> riaddestrati selettivamente solo dove portano valore (`wind_direction`).
+### `stations` — anagrafica stazioni
 
-## Quickstart
+| Campo | Tipo | Note |
+| :---- | :---- | :---- |
+| id | SERIAL PK |  |
+| name | TEXT |  |
+| lat, lon | DOUBLE | coordinate |
+| altitude | DOUBLE | metri s.l.m. |
+| source | TEXT | netatmo / arpa / open\_meteo |
+| microclima | TEXT | urban\_canyon / esposta\_sole / costiera / verde\_parco / quota |
+| is\_active | BOOLEAN |  |
 
-```bash
-# 1. Setup env
-conda activate meteo
-pip install -r requirements.txt
+### `observations` — dati grezzi (serie temporale)
 
-# 2. Verifica DB
+| Campo | Tipo | Note |
+| :---- | :---- | :---- |
+| id | BIGSERIAL PK |  |
+| station\_id | FK → stations |  |
+| recorded\_at | TIMESTAMPTZ |  |
+| temperature, wind\_speed, wind\_direction | DOUBLE |  |
+| humidity, pressure, precipitation | DOUBLE | opzionali / per target pioggia |
+| qc\_flag | SMALLINT | 0=ok, 1=sospetto, 2=scartato |
+| raw\_source | JSONB | risposta API originale |
+
+### `qc_log` — log delle anomalie QC
+
+Traccia ogni flag con: check\_type, field\_name, original\_value, reason.
+
+### `forecasts` — previsioni generate
+
+Include `model_version` per confrontare versioni diverse e `corrected` (bool).
+
+### `model_metrics` — performance nel tempo
+
+Storico MAE per temperatura/vento/direzione, n\_samples, periodo.
+
+### Viste
+
+- `latest_observations` — ultima rilevazione valida per stazione  
+- `forecast_vs_observed` — confronto automatico previsione vs reale con MAE
+
+---
+
+## ⚙️ Setup e installazione
+
+### 1\. Clona e prepara l'ambiente
+
+cd \~/Desktop/meteo\_locale
+
+pip install \-r requirements.txt
+
+### 2\. Configura le credenziali
+
+Crea il file `.env`:
+
+SUPABASE\_URL=https://xxxxxxxx.supabase.co
+
+SUPABASE\_KEY=sb\_secret\_xxxxxxxxxxxxx
+
+Le chiavi si trovano su Supabase → Settings → API Keys. Usa la **secret key** per gli script backend.
+
+### 3\. Crea lo schema DB
+
+Esegui `schema.sql` nell'SQL Editor di Supabase.
+
+### 4\. Testa la connessione
+
 python3 db.py
 
-# 3. Costruisci training set (10 anni, T+1h)
-python3 historical.py --start 2015-01-01 --end 2024-12-30 --horizon 1 \
-    --out data/training_10y_h1.parquet
+Output atteso: `✅ Connessione OK` \+ lista delle stazioni.
 
-# 4. Addestra LGBM per target (esempi)
-python3 forecast.py --data data/training_10y_h1.parquet --target temperature
-python3 forecast.py --data data/training_10y_h1.parquet --target wind_speed
+### Note ambiente
 
-# 5. Addestra RF correttore (richiede LGBM già pronto)
-python3 model/correttore.py --data data/training_10y_h1.parquet --target temperature
+- macOS: usare sempre `python3`, non `python`  
+- Connessione via **API REST (HTTPS porta 443\)**, non PostgreSQL diretto (porta 5432 spesso bloccata da firewall aziendali)
 
-# 6. Inference (dry-run prima, poi reale)
-python3 model/inference.py --dry-run --horizon 1
-python3 model/inference.py --horizon 1
+---
 
-# 7. Dashboard
-streamlit run output/dashboard.py
-```
+## 🧩 I moduli
 
-Tutti gli script supportano `--help`. Quelli di training accettano `--no-db`
-per saltare la scrittura su `model_metrics`.
+### `db.py` — Data Access Layer
 
-## Inference operativa (GitHub Actions)
+Modulo unico di connessione, importato da tutti gli script. Espone:
 
-`.github/workflows/inference.yml` lancia `python3 model/inference.py --horizon 1`
-ogni 30 minuti (cron `0,30 * * * *` UTC) su `ubuntu-latest` con
-`conda-incubator/setup-miniconda@v3`, env `meteo`, Python 3.12.
+- `get_active_stations()` — lista stazioni attive  
+- `insert_observation(...)` — salva una misurazione  
+- `get_observations(station_id, hours)` — storico di una stazione  
+- `get_latest_observations()` — ultima per stazione  
+- `insert_forecast(...)` — salva una previsione  
+- `health_check()` — verifica connessione
 
-**Setup richiesto su GitHub**:
-1. Push del repo
-2. Settings → Secrets and variables → Actions → New repository secret:
-   - `SUPABASE_URL`
-   - `SUPABASE_KEY`
+**Principio:** se Supabase cambia, si modifica solo `db.py` — gli altri script restano intatti (separation of concerns).
 
-Il workflow ha `timeout-minutes: 15` e `workflow_dispatch` per trigger manuale.
+### `historical.py` — Costruzione tabella storica (da fare)
 
-## Cronologia degli interventi
+Il modulo che abilita la **Fase 1**. Per ogni punto target:
 
-### Step 1 — fondamenta (pre-esistente)
-- `db.py`: client Supabase + CRUD per `stations`/`observations`
-- `qc.py`: QC 4 livelli (range, climatologico, persistence, spatial), flag 0/1/2
-- `features.py`: 5 strati di feature engineering, entry point `build_feature_matrix(df, station)`
+- scarica da Open-Meteo la serie ERA5 (input regionale: T, umidità, CAPE, vento)  
+- recupera lo storico osservato della stazione (target reale)  
+- allinea i tempi rispettando lo sfasamento T → T+N (no look-ahead bias)  
+- produce la tabella di training (input \+ feature orografiche \+ target)
 
-### Step 2 — historical training set
-- Creato `historical.py`: scarica ERA5 da Open-Meteo Archive + METAR da Iowa State IEM ASOS, applica `build_feature_matrix()`, produce parquet con colonne `target_*` shiftate di `-horizon_hours`
-- Verificato look-ahead bias: ERA5 a T = reanalisi, target da `shift(-N)` non entra in X
+### `qc.py` — Quality Control (4 livelli)
 
-### Step 3 — trainer LightGBM (`forecast.py`)
-- Split temporale 80/20 con `temporal_split()` (sort + cut, no shuffle)
-- `train_lgbm()` con early stopping su val-MAE
-- Salvataggio importance `feature_importance_{target}.json`
-- Logging metriche su `model_metrics` (`db.insert_model_metrics()`)
-- Auto-versioning `model_version = datetime.utcnow().strftime("v%Y%m%d_%H%M")`
+Si applica soprattutto ai **dati live** (Netatmo grezzo è rumoroso). I dati storici ERA5 sono già consistenti, e METAR/ARPA sono validati.
 
-### Step 4 — RF correttore (`model/correttore.py`)
-- Spostato da root a `model/`, aggiunto sys.path hack per importare `forecast`/`db`
-- Riusa `load_dataset`, `temporal_split`, `get_feature_cols` da `forecast.py` → split row-identical, zero leakage
-- Feature matrix RF = feature ERA5 + colonna `lgbm_pred`
-- Training su `residui_train = y_train - lgbm_pred_train`
-- Pred corretta: `corrected = lgbm_pred + rf.predict(X_rf)`
-- Refactor finale: `RandomForestRegressor(n_estimators=200, random_state=42)` semplice, `pathlib.Path` ovunque
+| Livello | Cosa controlla | Azione |
+| :---- | :---- | :---- |
+| 1\. Range check | Valori fisicamente impossibili | Scarta (flag 2\) |
+| 2\. Climatological | Plausibilità per mese \+ fascia oraria | Scarta o sospetto |
+| 3\. Persistence | Sensore bloccato (valore fermo) | Sospetto (flag 1\) |
+| 4\. Spatial | Outlier vs stazioni vicine (z-score) | Scarta o sospetto |
 
-### Step 5 — inference operativa (`model/inference.py`)
-- Endpoint Open-Meteo **Forecast** (`api.open-meteo.com/v1/forecast`), non Archive
-- `past_days=2` per warm-up lag/rolling, `forecast_days=2`
-- Loop su `db.get_active_stations()`, applica `build_feature_matrix()` per stazione
-- Carica `model/lgbm_{target}.txt` via `lgb.Booster(model_file=…)`
-- Se esiste `model/rf_correttore_{target}.pkl` → applica, `corrected=True`; altrimenti LGBM puro, `corrected=False`
-- Cache booster/RF per evitare ricarichi tra stazioni
-- `wind_speed`/`wind_direction`/`humidity` pass-through NWP per le righe non ancora modellate
-- Flags: `--horizon` (default 1), `--target`, `--dry-run`, `--model-version`
-- Lazy import di `db` dentro `run()` → `--help` funziona senza `dotenv`/`supabase`
-- Aggiunto `warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")` in cima al file
+**Climatological check** — usa medie storiche di Roma aggiornate ai cambiamenti climatici (trend 2015–2024), con **offset per tipo di stazione**:
 
-### Step 6 — dashboard (`output/dashboard.py`)
-- Streamlit read-only, 3 sezioni:
-  1. Ultima previsione per stazione attiva (tabella, groupby+first su `forecasts`)
-  2. Previsto vs Osservato ultime 48h (line chart, selectbox stazione + variabile)
-  3. Metriche correnti da `model_metrics` (latest per `(target, horizon_hours)`) + metric box MAE primario
-- Tutti i loader con `@st.cache_data(ttl=60)`
+esposta\_sole: \+5°C   urban\_canyon: \+3°C   standard:  0°C
 
-### Step 7 — dipendenze e CI
-- Creato `requirements.txt`: `pandas`, `numpy`, `pyarrow`, `scikit-learn`, `lightgbm`, `requests`, `python-dotenv`, `supabase`, `streamlit`
-- Installati nel conda env `meteo`: `streamlit 1.58.0`, `supabase 2.31.0`, `python-dotenv 1.2.2` (+ transitive)
-- Creato `.github/workflows/inference.yml` (cron 30 min, secrets, timeout 15 min)
+costiera:     \-1°C   verde\_parco:  \-2°C   quota:    \-3°C
 
-### Step 8 — training pipeline batch (wind_speed/wind_direction/humidity)
-- Creata `logs/`
-- Eseguiti in sequenza 3 trainings LGBM + 3 trainings RF correttore con `--no-db`
-- Output completo in `logs/training_log.txt`
+Evita di scartare dati reali validi da stazioni esposte (es. un tetto a luglio può legittimamente segnare 48°C).
 
-## Errori riscontrati e fix applicati
+### `features.py` — Feature Engineering (da fare)
 
-| # | Errore | Causa | Fix |
-|---|--------|-------|-----|
-| 1 | LightGBM rifiuta colonne `object` da parquet | Colonne orografiche (`dist_sea_km`, `bearing_sea`, …) serializzate come `object` | Aggiunto coercion `pd.to_numeric(errors="coerce")` in `load_dataset()` per il branch parquet |
-| 2 | Pickle rotto al cambio versione LightGBM | Pickle non è formato cross-version | Switch a formato nativo: `booster.save_model(path)` → `.txt`, ricarico `lgb.Booster(model_file=…)` |
-| 3 | `model_version="v1"` hardcoded confondeva versioni | Stesso identificatore per training diversi | Auto-versioning `datetime.utcnow().strftime("v%Y%m%d_%H%M")` |
-| 4 | `python3 model/correttore.py`: file not found | Lo script era stato creato in root, non in `model/` | Spostato con `mv`, aggiunto `sys.path.insert(0, _PROJECT_ROOT)` per importare `forecast` e `db` |
-| 5 | Correttore non conforme alla spec utente | Implementazione iniziale con `max_depth`, `min_samples_leaf`, `max_features`, `n_jobs` e `os.path` | Refactor: RF inline minimale, `pathlib.Path` ovunque (vedi #12 per il ripristino dei parametri di performance) |
-| 12 | RF correttore lentissimo (~10-20 min per target invece di ~18 s), CPU al 100% single-core | Il refactor #5 aveva rimosso `n_jobs=-1` (single-core) e `max_depth=6` (alberi cresciuti completi su 264k righe). Spec minimale non sostenibile in produzione. | Ripristinati `n_jobs=-1, max_depth=6, min_samples_leaf=10` mantenendo `pathlib.Path`. Job già in corso lasciato terminare (Python ha già il modulo in memoria, la modifica del file non lo impatta) |
-| 6 | `python3 model/inference.py --help` falliva: `No module named 'dotenv'` | Import di `db` a livello modulo tirava dentro `dotenv`/`supabase` | Lazy import di `db` dentro `run()` |
-| 7 | `streamlit`, `supabase`, `dotenv` mancanti nell'env conda `meteo` | Mai installati | `pip install -r requirements.txt`; salvato file `requirements.txt` |
-| 8 | `libomp.dylib` not loaded in Python 3.12 di sistema | OpenMP non disponibile fuori da conda | Eseguire SEMPRE nell'env `meteo` (`conda activate meteo`) |
-| 9 | Warning sklearn rumorosi a inference (mismatch nome feature tra training pandas e pred numpy/pandas) | sklearn emette `UserWarning` quando i `feature_names_in_` non combaciano | Aggiunto `warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")` in cima a `inference.py` |
-| 10 | `DeprecationWarning: datetime.utcnow()` (Python 3.12+) in `forecast.py` e `correttore.py` | API deprecata in Python 3.13 | **Aperto** — non bloccante. Migrazione futura a `datetime.now(timezone.utc)` |
-| 11 | `Pandas4Warning` su `select_dtypes(include="object")` in `forecast.py:81` | Pandas 4 cambierà semantica di `object` | **Aperto** — non bloccante. Migrazione futura a `include="object"`/`"str"` esplicito |
+Trasforma i dati grezzi in feature per il modello:
 
-## Convenzioni
+- **Temporali:** ora del giorno (sin/cos), giorno dell'anno, trend  
+- **Lag:** valori delle ore precedenti  
+- **Rolling:** medie/varianze su finestre mobili  
+- **Orografiche:** delta quota vs cella ERA5, posizione nel terreno, esposizione, densità urbana, distanza dal mare → vedi sezione [Feature orografiche](#-feature-orografiche)
 
-- **Unità**: `temperature` °C, `wind_speed` km/h, `wind_direction` gradi (0–360), `humidity` %, `pressure` hPa
-- **Timezone**: tutto UTC nei timestamp DB e Open-Meteo (parametro `timezone=UTC`)
-- **Pathing**: `pathlib.Path` ovunque, mai stringhe hardcoded
-- **Versioning modello**:
-  - LGBM: `v%Y%m%d_%H%M`
-  - RF correttore: `rf_v%Y%m%d_%H%M`
-  - Inference: `inference_v%Y%m%d_%H%M`
+### `forecast.py` — LightGBM (da fare)
 
-## Come riprendere il lavoro
+Gradient boosting su feature tabulari, standard industriale per serie temporali strutturate. Produce la previsione grezza.
 
-I prossimi step per chiudere la pipeline live e iniziare a misurare la qualità
-del modello in produzione.
+### `correttore.py` — RF Correttore (da fare)
 
-### 1. Attivare l'inference cron su GitHub Actions
+Approccio a due stadi: LightGBM fa la previsione grezza, il RandomForest impara gli errori sistematici per microzona e li compensa.
 
-```bash
-# Dalla root del repo
-git init                                  # se non già git repo
-git add .
-git commit -m "Pipeline meteo locale completa (training + inference + dashboard)"
-git branch -M main
-git remote add origin <URL_REPO_REMOTO>
-git push -u origin main
-```
+---
 
-Poi su GitHub:
-- Settings → Secrets and variables → Actions → **New repository secret**:
-  - `SUPABASE_URL`
-  - `SUPABASE_KEY`
-- Actions tab → workflow "Inference operativa (T+1h)" → "Enable workflow"
-- Trigger manuale con "Run workflow" per smoke test, poi il cron `0,30 * * * *`
-  parte automaticamente.
+## 🗺️ Roadmap
 
-Verifica: dopo ~30 min vedere nuove righe nella tabella `forecasts` (Supabase).
+Una sola macchina che evolve in tre fasi. La Fase 1 NON aspetta la raccolta dati: parte subito dallo storico.
 
-### 2. Chiudere il loop osservato vs previsto — `mainMETEO.py`
+### Fase 1 — Modello sullo storico (SUBITO)
 
-Senza osservazioni reali in DB, la Sezione 2 della dashboard mostra solo le
-previsioni. Per misurare l'errore in produzione serve un ingestor live:
+1. `historical.py`: costruire la tabella di training (ERA5 input \+ storico stazioni target)  
+2. Partire da **un** punto con storico lungo e pulito (es. aeroporto) per collaudare la pipeline end-to-end  
+3. Aggiungere **3–4 punti contrastanti** (costiero / pianura / urbano / quota) per attivare le feature orografiche  
+4. `features.py` → `forecast.py` (LightGBM) → `correttore.py` (RF)  
+5. Target in ordine di difficoltà: temperatura → vento/direzione → rischio temporali → pioggia
 
-- Sorgenti: API Netatmo (per le 4 stazioni private) + ARPA Lazio (open data)
-- Frequenza: ogni 10–15 min via cron analogo a `inference.yml`
-- Schema: scrive su `observations` con `qc_flag` valorizzato da `qc.py`
-- Output atteso: ogni `forecast_at` → confronto con `observations` allo stesso `valid_for`
+### Fase 2 — Pipeline live in parallelo
 
-Una volta acceso `mainMETEO.py`, la dashboard Sezione 2 si popola e si può
-iniziare a calcolare MAE *in produzione* (diverso dal MAE val storico).
+1. Installare e testare `qc.py`  
+2. Riscrivere `mainMETEO.py` con fonti reali multi-stazione (Netatmo denso \+ ARPA)  
+3. GitHub Actions (cron ogni 30 min) → sistema autonomo, indipendente dal PC locale  
+4. **Scopo:** coprire i punti *senza* storico (valore unico) e alimentare le previsioni operative
 
-### 3. Backlog modellistico (rimandabile)
+### Fase 3 — Output e ottimizzazione
 
-- [ ] Migrazione `datetime.utcnow()` → `datetime.now(timezone.utc)` (Python 3.13)
-- [ ] Loss circolare per `wind_direction`: predire `wind_u`/`wind_v` separatamente, ricomporre
-- [ ] LCZ + impermeabilità (rasters Wudapt/Copernicus) — già predisposto fallback `None` in `features.py`
-- [ ] Modelli MOS per `wind_speed`/`humidity` con architettura diversa (es. boosting su feature dedicate)
-- [ ] Test multi-orizzonte (T+3h, T+6h, T+12h) → file parquet separati per horizon
-- [ ] API FastAPI per esporre le previsioni come JSON
-- [ ] Mappa Cartopy con interpolazione spaziale sulle 4 stazioni
+1. Dashboard Streamlit interattiva \+ API REST con FastAPI \+ mappa Cartopy  
+2. Tuning iperparametri per massima accuratezza  
+3. Espansione capillare delle stazioni  
+4. Consolidamento dei target più difficili (rischio temporali, pioggia puntuale)
+
+---
+
+## 🐛 Diario degli errori risolti
+
+| Errore | Causa | Soluzione |
+| :---- | :---- | :---- |
+| `extension "timescaledb" is not available` | Free tier Supabase senza TimescaleDB | PostgreSQL standard \+ indici ottimizzati |
+| `could not translate host name` | Porta 5432 bloccata da rete aziendale | API REST Supabase su HTTPS (porta 443\) |
+| `Tenant or user not found` | Formato URL pooler errato | Client ufficiale supabase-py con API key |
+| `ping timeout` | ICMP bloccato dal router | Falso allarme — internet funzionante |
+| `command not found: python` | macOS usa python3 | Uso di `python3` ovunque |
+| `.env` non visibile nel Finder | File nascosto (punto iniziale) | Gestione via terminale |
+| Coordinate Roma Nord errate | 41.016 invece di 42.016 | Corretto nello schema |
+
+---
+
+## 🏆 Differenziali competitivi
+
+- **Statistical downscaling ERA5 → stazioni reali** — approccio corretto e sostenibile vs NWP pesante; impara le correzioni che il modello globale sbaglia  
+- **Architettura multi-stazione** — abilita l'apprendimento delle feature orografiche, il vero vantaggio sulla concorrenza  
+- **Feature orografiche esplicite** — delta quota vs cella ERA5, fondovalle, esposizione, isola di calore: il microclima codificato come predittori  
+- **QC climatologico contestuale** — validazione contro la climatologia locale per mese e fascia oraria, raro nei tool open source  
+- **Offset per tipo di stazione** — gestione esplicita del microclima urbano già nel quality control  
+- **Soglie aggiornate ai cambiamenti climatici** — non medie storiche obsolete  
+- **Addestramento immediato sullo storico** — nessuna attesa per accumulare dati  
+- **Storage strutturato con storico illimitato** — vs CSV fragile  
+- **Infrastruttura a costo zero** — interamente deployabile gratis
+
+---
+
+## 📌 Come riprendere il lavoro
+
+1. Apri il terminale: `cd ~/Desktop/meteo_locale`  
+2. Verifica la connessione: `python3 db.py`  
+3. **Prossima decisione aperta:** scegliere il set di 3–4 punti target contrastanti in base alla disponibilità reale di storico (ERA5 sul punto \+ record lungo stazione)  
+4. **Prossimo task di codice:** `historical.py` per costruire la prima tabella di training, partendo da un punto con storico lungo  
+5. Consulta la [Roadmap](#-roadmap) per il quadro completo
+
+---
+
+*Progetto sviluppato da Filippo · Sistema di previsioni meteo iper-locali · Roma*  
