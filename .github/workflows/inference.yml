@@ -28,7 +28,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Miniconda (env: meteo, Python 3.12)
+      - name: "Setup Miniconda (env: meteo, Python 3.12)"
         uses: conda-incubator/setup-miniconda@v3
         with:
           miniforge-version: latest
