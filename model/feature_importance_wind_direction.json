@@ -1,0 +1,275 @@
+{
+  "target": "wind_direction",
+  "horizon_hours": 1,
+  "importance_type": "gain",
+  "features": [
+    {
+      "name": "wind_u",
+      "gain": 3820333345.3008
+    },
+    {
+      "name": "wind_direction",
+      "gain": 1788779234.6133
+    },
+    {
+      "name": "shortwave_radiation",
+      "gain": 1741170702.1016
+    },
+    {
+      "name": "wind_v",
+      "gain": 349946738.3164
+    },
+    {
+      "name": "altitude",
+      "gain": 337912933.8945
+    },
+    {
+      "name": "hour_cos",
+      "gain": 325188776.0938
+    },
+    {
+      "name": "wind_speed",
+      "gain": 192860271.6211
+    },
+    {
+      "name": "doy_cos",
+      "gain": 127345130.3125
+    },
+    {
+      "name": "doy_sin",
+      "gain": 100688084.1055
+    },
+    {
+      "name": "wind_direction_lag_3",
+      "gain": 95175212.5898
+    },
+    {
+      "name": "wind_speed_roll_mean_6",
+      "gain": 91602235.1914
+    },
+    {
+      "name": "wind_direction_lag_1",
+      "gain": 88970367.3086
+    },
+    {
+      "name": "wind_direction_lag_2",
+      "gain": 84342917.6836
+    },
+    {
+      "name": "wind_speed_roll_mean_12",
+      "gain": 70517753.3125
+    },
+    {
+      "name": "wind_speed_roll_std_12",
+      "gain": 63785358.8906
+    },
+    {
+      "name": "wind_speed_roll_mean_3",
+      "gain": 62020355.707
+    },
+    {
+      "name": "humidity",
+      "gain": 59801470.6016
+    },
+    {
+      "name": "temperature_roll_std_6",
+      "gain": 58308509.8242
+    },
+    {
+      "name": "cloudcover",
+      "gain": 58195076.6953
+    },
+    {
+      "name": "temp_trend_1h",
+      "gain": 58128441.7109
+    },
+    {
+      "name": "dewpoint",
+      "gain": 52054399.0938
+    },
+    {
+      "name": "pressure",
+      "gain": 51895538.0938
+    },
+    {
+      "name": "temperature_roll_std_12",
+      "gain": 48925883.6914
+    },
+    {
+      "name": "wind_direction_lag_6",
+      "gain": 48786976.8828
+    },
+    {
+      "name": "pressure_roll_mean_12",
+      "gain": 44401058.9141
+    },
+    {
+      "name": "pressure_roll_std_12",
+      "gain": 43475803.9023
+    },
+    {
+      "name": "wind_speed_lag_1",
+      "gain": 41050889.5938
+    },
+    {
+      "name": "temperature_roll_std_3",
+      "gain": 37413767.2031
+    },
+    {
+      "name": "temperature",
+      "gain": 35275221.5977
+    },
+    {
+      "name": "hour_sin",
+      "gain": 35264260.6094
+    },
+    {
+      "name": "humidity_lag_1",
+      "gain": 34737600.3008
+    },
+    {
+      "name": "month",
+      "gain": 34306992.7969
+    },
+    {
+      "name": "wind_speed_lag_2",
+      "gain": 34180360.8125
+    },
+    {
+      "name": "temperature_roll_mean_12",
+      "gain": 33483306.6172
+    },
+    {
+      "name": "wind_speed_lag_6",
+      "gain": 33335298.8633
+    },
+    {
+      "name": "wind_speed_roll_std_6",
+      "gain": 31165386.5859
+    },
+    {
+      "name": "wind_speed_lag_3",
+      "gain": 31065605.8984
+    },
+    {
+      "name": "pressure_roll_mean_3",
+      "gain": 30395078.8203
+    },
+    {
+      "name": "humidity_lag_2",
+      "gain": 29295026.3125
+    },
+    {
+      "name": "humidity_lag_6",
+      "gain": 26646312.1016
+    },
+    {
+      "name": "pressure_trend_1h",
+      "gain": 26267791.5117
+    },
+    {
+      "name": "pressure_roll_mean_6",
+      "gain": 25712220.8984
+    },
+    {
+      "name": "pressure_roll_std_6",
+      "gain": 25414714.1055
+    },
+    {
+      "name": "wind_speed_trend_1h",
+      "gain": 24822105.1055
+    },
+    {
+      "name": "wind_speed_roll_std_3",
+      "gain": 23371729.5859
+    },
+    {
+      "name": "temperature_lag_6",
+      "gain": 23247577.3086
+    },
+    {
+      "name": "pressure_roll_std_3",
+      "gain": 22274612.207
+    },
+    {
+      "name": "humidity_lag_3",
+      "gain": 20630770.0938
+    },
+    {
+      "name": "temperature_lag_1",
+      "gain": 19112151.7109
+    },
+    {
+      "name": "temperature_lag_3",
+      "gain": 18395470.3008
+    },
+    {
+      "name": "precipitation",
+      "gain": 18005179.1016
+    },
+    {
+      "name": "temperature_roll_mean_6",
+      "gain": 16061038.3945
+    },
+    {
+      "name": "is_daytime",
+      "gain": 15039278.0
+    },
+    {
+      "name": "temperature_roll_mean_3",
+      "gain": 14618822.0977
+    },
+    {
+      "name": "wind_chill",
+      "gain": 13419759.5
+    },
+    {
+      "name": "temperature_lag_2",
+      "gain": 11648769.2031
+    },
+    {
+      "name": "is_weekend",
+      "gain": 3841340.6016
+    },
+    {
+      "name": "dist_sea_km",
+      "gain": 0.0
+    },
+    {
+      "name": "dist_center_km",
+      "gain": 0.0
+    },
+    {
+      "name": "bearing_sea",
+      "gain": 0.0
+    },
+    {
+      "name": "onshore_alignment",
+      "gain": 0.0
+    },
+    {
+      "name": "microclima_standard",
+      "gain": 0.0
+    },
+    {
+      "name": "microclima_esposta_sole",
+      "gain": 0.0
+    },
+    {
+      "name": "microclima_urban_canyon",
+      "gain": 0.0
+    },
+    {
+      "name": "microclima_verde_parco",
+      "gain": 0.0
+    },
+    {
+      "name": "microclima_costiera",
+      "gain": 0.0
+    },
+    {
+      "name": "microclima_quota",
+      "gain": 0.0
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+name: Inference operativa (T+1h)
+
+# Esegue model/inference.py ogni 30 minuti per pubblicare nuove previsioni
+# su Supabase. Schedulato in UTC (GitHub Actions usa cron UTC).
+on:
+  schedule:
+    # Ogni 30 minuti: minuto 0 e 30 di ogni ora.
+    - cron: "0,30 * * * *"
+  # Permette anche il trigger manuale dalla UI di Actions.
+  workflow_dispatch:
+
+jobs:
+  inference:
+    name: Run inference
+    runs-on: ubuntu-latest
+
+    # Timeout di sicurezza: se per qualche motivo l'inference impalla,
+    # non vogliamo che il job tenga occupati i runner indefinitamente.
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        # bash -l: carica il profile, necessario per attivare conda env
+        # in modo persistente tra step (l'azione setup-miniconda lo richiede).
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Miniconda (env: meteo, Python 3.12)
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: meteo
+          python-version: "3.12"
+          auto-activate-base: false
+          # Cache automatica del dependency tree → step successivi più veloci.
+          use-mamba: true
+
+      - name: Install pip dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run inference
+        env:
+          # Le credenziali vivono in GitHub Secrets, mai nel repo.
+          # Settale in: Settings → Secrets and variables → Actions
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python3 model/inference.py --horizon 1

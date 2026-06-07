@@ -1,0 +1,19 @@
+# Stack progetto meteo_locale (conda env: meteo, Python 3.12)
+# Installazione: pip install -r requirements.txt
+
+# Core data / modelling
+pandas
+numpy
+pyarrow            # backend parquet per pandas
+scikit-learn
+lightgbm
+
+# Networking / config
+requests
+python-dotenv
+
+# Database
+supabase
+
+# Dashboard
+streamlit

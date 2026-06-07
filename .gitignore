@@ -1,0 +1,17 @@
+# Credenziali — MAI nel repo
+.env
+
+# Dati grezzi (si rigenerano con historical.py)
+data/*.parquet
+data/*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Installer e file locali
+Miniforge3-MacOSX-arm64.sh
+.claude/
+logs/
