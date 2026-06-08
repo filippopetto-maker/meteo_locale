@@ -1,5 +1,7 @@
 # 🌦️ Meteo Locale — Sistema di Previsioni Meteo Iper-Locali per Roma
 
+**Stato:** Phase 1 e Phase 2a completate e in produzione. Repo pubblico. Due GitHub Actions attivi, inference e ingestion automatici ogni 30 minuti.
+
 Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
 ---
@@ -449,6 +451,7 @@ Una sola macchina che evolve in tre fasi. La Fase 1 NON aspetta la raccolta dati
 | `ping timeout` | ICMP bloccato dal router | Falso allarme — internet funzionante |
 | `command not found: python` | macOS usa python3 | Uso di `python3` ovunque |
 | `.env` non visibile nel Finder | File nascosto (punto iniziale) | Gestione via terminale |
+| Cron GitHub Actions non partiva (14+ ore) | Repo privato: lo scheduler dei cron è meno affidabile sui repo privati; il workflow con YAML error al primo push aveva bloccato il scheduler | Reso il repo pubblico (minuti Actions illimitati, scheduler stabile) + disable/enable workflow dalla UI |
 | Coordinate Roma Nord errate | 41.016 invece di 42.016 | Corretto nello schema |
 
 ---
@@ -474,6 +477,14 @@ Una sola macchina che evolve in tre fasi. La Fase 1 NON aspetta la raccolta dati
 3. **Prossima decisione aperta:** scegliere il set di 3–4 punti target contrastanti in base alla disponibilità reale di storico (ERA5 sul punto \+ record lungo stazione)  
 4. **Prossimo task di codice:** `historical.py` per costruire la prima tabella di training, partendo da un punto con storico lungo  
 5. Consulta la [Roadmap](#-roadmap) per il quadro completo
+
+**Riferimento GitHub:** `https://github.com/filippopetto-maker/meteo_locale` (repo pubblico)
+
+**Stato corrente:** Phase 1 e Phase 2a in produzione. Due GitHub Actions attivi:
+- `inference.yml` — scrive previsioni ogni 30 min
+- `ingestion.yml` — raccoglie osservazioni METAR ogni 30 min
+
+**Prossimo task:** Phase 2b — registrarsi su `dev.netatmo.com` (gratuito, ~10 min) per ottenere `client_id` e `client_secret`, poi implementare `fetch_netatmo()` già stub in `mainMETEO.py`.
 
 ---
 
