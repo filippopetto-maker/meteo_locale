@@ -25,6 +25,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -149,6 +150,29 @@ def load_recent_observations(station_id: int, hours: int = 48) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if not df.empty:
         df["recorded_at"] = to_local(df["recorded_at"])
+    return df
+
+
+@st.cache_data(ttl=60)
+def load_forecast_vs_observed(days: int = 7) -> pd.DataFrame:
+    """
+    Legge la vista `forecast_vs_observed` per gli ultimi `days` giorni.
+
+    Colonne attese dalla vista: station_id, [station_name], valid_for,
+    temp_prevista, temp_osservata (nullable), errore_abs (nullable).
+    """
+    client = db.get_client()
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    res = (
+        client.table("forecast_vs_observed")
+        .select("*")
+        .gte("valid_for", since)
+        .order("valid_for")
+        .execute()
+    )
+    df = pd.DataFrame(res.data)
+    if not df.empty:
+        df["valid_for"] = to_local(df["valid_for"])
     return df
 
 
@@ -312,5 +336,100 @@ else:
         value=f"{primary['val_mae']:.3f}",
         help=f"Versione: {primary['model_version']}",
     )
+
+# ─── Sezione 4: qualità previsioni dalla vista forecast_vs_observed ──────────
+st.header("4. Qualità previsioni — Previsto vs Osservato")
+
+fvo_df = load_forecast_vs_observed(days=7)
+
+if fvo_df.empty:
+    st.info(
+        "Nessun dato in `forecast_vs_observed`. "
+        "La vista si popola man mano che inference.py e mainMETEO.py "
+        "accumulano previsioni e osservazioni coincidenti."
+    )
+else:
+    # Risolvi station_name se la vista restituisce solo station_id.
+    if "station_name" not in fvo_df.columns:
+        fvo_df["station_name"] = (
+            fvo_df["station_id"]
+            .map(station_name_by_id)
+            .fillna(fvo_df["station_id"].astype(str))
+        )
+
+    # ── Costruisci DataFrame long per Altair ─────────────────────────────────
+    # Linea "Previsto": tutte le righe (incluse quelle senza osservato).
+    fc_long = (
+        fvo_df[["valid_for", "station_name", "temp_prevista"]]
+        .copy()
+        .rename(columns={"temp_prevista": "T (°C)"})
+    )
+    fc_long["Serie"] = "Previsto"
+
+    # Linea "Osservato": solo dove temp_osservata non è NULL.
+    obs_long = (
+        fvo_df[fvo_df["temp_osservata"].notna()]
+        [["valid_for", "station_name", "temp_osservata"]]
+        .copy()
+        .rename(columns={"temp_osservata": "T (°C)"})
+    )
+    obs_long["Serie"] = "Osservato"
+
+    plot_df = pd.concat([fc_long, obs_long], ignore_index=True)
+
+    # ── Grafico Altair a due layer: tratteggiato (Previsto) + continuo (Osservato)
+    chart = (
+        alt.Chart(plot_df)
+        .mark_line(point=False)
+        .encode(
+            x=alt.X("valid_for:T", title="Ora (Italia)"),
+            y=alt.Y("T (°C):Q", title="Temperatura (°C)"),
+            color=alt.Color("station_name:N", title="Stazione"),
+            strokeDash=alt.StrokeDash(
+                "Serie:N",
+                scale=alt.Scale(
+                    domain=["Previsto", "Osservato"],
+                    range=[[6, 4], [0, 0]],   # tratteggiata / continua
+                ),
+                legend=alt.Legend(title="Linea"),
+            ),
+            opacity=alt.condition(
+                alt.datum.Serie == "Osservato",
+                alt.value(1.0),
+                alt.value(0.65),
+            ),
+            tooltip=[
+                alt.Tooltip("valid_for:T", title="Ora (Italia)", format="%d/%m %H:%M"),
+                alt.Tooltip("station_name:N", title="Stazione"),
+                alt.Tooltip("Serie:N", title="Serie"),
+                alt.Tooltip("T (°C):Q", title="Temperatura (°C)", format=".1f"),
+            ],
+        )
+        .properties(height=380)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+    # ── Tabella MAE medio per stazione ───────────────────────────────────────
+    if "errore_abs" in fvo_df.columns:
+        has_obs = fvo_df["temp_osservata"].notna().any()
+        if has_obs:
+            mae_table = (
+                fvo_df[fvo_df["temp_osservata"].notna()]
+                .groupby("station_name", as_index=False)["errore_abs"]
+                .mean()
+                .rename(columns={
+                    "station_name": "Stazione",
+                    "errore_abs":   "MAE medio temperatura (°C)",
+                })
+                .sort_values("Stazione")
+                .reset_index(drop=True)
+            )
+            mae_table["MAE medio temperatura (°C)"] = (
+                mae_table["MAE medio temperatura (°C)"].round(3)
+            )
+            st.dataframe(mae_table, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nessuna osservazione confrontabile ancora disponibile per calcolare il MAE.")
+
 
 st.caption("Cache TTL: 60s.  ·  Per aggiornare le previsioni: `python3 model/inference.py`.")

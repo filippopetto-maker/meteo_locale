@@ -452,6 +452,7 @@ Una sola macchina che evolve in tre fasi. La Fase 1 NON aspetta la raccolta dati
 | `command not found: python` | macOS usa python3 | Uso di `python3` ovunque |
 | `.env` non visibile nel Finder | File nascosto (punto iniziale) | Gestione via terminale |
 | Cron GitHub Actions non partiva (14+ ore) | Repo privato: lo scheduler dei cron è meno affidabile sui repo privati; il workflow con YAML error al primo push aveva bloccato il scheduler | Reso il repo pubblico (minuti Actions illimitati, scheduler stabile) + disable/enable workflow dalla UI |
+| Cron GitHub Actions non partiva dopo 17+ ore | Scheduler GitHub inaffidabile per repo nuovi (pubblici e privati); workflow con YAML error al primo push aveva bloccato il trigger schedule | Trigger esterno via cron-job.org: POST all'API GitHub ogni 30 min per entrambi i workflow (inference e ingestion) |
 | Coordinate Roma Nord errate | 41.016 invece di 42.016 | Corretto nello schema |
 
 ---
@@ -483,6 +484,10 @@ Una sola macchina che evolve in tre fasi. La Fase 1 NON aspetta la raccolta dati
 **Stato corrente:** Phase 1 e Phase 2a in produzione. Due GitHub Actions attivi:
 - `inference.yml` — scrive previsioni ogni 30 min
 - `ingestion.yml` — raccoglie osservazioni METAR ogni 30 min
+
+**Automazione:** due cronjob su cron-job.org triggerano i workflow ogni 30 min
+via GitHub API (workflow_dispatch). Il cron nativo di GitHub Actions non era
+affidabile su questo repo — cron-job.org è il trigger operativo.
 
 **Prossimo task:** Phase 2b — registrarsi su `dev.netatmo.com` (gratuito, ~10 min) per ottenere `client_id` e `client_secret`, poi implementare `fetch_netatmo()` già stub in `mainMETEO.py`.
 
