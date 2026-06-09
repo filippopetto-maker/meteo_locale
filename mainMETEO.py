@@ -56,12 +56,11 @@ logger = logging.getLogger(__name__)
 
 IEM_ASOS_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 
-# Stesso mapping di historical.py.  LIRA = Roma Ciampino  |  LIRF = Roma Fiumicino
+# Mapping stazione → ICAO aeroporto di riferimento per osservazioni METAR.
+# Le stazioni Netatmo (id 25-29) non hanno aeroporto nel raggio utile:
+# copertura esclusivamente Netatmo, nessun ICAO mappato.
 STATION_ICAO: dict[int, str] = {
-    1: "LIRA",   # Roma Nord        → Ciampino  (~26 km)
-    2: "LIRA",   # Roma Centro      → Ciampino  (~11 km)
-    3: "LIRF",   # Roma Sud         → Fiumicino (~12 km)
-    4: "LIRF",   # Ostia            → Fiumicino (~8 km)
+    3: "LIRF",   # Roma Sud (Casal Palocco) → Fiumicino (~12 km)
 }
 
 # Quante obs storiche passare a persistence_check (>= PERSISTENCE_WINDOW di qc.py).
