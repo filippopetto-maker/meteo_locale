@@ -63,10 +63,15 @@ STATION_TEMP_OFFSET = {
 
 # Mappa stazione_id → tipo (aggiorna quando aggiungi stazioni)
 STATION_TYPES = {
-    1: "standard",      # Roma Nord
-    2: "urban_canyon",  # Roma Centro
+    1: "standard",      # Roma Nord (inattiva)
+    2: "urban_canyon",  # Roma Centro (inattiva)
     3: "standard",      # Roma Sud Casal Palocco
-    4: "costiera",      # Ostia
+    4: "costiera",      # Ostia (inattiva)
+    25: "costiera",     # Ostia Lido
+    26: "urban_canyon", # EUR
+    27: "urban_canyon", # Trastevere
+    28: "quota",        # Tivoli
+    29: "quota",        # Castelli Romani
 }
 
 def _fascia_oraria(ora: int) -> str:
