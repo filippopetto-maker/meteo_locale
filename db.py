@@ -34,8 +34,11 @@ def insert_observation(station_id, recorded_at, temperature, wind_speed, wind_di
         "humidity": humidity,
         "pressure": pressure,
         "qc_flag": qc_flag,
+        "raw_source": raw_source,
     }
-    res = get_client().table("observations").insert(data).execute()
+    res = get_client().table("observations").upsert(
+        data, on_conflict="station_id,recorded_at", ignore_duplicates=True
+    ).execute()
     return res.data[0]["id"] if res.data else None
 
 def get_observations(station_id, hours=48, qc_ok_only=True):

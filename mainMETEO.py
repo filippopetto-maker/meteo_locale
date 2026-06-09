@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
+import os
+import statistics
 import sys
 import time as _time
 from datetime import datetime, timezone
@@ -214,15 +217,281 @@ def fetch_observations_metar(stations: list[dict]) -> list[dict]:
 # Stub fonti future (architettura aperta — non ancora implementate)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# TODO Phase 2b: fetch_netatmo(bbox) → lista obs da stazioni private Netatmo
-# def fetch_netatmo(stations: list[dict]) -> list[dict]:
-#     """
-#     Osservazioni Netatmo Weather Map nel bounding box dell'area di Roma.
-#     Richiede OAuth2 (client_id/client_secret in env var NETATMO_*).
-#     Output: stesso schema di fetch_observations_metar (station_id virtuale o
-#     nuova stazione attiva da censire prima in `stations`).
-#     """
-#     raise NotImplementedError("Phase 2b — Netatmo Weather Map API")
+# ─────────────────────────────────────────────────────────────────────────────
+# Sorgente Phase 2b — Netatmo (dati pubblici aggregati per cluster)
+# ─────────────────────────────────────────────────────────────────────────────
+
+NETATMO_TOKEN_URL   = "https://api.netatmo.com/oauth2/token"
+NETATMO_PUBDATA_URL = "https://api.netatmo.com/api/getpublicdata"
+
+# Bounding box Roma metropolitana (copre tutta l'area progetto + margine)
+ROMA_BBOX = {
+    "lat_ne": 42.00,
+    "lon_ne": 12.75,
+    "lat_sw": 41.65,
+    "lon_sw": 12.20,
+}
+
+NETATMO_RADIUS_KM  = 5.0   # raggio aggregazione per stazione progetto
+NETATMO_MIN_CLUSTER = 2    # minimo stazioni Netatmo nel raggio per procedere
+NETATMO_MAX_AGE_S  = 5400  # dati più vecchi di 90 min → scartati
+
+
+def _haversine_km_nt(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _circular_mean_deg(angles: list[float]) -> float:
+    """Media circolare di angoli in gradi (corretta per direzione vento)."""
+    sin_sum = sum(math.sin(math.radians(a)) for a in angles)
+    cos_sum = sum(math.cos(math.radians(a)) for a in angles)
+    return math.degrees(math.atan2(sin_sum / len(angles), cos_sum / len(angles))) % 360
+
+
+def _refresh_netatmo_token() -> str:
+    client_id     = os.getenv("NETATMO_CLIENT_ID")
+    client_secret = os.getenv("NETATMO_CLIENT_SECRET")
+    refresh_token = os.getenv("NETATMO_REFRESH_TOKEN")
+    if not all([client_id, client_secret, refresh_token]):
+        raise EnvironmentError(
+            "Credenziali Netatmo mancanti: "
+            "NETATMO_CLIENT_ID, NETATMO_CLIENT_SECRET, NETATMO_REFRESH_TOKEN"
+        )
+    r = requests.post(
+        NETATMO_TOKEN_URL,
+        data={
+            "grant_type":    "refresh_token",
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        },
+        timeout=15,
+    )
+    r.raise_for_status()
+    payload = r.json()
+    if "access_token" not in payload:
+        raise RuntimeError(f"Token refresh: risposta inattesa: {payload}")
+    logger.info("[Netatmo] Token rinnovato")
+    return payload["access_token"]
+
+
+def _parse_netatmo_station(raw: dict, now_ts: int) -> Optional[dict]:
+    """
+    Estrae temperatura, umidità e vento (se NAModule2) da un record getpublicdata.
+    Ritorna None se dati mancanti o troppo vecchi.
+    Nota: Netatmo restituisce [lon, lat] — ordine invertito rispetto allo standard.
+    """
+    try:
+        lon, lat = raw["place"]["location"]
+    except (KeyError, ValueError, TypeError):
+        return None
+
+    temperature = humidity = wind_speed = wind_dir = data_ts = None
+
+    for mod_data in raw.get("measures", {}).values():
+        mtype = mod_data.get("type", [])
+        if "temperature" in mtype and "res" in mod_data:
+            res = mod_data["res"]
+            if not res:
+                continue
+            ts_str, values = next(iter(res.items()))
+            ts = int(ts_str)
+            if now_ts - ts > NETATMO_MAX_AGE_S:
+                continue
+            idx_t = mtype.index("temperature")
+            temperature = float(values[idx_t])
+            if "humidity" in mtype:
+                idx_h = mtype.index("humidity")
+                if len(values) > idx_h:
+                    humidity = float(values[idx_h])
+            data_ts = ts
+        elif "wind_strength" in mod_data and "wind_angle" in mod_data:
+            wt = mod_data.get("wind_timeutc", 0)
+            if now_ts - wt <= NETATMO_MAX_AGE_S:
+                wind_speed = float(mod_data["wind_strength"])  # già in km/h
+                wind_dir   = float(mod_data["wind_angle"])
+
+    if temperature is None or data_ts is None:
+        return None
+
+    return {
+        "lat": lat, "lon": lon,
+        "temperature": temperature, "humidity": humidity,
+        "wind_speed": wind_speed, "wind_dir": wind_dir,
+    }
+
+
+def fetch_netatmo(
+    project_stations: list[dict],
+    dry_run: bool = False,
+) -> list[dict]:
+    """
+    Phase 2b — Raccoglie dati pubblici Netatmo per Roma e li aggrega per
+    stazione progetto.
+
+    Per ogni stazione progetto:
+      - Trova tutte le stazioni Netatmo pubbliche entro NETATMO_RADIUS_KM km
+      - Calcola mediana di temperatura/umidità, media circolare direzione vento
+      - QC a 4 livelli via qc.run_qc()
+      - Insert in 'observations' se qc_flag < 2; log QC issues su qc_log
+
+    Richiede le variabili d'ambiente: NETATMO_CLIENT_ID, NETATMO_CLIENT_SECRET,
+    NETATMO_REFRESH_TOKEN (da .env in locale, da GitHub Secrets in CI).
+    """
+    from db import get_observations, insert_observation, get_client
+    from qc import run_qc
+
+    logger.info("[Netatmo] ── Avvio raccolta dati pubblici ──────────────────")
+
+    try:
+        token = _refresh_netatmo_token()
+    except Exception as exc:
+        logger.error(f"[Netatmo] Token refresh fallito: {exc}")
+        return []
+
+    try:
+        r = requests.get(
+            NETATMO_PUBDATA_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                **ROMA_BBOX,
+                "required_data": "temperature",
+                "filter":        "true",
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        raw_stations = r.json().get("body", [])
+    except Exception as exc:
+        logger.error(f"[Netatmo] getpublicdata fallito: {exc}")
+        return []
+
+    logger.info(f"[Netatmo] {len(raw_stations)} stazioni raw nel bbox")
+
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    parsed = [
+        s for raw in raw_stations
+        if (s := _parse_netatmo_station(raw, now_ts)) is not None
+    ]
+    logger.info(
+        f"[Netatmo] {len(parsed)} stazioni valide "
+        f"(scartate: {len(raw_stations) - len(parsed)} stale/incomplete)"
+    )
+
+    if not parsed:
+        logger.warning("[Netatmo] Nessuna stazione con dati freschi — skip")
+        return []
+
+    results = []
+    now_dt  = datetime.now(timezone.utc)
+
+    for ps in project_stations:
+        ps_id, ps_name = ps["id"], ps.get("name", f"st.{ps['id']}")
+        ps_lat, ps_lon = ps["lat"], ps["lon"]
+
+        nearby = [
+            s for s in parsed
+            if _haversine_km_nt(ps_lat, ps_lon, s["lat"], s["lon"]) <= NETATMO_RADIUS_KM
+        ]
+        if len(nearby) < NETATMO_MIN_CLUSTER:
+            logger.warning(
+                f"[Netatmo] st.{ps_id} ({ps_name}): {len(nearby)} stazioni entro "
+                f"{NETATMO_RADIUS_KM} km — sotto soglia ({NETATMO_MIN_CLUSTER}), skip"
+            )
+            continue
+
+        temps       = [s["temperature"] for s in nearby]
+        temperature = statistics.median(temps)
+        hums        = [s["humidity"] for s in nearby if s["humidity"] is not None]
+        humidity    = statistics.median(hums) if hums else None
+        wind_pairs  = [
+            (s["wind_speed"], s["wind_dir"])
+            for s in nearby
+            if s["wind_speed"] is not None and s["wind_dir"] is not None
+        ]
+        if wind_pairs:
+            wind_speed = statistics.median([w[0] for w in wind_pairs])
+            wind_dir   = _circular_mean_deg([w[1] for w in wind_pairs])
+        else:
+            wind_speed = wind_dir = None
+
+        t_str = f"T={temperature:.1f}°C"
+        h_str = f"H={humidity:.0f}%" if humidity is not None else "H=n/a"
+        w_str = f"W={wind_speed:.0f}km/h {wind_dir:.0f}°" if wind_speed is not None else "W=n/a"
+        logger.info(f"[Netatmo] st.{ps_id} ({ps_name}): {len(nearby)} stazioni | {t_str}  {h_str}  {w_str}")
+
+        obs = {
+            "station_id":     ps_id,
+            "lat":            ps_lat,
+            "lon":            ps_lon,
+            "recorded_at":    now_dt,
+            "temperature":    round(temperature, 2),
+            "wind_speed":     round(wind_speed, 1) if wind_speed is not None else None,
+            "wind_direction": round(wind_dir, 1)   if wind_dir   is not None else None,
+            "humidity":       round(humidity, 1)   if humidity   is not None else None,
+        }
+
+        history          = get_observations(ps_id, hours=3)
+        neighbors_for_qc = [
+            {"lat": s["lat"], "lon": s["lon"],
+             "temperature": s["temperature"], "wind_speed": s["wind_speed"] or 0.0}
+            for s in nearby
+        ]
+        qc_flag, issues = run_qc(obs, history, neighbors_for_qc)
+
+        for issue in issues:
+            try:
+                if not dry_run:
+                    get_client().table("qc_log").insert({
+                        "station_id":     ps_id,
+                        "recorded_at":    now_dt.isoformat(),
+                        "check_type":     issue["check_type"],
+                        "field_name":     issue["field_name"],
+                        "original_value": issue["original_value"],
+                        "reason":         issue["reason"],
+                    }).execute()
+            except Exception as exc:
+                logger.warning(f"[Netatmo] st.{ps_id} qc_log insert fallito: {exc}")
+
+        if qc_flag >= 2:
+            logger.warning(f"[Netatmo] st.{ps_id} SCARTATO dal QC (flag={qc_flag})")
+            continue
+        if qc_flag == 1:
+            logger.warning(f"[Netatmo] st.{ps_id} SOSPETTO (flag=1) — inserito con cautela")
+
+        raw_src = {
+            "source":     "netatmo_public",
+            "n_stations": len(nearby),
+            "temps_raw":  [round(t, 1) for t in temps],
+        }
+
+        if not dry_run:
+            try:
+                obs_id = insert_observation(
+                    station_id     = ps_id,
+                    recorded_at    = now_dt,
+                    temperature    = obs["temperature"],
+                    wind_speed     = obs["wind_speed"],
+                    wind_direction = obs["wind_direction"],
+                    humidity       = obs["humidity"],
+                    qc_flag        = qc_flag,
+                    raw_source     = raw_src,
+                )
+                logger.info(f"[Netatmo] st.{ps_id} INSERT OK → obs_id={obs_id}")
+                results.append({**obs, "qc_flag": qc_flag, "obs_id": obs_id})
+            except Exception as exc:
+                logger.error(f"[Netatmo] st.{ps_id} INSERT FALLITO: {exc}")
+        else:
+            logger.info(f"[Netatmo] [DRY-RUN] st.{ps_id} OK | T={obs['temperature']}°C  qc_flag={qc_flag}")
+            results.append({**obs, "qc_flag": qc_flag})
+
+    logger.info(f"[Netatmo] ── Fine: {len(results)}/{len(project_stations)} stazioni inserite ──")
+    return results
 
 
 # TODO Phase 2c: fetch_protezione_civile_lazio() → API OpenAmbiente
@@ -372,6 +641,9 @@ def collect_observations(
         except Exception as exc:
             logger.error(f"st.{station_id} {name}: errore pipeline: {exc}")
             counts["errors"] += 1
+
+    # Phase 2b — Netatmo (self-contained: gestisce QC + insert internamente)
+    fetch_netatmo(stations, dry_run=dry_run)
 
     return counts
 
