@@ -310,6 +310,36 @@ Senza questi vincoli su ~264k righe il file .pkl esplode a ~4.8 GB e il training
 | `model/rf_correttore_wind_direction.pkl` | 1.8 MB |
 | **Totale** | **~12 MB** |
 
+### Qualità previsioni per stazione (stato attuale)
+
+Il modello è addestrato sulle 4 stazioni originali. Per le nuove zone la
+qualità dipende da quanto il profilo orografico è rappresentato nel training:
+
+| Stazione | Microclima | Qualità previsione attuale | Note |
+|:---------|:-----------|:--------------------------|:-----|
+| Roma Sud (3) | standard | ✅ Alta | era nel training set |
+| Ostia Lido (25) | costiera | 🟡 Buona | microclima `costiera` presente nel training (old Ostia) |
+| EUR (26) | urban_canyon | 🟡 Buona | microclima `urban_canyon` presente nel training |
+| Trastevere (27) | urban_canyon | 🟡 Discreta | urban_canyon presente, ma zona più centrale |
+| Tivoli (28) | quota | 🟠 Approssimata | `quota` **mai vista** nel training — extrapolazione da altitude |
+| Castelli Romani (29) | quota | 🟠 Approssimata | quota più alta, massima incertezza sistematica |
+
+### Il ciclo virtuoso
+
+Ogni run di `mainMETEO.py` accumula osservazioni Netatmo reali in `observations`
+per tutte e 6 le zone. Queste diventano i **target futuri del modello**:
+
+```
+Oggi:        ERA5 (input) + METAR 4 stazioni (target storico)
+             → previsioni buone per costiera/urban_canyon, approssimate per quota
+
+Ogni 30 min: Netatmo accumula ground truth per 6 zone
+             ↓
+~6 mesi:     ERA5 (input) + Netatmo 6 stazioni (target live)
+             → retraining → il modello impara le correzioni reali per quota,
+               Trastevere specifica, Castelli Romani specifica
+```
+
 ---
 
 ## 📁 Struttura del progetto
