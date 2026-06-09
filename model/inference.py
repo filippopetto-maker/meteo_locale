@@ -27,6 +27,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
 import argparse
+import json
 import logging
 import pickle
 import sys
@@ -132,6 +133,37 @@ def fetch_forecast(
 
 _BOOSTER_CACHE: dict[Path, lgb.Booster] = {}
 _RF_CACHE:      dict[Path, object]      = {}
+_ARSIAL_BIAS:   dict | None             = None
+
+# Mapping stazione progetto → stazione proxy ARSIAL per correzione bias mensile.
+# Stazione id=3 (Roma Sud) esclusa: era nel training set, nessuna correzione.
+ARSIAL_PROXY: dict[int, str] = {
+    25: "FIUMICINO T. Lepre",      # Ostia Lido  → bias ~-0.18°C
+    26: "ROMA P. Nona",            # EUR         → bias ~-0.08°C
+    27: "ROMA Lanciani",           # Trastevere  → bias da JSON
+    28: "S. GREGORIO DA SASSOLA",  # Tivoli      → bias ~+2.26°C
+    29: "MONTECOMPATRI C. Mattia", # Castelli    → bias ~+1.50°C
+}
+
+
+def load_arsial_bias() -> dict:
+    """
+    Carica data/arsial_bias_table.json con i bias mensili ARSIAL–ERA5.
+    Usa cache modulo-level per evitare ricarichi in loop multi-stazione.
+    Ritorna dict vuoto se il file manca (fallback silenzioso — no crash).
+    """
+    global _ARSIAL_BIAS
+    if _ARSIAL_BIAS is not None:
+        return _ARSIAL_BIAS
+    bias_path = _PROJECT_ROOT / "data" / "arsial_bias_table.json"
+    try:
+        with bias_path.open() as f:
+            _ARSIAL_BIAS = json.load(f)
+        logger.info(f"ARSIAL bias table caricata: {len(_ARSIAL_BIAS)} stazioni proxy")
+    except Exception as exc:
+        logger.warning(f"ARSIAL bias table non disponibile ({exc}) — nessuna correzione")
+        _ARSIAL_BIAS = {}
+    return _ARSIAL_BIAS
 
 
 def load_lgbm(target: str) -> lgb.Booster:
@@ -232,6 +264,24 @@ def predict_station(
     else:
         final_pred = lgbm_pred
         corrected  = False
+
+    # ── 6b. Correzione ARSIAL bias mensile (stazioni 25–29) ─────────────────
+    # bias_temp_med = ARSIAL − ERA5: positivo → zona più calda di ERA5.
+    # Sommiamo il bias a final_pred perché il modello, addestrato su stazioni
+    # pianura/costiere, sottostima sistematicamente le zone non nel training.
+    if target == "temperature":
+        arsial_proxy = ARSIAL_PROXY.get(station["id"])
+        if arsial_proxy is not None:
+            month_key = str(datetime.now(timezone.utc).month)
+            try:
+                bias = load_arsial_bias()[arsial_proxy]["monthly"][month_key]["bias_temp_med"]
+                final_pred += bias
+                logger.info(
+                    f"[ARSIAL bias] st.{station['id']} {bias:+.3f}°C "
+                    f"(mese {month_key}, stazione {arsial_proxy})"
+                )
+            except (KeyError, TypeError):
+                pass  # JSON mancante o chiave assente — fallback silenzioso
 
     # ── 7. Pass-through NWP per i campi non ancora coperti dai modelli ───────
     nwp_at_horizon = df[df["recorded_at"] == valid_for.replace(tzinfo=None)]
