@@ -79,18 +79,36 @@ def wind_to_uv(speed_ms, direction_deg):
     return u, v
 
 
-def fetch_era5_batch(lats: list, lons: list, target_hour_utc) -> list:
+def fetch_era5_batch(
+    lats: list,
+    lons: list,
+    target_hour_utc,
+    variables: list | None = None,
+) -> dict:
     """
-    Fetch ERA5 temperature_2m per una lista di punti in un singolo request batch.
+    Fetch ERA5 per una lista di punti e variabili in un singolo request batch.
     Open-Meteo supporta lat/lon multipli separati da virgola.
-    Ritorna lista di float nella stessa ordine di lats/lons.
+
+    Parameters
+    ----------
+    lats, lons       : coordinate dei punti (stessa lunghezza)
+    target_hour_utc  : datetime UTC; si cerca questa ora esatta nel risultato
+    variables        : lista di variabili hourly Open-Meteo
+                       (default: ["temperature_2m"])
+
+    Returns
+    -------
+    dict {variable: [float, ...]}  — un valore per punto, stesso ordine di lats/lons
     """
     import requests
+
+    if variables is None:
+        variables = ["temperature_2m"]
 
     params = {
         "latitude":      ",".join(f"{x:.4f}" for x in lats),
         "longitude":     ",".join(f"{x:.4f}" for x in lons),
-        "hourly":        "temperature_2m",
+        "hourly":        ",".join(variables),
         "forecast_days": 1,
         "past_days":     1,
         "timezone":      "UTC",
@@ -107,17 +125,19 @@ def fetch_era5_batch(lats: list, lons: list, target_hour_utc) -> list:
         data = [data]
 
     target_str = target_hour_utc.strftime("%Y-%m-%dT%H:00")
-    results = []
+    results: dict[str, list] = {var: [] for var in variables}
     for loc in data:
         times = loc["hourly"]["time"]
-        temps = loc["hourly"]["temperature_2m"]
-        # Cerca l'ora esatta
-        lookup = dict(zip(times, temps))
-        if target_str in lookup and lookup[target_str] is not None:
-            results.append(lookup[target_str])
-        else:
-            # Fallback: valore non-None più recente
-            results.append(next((v for v in reversed(temps) if v is not None), 0.0))
+        for var in variables:
+            vals = loc["hourly"][var]
+            lookup = dict(zip(times, vals))
+            if target_str in lookup and lookup[target_str] is not None:
+                results[var].append(lookup[target_str])
+            else:
+                # Fallback: valore non-None più recente
+                results[var].append(
+                    next((v for v in reversed(vals) if v is not None), 0.0)
+                )
     return results
 
 

@@ -13,25 +13,30 @@
     });
   }
 
-  // 5-stop diverging palette: cold → hot
-  const PALETTE = [
+  // Palettes: ogni stop ha { t, r, g, b }
+  const TEMP_PALETTE = [
     { t: 0.00, r: 0x31, g: 0x36, b: 0x95 }, // #313695
     { t: 0.25, r: 0x74, g: 0xad, b: 0xd1 }, // #74add1
     { t: 0.50, r: 0xfe, g: 0xe0, b: 0x90 }, // #fee090
     { t: 0.75, r: 0xf4, g: 0x6d, b: 0x43 }, // #f46d43
     { t: 1.00, r: 0xa5, g: 0x00, b: 0x26 }, // #a50026
   ];
+  const HUM_PALETTE = [
+    { t: 0.00, r: 0xd4, g: 0x87, b: 0x5a }, // #d4875a — terracotta/secco
+    { t: 0.25, r: 0xf5, g: 0xde, b: 0xb3 }, // #f5deb3 — grano/neutro
+    { t: 0.50, r: 0xc8, g: 0xe6, b: 0xf5 }, // #c8e6f5 — azzurro chiaro
+    { t: 0.75, r: 0x4d, g: 0x9d, b: 0xe0 }, // #4d9de0 — blu medio
+    { t: 1.00, r: 0x02, g: 0x38, b: 0x58 }, // #023858 — blu profondo/umido
+  ];
 
   function lerp(a, b, f) { return a + (b - a) * f; }
 
-  function tempToColor(value, tMin, tMax) {
-    const norm = Math.max(0, Math.min(1, (value - tMin) / (tMax - tMin || 1)));
-    let lo = PALETTE[0], hi = PALETTE[PALETTE.length - 1];
-    for (let i = 0; i < PALETTE.length - 1; i++) {
-      if (norm >= PALETTE[i].t && norm <= PALETTE[i + 1].t) {
-        lo = PALETTE[i];
-        hi = PALETTE[i + 1];
-        break;
+  function valueToColor(value, vMin, vMax, palette) {
+    const norm = Math.max(0, Math.min(1, (value - vMin) / (vMax - vMin || 1)));
+    let lo = palette[0], hi = palette[palette.length - 1];
+    for (let i = 0; i < palette.length - 1; i++) {
+      if (norm >= palette[i].t && norm <= palette[i + 1].t) {
+        lo = palette[i]; hi = palette[i + 1]; break;
       }
     }
     const f = (norm - lo.t) / ((hi.t - lo.t) || 1);
@@ -42,29 +47,39 @@
     ];
   }
 
-  function renderTemperature(map, latest) {
-    const tg = latest.temp_grid;
-    if (!tg || !tg.values || tg.values.length === 0) return null;
-
-    const { nx, ny, lat_min, lat_max, lon_min, lon_max, t_min, t_max, values } = tg;
+  function renderGridLayer(gridData, vMin, vMax, palette, alpha = 153) {
+    const { nx, ny, lat_min, lat_max, lon_min, lon_max, values } = gridData;
     const canvas = document.createElement('canvas');
-    canvas.width = nx;
-    canvas.height = ny;
+    canvas.width = nx; canvas.height = ny;
     const ctx = canvas.getContext('2d');
     const imgData = ctx.createImageData(nx, ny);
-
     for (let i = 0; i < ny * nx; i++) {
-      const [r, g, b] = tempToColor(values[i], t_min, t_max);
+      const [r, g, b] = valueToColor(values[i], vMin, vMax, palette);
       imgData.data[i * 4]     = r;
       imgData.data[i * 4 + 1] = g;
       imgData.data[i * 4 + 2] = b;
-      imgData.data[i * 4 + 3] = 153; // 0.6 * 255
+      imgData.data[i * 4 + 3] = alpha;
     }
     ctx.putImageData(imgData, 0, 0);
-
     const bounds = [[lat_min, lon_min], [lat_max, lon_max]];
-    return L.imageOverlay(canvas.toDataURL(), bounds, { opacity: 1.0 }).addTo(map);
+    return L.imageOverlay(canvas.toDataURL(), bounds, { opacity: 1.0 });
   }
+
+  function renderTemperature(latest) {
+    const tg = latest.temp_grid;
+    if (!tg || !tg.values || tg.values.length === 0) return null;
+    return renderGridLayer(tg, tg.t_min, tg.t_max, TEMP_PALETTE);
+  }
+
+  function renderHumidity(latest) {
+    const hg = latest.humidity_grid;
+    if (!hg || !hg.values || hg.values.length === 0) return null;
+    return renderGridLayer(hg, hg.h_min, hg.h_max, HUM_PALETTE, 179); // 0.70 * 255
+  }
+
+  // Stato layer attivo
+  let activeLayer = 'temperature';
+  let heatOverlay = null;
 
   const MICROCLIMA_COLORS = {
     isola_calore: '#e74c3c',
@@ -146,26 +161,63 @@
       const latest   = await latestRes.json();
       const windGrid = windRes.ok ? await windRes.json() : null;
 
-      // Pannello info — top-left
+      // Pannello info — top-left con toggle layer
       const infoPanel = L.DomUtil.create('div', 'info-panel');
       infoPanel.innerHTML =
         `<span class="info-title">🌦️ Meteo Locale — Roma</span><br>` +
-        `<span class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</span>`;
+        `<span class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</span>` +
+        `<div class="layer-toggle">` +
+        `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
+        `<button id="btn-hum">💧 Umidità</button>` +
+        `</div>`;
       document.getElementById('map').appendChild(infoPanel);
 
-      // Legenda temperatura — bottom-right
-      if (latest.temp_grid) {
-        const tMin = latest.temp_grid.t_min.toFixed(1);
-        const tMax = latest.temp_grid.t_max.toFixed(1);
-        const legend = L.DomUtil.create('div', 'temp-legend');
-        legend.innerHTML =
-          `<div class="legend-title">Temperatura (°C)</div>` +
-          `<div class="legend-bar"></div>` +
-          `<div class="legend-labels"><span>${tMin}°</span><span>${tMax}°</span></div>`;
-        document.getElementById('map').appendChild(legend);
+      // Legenda — bottom-right (aggiornata da updateLegend)
+      const legend = L.DomUtil.create('div', 'temp-legend');
+      legend.innerHTML =
+        `<div id="legend-title" class="legend-title"></div>` +
+        `<div id="legend-bar" class="legend-bar"></div>` +
+        `<div class="legend-labels">` +
+        `<span id="legend-min"></span><span id="legend-max"></span>` +
+        `</div>`;
+      document.getElementById('map').appendChild(legend);
+
+      function updateLegend(layer, vMin, vMax, unit) {
+        document.getElementById('legend-title').textContent =
+          layer === 'temperature' ? `Temperatura (${unit})` : `Umidità (${unit})`;
+        document.getElementById('legend-bar').style.background =
+          layer === 'temperature'
+            ? 'linear-gradient(to right, #313695, #74add1, #fee090, #f46d43, #a50026)'
+            : 'linear-gradient(to right, #d4875a, #f5deb3, #c8e6f5, #4d9de0, #023858)';
+        document.getElementById('legend-min').textContent = vMin.toFixed(1) + unit;
+        document.getElementById('legend-max').textContent = vMax.toFixed(1) + unit;
       }
 
-      renderTemperature(map, latest);
+      function switchLayer(layer) {
+        activeLayer = layer;
+        if (heatOverlay) map.removeLayer(heatOverlay);
+        if (layer === 'temperature') {
+          heatOverlay = renderTemperature(latest);
+          document.getElementById('btn-temp').classList.add('active');
+          document.getElementById('btn-hum').classList.remove('active');
+          if (latest.temp_grid) {
+            updateLegend('temperature', latest.temp_grid.t_min, latest.temp_grid.t_max, '°C');
+          }
+        } else {
+          heatOverlay = renderHumidity(latest);
+          document.getElementById('btn-temp').classList.remove('active');
+          document.getElementById('btn-hum').classList.add('active');
+          if (latest.humidity_grid) {
+            updateLegend('humidity', latest.humidity_grid.h_min, latest.humidity_grid.h_max, '%');
+          }
+        }
+        if (heatOverlay) heatOverlay.addTo(map);
+      }
+
+      document.getElementById('btn-temp').addEventListener('click', () => switchLayer('temperature'));
+      document.getElementById('btn-hum').addEventListener('click', () => switchLayer('humidity'));
+
+      switchLayer('temperature');
       const stations = latest.stations || [];
       renderStations(map, stations);
 
@@ -178,7 +230,7 @@
         const lat = e.latlng.lat;
         const lng = e.latlng.lng;
 
-        const temp = idwPoint(lat, lng, stations, st => st.forecast?.temperature);
+        const temp = latest.temp_grid     ? lookupGrid(lat, lng, latest.temp_grid)     : null;
 
         const windU = idwPoint(lat, lng, stations, st => {
           const s = (st.forecast?.wind_speed ?? null);
@@ -199,12 +251,15 @@
         let dir = Math.atan2(-windU, -windV) * 180 / Math.PI;
         if (dir < 0) dir += 360;
 
+        const hum  = latest.humidity_grid ? lookupGrid(lat, lng, latest.humidity_grid) : null;
+
         L.popup({ className: 'meteo-popup' })
           .setLatLng(e.latlng)
           .setContent(
             `<b>${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E</b><br>` +
             `🌡️ <b>${temp !== null ? temp.toFixed(1) + '°C' : 'n/d'}</b><br>` +
-            `💨 <b>${speed.toFixed(1)} km/h</b> — ${degreesToCardinal(dir)}`
+            `💨 <b>${speed.toFixed(1)} km/h</b> — ${degreesToCardinal(dir)}<br>` +
+            `💧 Umidità: <b>${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>`
           )
           .openOn(map);
       });
@@ -222,6 +277,21 @@
       console.error('Errore caricamento dati:', err);
       document.getElementById('updated-at').textContent = 'Errore caricamento dati';
     }
+  }
+
+  function lookupGrid(lat, lng, grid) {
+    const { lat_min, lat_max, lon_min, lon_max, nx, ny, values } = grid;
+    const clampLat = Math.max(lat_min, Math.min(lat_max, lat));
+    const clampLng = Math.max(lon_min, Math.min(lon_max, lng));
+    const row = (lat_max - clampLat) / (lat_max - lat_min) * (ny - 1);
+    const col = (clampLng - lon_min) / (lon_max - lon_min) * (nx - 1);
+    const r0 = Math.floor(row), r1 = Math.min(r0 + 1, ny - 1);
+    const c0 = Math.floor(col), c1 = Math.min(c0 + 1, nx - 1);
+    const dr = row - r0, dc = col - c0;
+    return values[r0*nx+c0] * (1-dr)*(1-dc) +
+           values[r0*nx+c1] * (1-dr)*dc +
+           values[r1*nx+c0] * dr*(1-dc) +
+           values[r1*nx+c1] * dr*dc;
   }
 
   function idwPoint(lat, lng, stations, getValue, power = 2) {

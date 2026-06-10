@@ -42,12 +42,25 @@
       font-family: sans-serif;
       font-size: 13px;
       line-height: 1.6;
-      pointer-events: none;
+      pointer-events: auto;
     }
     .info-title { font-weight: bold; font-size: 14px; }
     .info-update { font-size: 11px; opacity: 0.8; }
 
-    /* Legenda temperatura — bottom-right (iniettata da JS) */
+    /* Toggle layer */
+    .layer-toggle { margin-top: 8px; display: flex; gap: 6px; }
+    .layer-toggle button {
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+      border: none;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .layer-toggle button.active { background: rgba(255, 255, 255, 0.4); font-weight: bold; }
+
+    /* Legenda — bottom-right (iniettata da JS, gradiente impostato da JS) */
     .temp-legend {
       position: fixed;
       bottom: 30px;
@@ -62,12 +75,7 @@
       width: 160px;
     }
     .legend-title { font-weight: bold; margin-bottom: 4px; }
-    .legend-bar {
-      height: 12px;
-      border-radius: 3px;
-      background: linear-gradient(to right, #313695, #74add1, #fee090, #f46d43, #a50026);
-      margin-bottom: 3px;
-    }
+    .legend-bar { height: 12px; border-radius: 3px; margin-bottom: 3px; }
     .legend-labels { display: flex; justify-content: space-between; font-size: 11px; }
   </style>
 </head>

@@ -91,6 +91,7 @@ def build_latest_json(
     forecasts: dict,
     observations: dict,
     temp_grid_data: dict | None = None,
+    humidity_grid_data: dict | None = None,
 ) -> dict:
     station_list = []
     for s in stations:
@@ -125,6 +126,8 @@ def build_latest_json(
     }
     if temp_grid_data:
         payload["temp_grid"] = temp_grid_data
+    if humidity_grid_data:
+        payload["humidity_grid"] = humidity_grid_data
     return payload
 
 
@@ -224,6 +227,7 @@ def main() -> None:
 
     log.info("Calcolo griglia temperatura (ERA5 background + IDW correzioni)...")
     temp_grid_data: dict | None = None
+    humidity_grid_data: dict | None = None
 
     # Stazioni con forecast di temperatura valido
     stations_with_fc = [
@@ -247,14 +251,19 @@ def main() -> None:
         st_lons = [st["lon"] for st in stations_with_fc]
 
         # ── 3. Fetch ERA5 batch: background + stazioni in unico request ─────
-        log.info(f"  Fetch ERA5 ({N_BG_LAT * N_BG_LON + len(st_lats)} punti)...")
+        log.info(f"  Fetch ERA5 ({N_BG_LAT * N_BG_LON + len(st_lats)} punti, 2 variabili)...")
         all_lats = bg_lats_flat + st_lats
         all_lons = bg_lons_flat + st_lons
-        era5_all = fetch_era5_batch(all_lats, all_lons, now_utc)
+        era5_data = fetch_era5_batch(
+            all_lats, all_lons, now_utc,
+            variables=["temperature_2m", "relativehumidity_2m"],
+        )
+        era5_temp_flat = np.array(era5_data["temperature_2m"])
+        era5_hum_flat  = np.array(era5_data["relativehumidity_2m"])
 
-        n_bg = len(bg_lats_flat)
-        era5_bg_flat = np.array(era5_all[:n_bg])
-        era5_at_st   = np.array(era5_all[n_bg:])
+        n_bg         = len(bg_lats_flat)
+        era5_bg_flat = era5_temp_flat[:n_bg]
+        era5_at_st   = era5_temp_flat[n_bg:]
 
         # ── 4. Correzioni microclima (modello − ERA5) ───────────────────────
         t_model     = np.array([st["forecast"]["temperature"] for st in stations_with_fc])
@@ -280,7 +289,7 @@ def main() -> None:
             LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
         )
 
-        # ── 7. Griglia finale ───────────────────────────────────────────────
+        # ── 7. Griglia finale temperatura ────────────────────────────────────
         temp_grid = era5_fine + corr_grid
         temp_grid_data = {
             "lat_min": LAT_MIN,
@@ -293,6 +302,46 @@ def main() -> None:
             "t_min": round(float(temp_grid.min()), 2),
             "t_max": round(float(temp_grid.max()), 2),
         }
+
+        # ── 8. Griglia umidità (ERA5 background + IDW correzioni) ───────────
+        hum_mask = np.array(
+            [st["forecast"].get("humidity") is not None for st in stations_with_fc]
+        )
+        if hum_mask.sum() >= 2:
+            hum_values    = np.array([
+                st["forecast"]["humidity"]
+                for st in stations_with_fc
+                if st["forecast"].get("humidity") is not None
+            ])
+            era5_hum_at_st = era5_hum_flat[n_bg:][hum_mask]
+            hum_corr       = hum_values - era5_hum_at_st
+
+            era5_hum_coarse = era5_hum_flat[:n_bg].reshape(N_BG_LAT, N_BG_LON)
+            era5_hum_fine   = bilinear_to_fine(
+                era5_hum_coarse, bg_lats, bg_lons, fine_lats, fine_lons
+            )
+            hum_corr_grid = compute_idw_grid(
+                st_points[hum_mask], hum_corr,
+                LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+            )
+            hum_grid = np.clip(era5_hum_fine + hum_corr_grid, 0, 100)
+            humidity_grid_data = {
+                "lat_min": LAT_MIN,
+                "lat_max": LAT_MAX,
+                "lon_min": LON_MIN,
+                "lon_max": LON_MAX,
+                "nx": NX,
+                "ny": NY,
+                "values": [round(v, 1) for v in hum_grid.flatten().tolist()],
+                "h_min": round(float(hum_grid.min()), 1),
+                "h_max": round(float(hum_grid.max()), 1),
+            }
+        else:
+            log.warning(
+                f"Solo {int(hum_mask.sum())} stazioni valide per umidità "
+                "(< 2) — humidity_grid non inclusa"
+            )
+            humidity_grid_data = None
     else:
         log.warning(
             f"Solo {len(stations_with_fc)} stazioni valide per temperatura "
@@ -300,7 +349,7 @@ def main() -> None:
         )
 
     log.info("Calcolo latest.json...")
-    latest = build_latest_json(stations, forecasts, observations, temp_grid_data)
+    latest = build_latest_json(stations, forecasts, observations, temp_grid_data, humidity_grid_data)
     latest_path = DOCS_DATA / "latest.json"
     latest_path.write_text(json.dumps(latest, indent=2, ensure_ascii=False))
     log.info(f"  Scritto {latest_path}")
