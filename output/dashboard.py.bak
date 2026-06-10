@@ -285,56 +285,21 @@ forecasts_st = forecasts_df[forecasts_df["station_id"] == station_id] if not for
 if obs_df.empty and forecasts_st.empty:
     st.info("Nessun dato disponibile nelle ultime 48h.")
 else:
-    parts_long = []
+    parts = []
     if not forecasts_st.empty and target in forecasts_st.columns:
-        fc = forecasts_st[["valid_for", target]].copy()
-        fc = fc.rename(columns={"valid_for": "time", target: "valore"})
-        fc["Serie"] = "Previsto"
-        parts_long.append(fc)
+        f = forecasts_st[["valid_for", target]].rename(
+            columns={"valid_for": "time", target: "Previsto"}
+        ).set_index("time")
+        parts.append(f)
     if not obs_df.empty and target in obs_df.columns:
-        ob = obs_df[["recorded_at", target]].copy()
-        ob = ob.rename(columns={"recorded_at": "time", target: "valore"})
-        ob["Serie"] = "Osservato"
-        parts_long.append(ob)
+        o = obs_df[["recorded_at", target]].rename(
+            columns={"recorded_at": "time", target: "Osservato"}
+        ).set_index("time")
+        parts.append(o)
 
-    if parts_long:
-        plot_df = (
-            pd.concat(parts_long, ignore_index=True)
-            .dropna(subset=["valore"])
-            .sort_values("time")
-        )
-        y_label = target.replace("_", " ").title()
-        chart = (
-            alt.Chart(plot_df)
-            .mark_line(point=alt.OverlayMarkDef(size=40), strokeWidth=2)
-            .encode(
-                x=alt.X("time:T", title="Ora (Italia)"),
-                y=alt.Y("valore:Q", title=y_label),
-                color=alt.Color(
-                    "Serie:N",
-                    title="",
-                    scale=alt.Scale(
-                        domain=["Osservato", "Previsto"],
-                        range=["#1f77b4", "#aec7e8"],
-                    ),
-                ),
-                strokeDash=alt.StrokeDash(
-                    "Serie:N",
-                    scale=alt.Scale(
-                        domain=["Previsto", "Osservato"],
-                        range=[[6, 4], [0, 0]],
-                    ),
-                    legend=None,
-                ),
-                tooltip=[
-                    alt.Tooltip("time:T",   title="Ora",   format="%d/%m %H:%M"),
-                    alt.Tooltip("Serie:N",  title="Serie"),
-                    alt.Tooltip("valore:Q", title=y_label, format=".1f"),
-                ],
-            )
-            .properties(height=320)
-        )
-        st.altair_chart(chart, use_container_width=True)
+    if parts:
+        chart_df = pd.concat(parts, axis=1).sort_index()
+        st.line_chart(chart_df)
     else:
         st.info(f"Nessun valore di '{target}' disponibile.")
 

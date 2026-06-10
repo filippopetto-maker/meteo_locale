@@ -1,5 +1,6 @@
 # Credenziali — MAI nel repo
 .env
+.env\
 
 # Dati grezzi (si rigenerano con historical.py)
 data/*.parquet
@@ -15,3 +16,4 @@ __pycache__/
 Miniforge3-MacOSX-arm64.sh
 .claude/
 logs/
+.env

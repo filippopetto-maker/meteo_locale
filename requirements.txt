@@ -4,6 +4,7 @@
 # Core data / modelling
 pandas
 numpy
+scipy
 pyarrow            # backend parquet per pandas
 scikit-learn
 lightgbm

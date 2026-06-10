@@ -125,7 +125,8 @@ Lo split train/val è rigorosamente **temporale** (non random): tutte le osserva
 ┌────────────────────▼────────────────────────────────┐
 │              LAYER 4 — OUTPUT                       │
 │  Dashboard (Streamlit) · API REST (FastAPI) [Fase 3]│
-│  Mappa (Cartopy) [Fase 3]                           │
+│  Mappa interattiva Windy-style (MapLibre GL) [Fase 3]│
+│  Campo colorato IDW · Particelle vento WebGL        │
 └─────────────────────────────────────────────────────┘
 
 Esecuzione automatica: GitHub Actions (cron ogni 30 min, ubuntu-latest, €0)
@@ -248,13 +249,21 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
 
 ### ⏳ Fase 3 — Output avanzato e nuovi target
 
-1. [ ] API REST con FastAPI
-2. [ ] Mappa Cartopy con gradiente microclima
-3. [ ] Aggiunta CAPE alle variabili ERA5 → target thunderstorm
+1. [ ] **API REST FastAPI** — endpoint `/forecast/latest` e `/forecast/history`
+       che espone le previsioni Supabase in JSON pulito per la mappa e per usi esterni
+2. [ ] **Mappa interattiva Windy-style** — visualizzazione parametri meteo su Roma
+       Stack: MapLibre GL JS + Canvas WebGL + GitHub Pages (zero costi)
+       - Campo colorato continuo: interpolazione IDW tra le 6 stazioni su griglia 200×200
+         per temperatura, umidità, pioggia (bbox Roma: 41.6–42.1°N / 12.1–12.9°E)
+       - Particelle vento animate: leaflet-velocity con componenti U/V dalla previsione
+       - Marker stazioni: pallini con tooltip su T, umidità, vento in tempo reale
+       - Switcher parametri: Temperatura · Umidità · Vento · Pioggia
+       - Tile base: CartoDB Dark (stile simile a Windy)
+       Ordine costruzione: FastAPI → prototipo HTML standalone → particelle → GitHub Pages
+3. [ ] CAPE da ERA5 → target thunderstorm
 4. [ ] Target pioggia puntuale (mm)
-5. [ ] LCZ (Local Climate Zones) e impermeabilità Copernicus per isola di calore
-6. [ ] Retraining su storico Netatmo accumulato (~6 mesi) per le nuove zone
-7. [ ] Tuning iperparametri
+5. [ ] LCZ Copernicus per isola di calore
+6. [ ] **Dicembre 2026**: retraining completo con Netatmo accumulato + ARSIAL daily
 
 ---
 
@@ -677,6 +686,10 @@ Dashboard read-only. Mostra previsioni correnti, storico temperature, metriche m
 - **Addestramento immediato sullo storico** — nessuna attesa per accumulare dati live
 - **Deploy autonomo a costo zero** — GitHub Actions cron, Supabase free tier, Open-Meteo gratuito, Netatmo pubblico: zero spesa operativa
 - **Infrastruttura robusta** — Streamlit dashboard live, metriche su DB, modelli versionati
+- **Mappa iperlocale Windy-style** [Fase 3] — visualizzazione del gradiente microclima
+  Roma su carta interattiva: il campo colorato mostra le previsioni corrette dal modello
+  (non ERA5 grezzo), le particelle animate mostrano il vento iper-locale. Nessuna app
+  mainstream mostra la differenza termica Trastevere/Tivoli su una mappa zoomabile.
 
 ---
 
