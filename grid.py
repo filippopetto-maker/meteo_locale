@@ -4,6 +4,7 @@ Pure module, no DB dependencies.
 """
 
 import numpy as np
+import time
 
 
 def compute_idw_grid(points, values, lat_min, lat_max, lon_min, lon_max, nx, ny, power=2):
@@ -84,60 +85,92 @@ def fetch_era5_batch(
     lons: list,
     target_hour_utc,
     variables: list | None = None,
+    chunk_size: int = 20,
+    max_retries: int = 3,
 ) -> dict:
     """
-    Fetch ERA5 per una lista di punti e variabili in un singolo request batch.
-    Open-Meteo supporta lat/lon multipli separati da virgola.
+    Fetch ERA5/forecast da api.open-meteo.com per una lista di coordinate.
 
-    Parameters
-    ----------
-    lats, lons       : coordinate dei punti (stessa lunghezza)
-    target_hour_utc  : datetime UTC; si cerca questa ora esatta nel risultato
-    variables        : lista di variabili hourly Open-Meteo
-                       (default: ["temperature_2m"])
+    Chunking (max chunk_size punti per request) + retry con backoff esponenziale
+    per evitare SSLEOFError su Open-Meteo free tier con batch grandi.
 
-    Returns
-    -------
-    dict {variable: [float, ...]}  — un valore per punto, stesso ordine di lats/lons
+    Args:
+        lats, lons        : sequenze di float (stessa lunghezza)
+        target_hour_utc   : datetime UTC di riferimento (arrotondato all'ora)
+        variables         : lista variabili ERA5 (default: ["temperature_2m"])
+        chunk_size        : max coordinate per singola request (default 20)
+        max_retries       : tentativi per chunk prima di propagare l'eccezione
+
+    Returns:
+        dict[str, list[float]] — una lista di valori per ogni variabile,
+        nell'ordine corrispondente a lats/lons
     """
     import requests
 
     if variables is None:
         variables = ["temperature_2m"]
 
-    params = {
-        "latitude":      ",".join(f"{x:.4f}" for x in lats),
-        "longitude":     ",".join(f"{x:.4f}" for x in lons),
-        "hourly":        ",".join(variables),
-        "forecast_days": 1,
-        "past_days":     1,
-        "timezone":      "UTC",
-    }
-    r = requests.get(
-        "https://api.open-meteo.com/v1/forecast",
-        params=params, timeout=60,
-    )
-    r.raise_for_status()
-    data = r.json()
-
-    # Un solo punto → Open-Meteo restituisce dict; più punti → lista di dict
-    if isinstance(data, dict):
-        data = [data]
-
+    lat_list = list(lats)
+    lon_list = list(lons)
     target_str = target_hour_utc.strftime("%Y-%m-%dT%H:00")
-    results: dict[str, list] = {var: [] for var in variables}
-    for loc in data:
-        times = loc["hourly"]["time"]
-        for var in variables:
-            vals = loc["hourly"][var]
-            lookup = dict(zip(times, vals))
-            if target_str in lookup and lookup[target_str] is not None:
-                results[var].append(lookup[target_str])
-            else:
-                # Fallback: valore non-None più recente
-                results[var].append(
-                    next((v for v in reversed(vals) if v is not None), 0.0)
+    n_chunks = (len(lat_list) + chunk_size - 1) // chunk_size
+    results: dict = {var: [] for var in variables}
+
+    for chunk_idx, chunk_start in enumerate(range(0, len(lat_list), chunk_size)):
+        c_lats = lat_list[chunk_start: chunk_start + chunk_size]
+        c_lons = lon_list[chunk_start: chunk_start + chunk_size]
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                r = requests.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude":      ",".join(f"{x:.4f}" for x in c_lats),
+                        "longitude":     ",".join(f"{x:.4f}" for x in c_lons),
+                        "hourly":        ",".join(variables),
+                        "forecast_days": 1,
+                        "past_days":     1,
+                        "timezone":      "UTC",
+                    },
+                    timeout=30,
                 )
+                r.raise_for_status()
+                chunk_data = r.json()
+                if isinstance(chunk_data, dict):
+                    chunk_data = [chunk_data]
+                for loc in chunk_data:
+                    times = loc["hourly"]["time"]
+                    for var in variables:
+                        vals = loc["hourly"][var]
+                        lookup = dict(zip(times, vals))
+                        if target_str in lookup and lookup[target_str] is not None:
+                            results[var].append(lookup[target_str])
+                        else:
+                            results[var].append(
+                                next((v for v in reversed(vals) if v is not None), 0.0)
+                            )
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_retries - 1:
+                    wait = 10 * (attempt + 1)
+                    print(
+                        f"  [ERA5] chunk {chunk_idx+1}/{n_chunks} "
+                        f"attempt {attempt+1}/{max_retries} fallito, "
+                        f"retry in {wait}s — {type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    time.sleep(wait)
+                else:
+                    print(
+                        f"  [ERA5] chunk {chunk_idx+1}/{n_chunks} "
+                        f"fallito dopo {max_retries} tentativi — {exc}",
+                        flush=True,
+                    )
+                    raise last_exc
+        if chunk_start + chunk_size < len(lat_list):
+            time.sleep(1)
     return results
 
 

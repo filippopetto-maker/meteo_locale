@@ -21,7 +21,12 @@ jobs:
       - run: pip install supabase pandas numpy scipy python-dotenv requests
 
       - name: Run export
-        run: python3 scripts/export_static.py
+        run: |
+          for i in 1 2 3; do
+            python3 scripts/export_static.py && break
+            echo "Attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
