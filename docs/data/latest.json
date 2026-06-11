@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-11T00:05:49Z",
+  "generated_at": "2026-06-11T00:35:43Z",
   "stations": [
     {
       "id": 25,
@@ -15,8 +15,8 @@
         "valid_for": "2026-06-11T01:00:00+00:00"
       },
       "observation": {
-        "temperature": 23.5,
-        "recorded_at": "2026-06-11T00:01:58.538586+00:00"
+        "temperature": 23.3,
+        "recorded_at": "2026-06-11T00:31:29.766203+00:00"
       }
     },
     {
@@ -33,8 +33,8 @@
         "valid_for": "2026-06-11T01:00:00+00:00"
       },
       "observation": {
-        "temperature": 23.8,
-        "recorded_at": "2026-06-11T00:01:58.538586+00:00"
+        "temperature": 23.5,
+        "recorded_at": "2026-06-11T00:31:29.766203+00:00"
       }
     },
     {
@@ -51,8 +51,8 @@
         "valid_for": "2026-06-11T01:00:00+00:00"
       },
       "observation": {
-        "temperature": 24.4,
-        "recorded_at": "2026-06-11T00:01:58.538586+00:00"
+        "temperature": 24.15,
+        "recorded_at": "2026-06-11T00:31:29.766203+00:00"
       }
     },
     {
@@ -69,8 +69,8 @@
         "valid_for": "2026-06-11T01:00:00+00:00"
       },
       "observation": {
-        "temperature": 21.1,
-        "recorded_at": "2026-06-11T00:01:58.538586+00:00"
+        "temperature": 20.75,
+        "recorded_at": "2026-06-11T00:31:29.766203+00:00"
       }
     },
     {
@@ -87,8 +87,8 @@
         "valid_for": "2026-06-11T01:00:00+00:00"
       },
       "observation": {
-        "temperature": 21.6,
-        "recorded_at": "2026-06-11T00:01:58.538586+00:00"
+        "temperature": 21.3,
+        "recorded_at": "2026-06-11T00:31:29.766203+00:00"
       }
     },
     {
@@ -105,8 +105,8 @@
         "valid_for": "2026-06-11T01:00:00+00:00"
       },
       "observation": {
-        "temperature": 23.15,
-        "recorded_at": "2026-06-11T00:01:58.538586+00:00"
+        "temperature": 23,
+        "recorded_at": "2026-06-11T00:31:29.766203+00:00"
       }
     }
   ],
