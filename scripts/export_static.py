@@ -258,39 +258,50 @@ def main() -> None:
             all_lats, all_lons, now_utc,
             variables=["temperature_2m", "relativehumidity_2m"],
         )
-        era5_temp_flat = np.array(era5_data["temperature_2m"])
-        era5_hum_flat  = np.array(era5_data["relativehumidity_2m"])
+        if not era5_data:
+            log.warning("ERA5 non disponibile — le griglie useranno IDW puro sui dati stazione")
 
-        n_bg         = len(bg_lats_flat)
-        era5_bg_flat = era5_temp_flat[:n_bg]
-        era5_at_st   = era5_temp_flat[n_bg:]
-
-        # ── 4. Correzioni microclima (modello − ERA5) ───────────────────────
-        t_model     = np.array([st["forecast"]["temperature"] for st in stations_with_fc])
-        corrections = t_model - era5_at_st
-        log.info(
-            "  Correzioni microclima: " +
-            ", ".join(
-                f"{st['name'].split()[0]}={c:+.2f}°C"
-                for st, c in zip(stations_with_fc, corrections)
-            )
-        )
-
-        # ── 5. ERA5 coarse → griglia fine NX×NY ────────────────────────────
-        era5_coarse = era5_bg_flat.reshape(N_BG_LAT, N_BG_LON)
-        fine_lats   = np.linspace(LAT_MAX, LAT_MIN, NY)
-        fine_lons   = np.linspace(LON_MIN, LON_MAX, NX)
-        era5_fine   = bilinear_to_fine(era5_coarse, bg_lats, bg_lons, fine_lats, fine_lons)
-
-        # ── 6. IDW correzioni NX×NY ─────────────────────────────────────────
+        t_model   = np.array([st["forecast"]["temperature"] for st in stations_with_fc])
         st_points = np.array(list(zip(st_lats, st_lons)))
-        corr_grid = compute_idw_grid(
-            st_points, corrections,
-            LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
-        )
+        fine_lats = np.linspace(LAT_MAX, LAT_MIN, NY)
+        fine_lons = np.linspace(LON_MIN, LON_MAX, NX)
 
-        # ── 7. Griglia finale temperatura ────────────────────────────────────
-        temp_grid = era5_fine + corr_grid
+        if era5_data:
+            era5_temp_flat = np.array(era5_data["temperature_2m"])
+            era5_hum_flat  = np.array(era5_data["relativehumidity_2m"])
+            n_bg           = len(bg_lats_flat)
+            era5_bg_flat   = era5_temp_flat[:n_bg]
+            era5_at_st     = era5_temp_flat[n_bg:]
+
+            # ── 4a. Correzioni microclima (modello − ERA5) ──────────────────
+            corrections = t_model - era5_at_st
+            log.info(
+                "  Correzioni microclima: " +
+                ", ".join(
+                    f"{st['name'].split()[0]}={c:+.2f}°C"
+                    for st, c in zip(stations_with_fc, corrections)
+                )
+            )
+
+            # ── 5. ERA5 coarse → griglia fine NX×NY ────────────────────────
+            era5_coarse = era5_bg_flat.reshape(N_BG_LAT, N_BG_LON)
+            era5_fine   = bilinear_to_fine(era5_coarse, bg_lats, bg_lons, fine_lats, fine_lons)
+
+            # ── 6. IDW correzioni NX×NY ─────────────────────────────────────
+            corr_grid = compute_idw_grid(
+                st_points, corrections,
+                LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+            )
+
+            # ── 7. Griglia finale temperatura ────────────────────────────────
+            temp_grid = era5_fine + corr_grid
+        else:
+            # ── 4b. Fallback: IDW puro sui valori assoluti stazione ──────────
+            temp_grid = compute_idw_grid(
+                st_points, t_model,
+                LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+            )
+
         temp_grid_data = {
             "lat_min": LAT_MIN,
             "lat_max": LAT_MAX,
@@ -308,23 +319,31 @@ def main() -> None:
             [st["forecast"].get("humidity") is not None for st in stations_with_fc]
         )
         if hum_mask.sum() >= 2:
-            hum_values    = np.array([
+            hum_values = np.array([
                 st["forecast"]["humidity"]
                 for st in stations_with_fc
                 if st["forecast"].get("humidity") is not None
             ])
-            era5_hum_at_st = era5_hum_flat[n_bg:][hum_mask]
-            hum_corr       = hum_values - era5_hum_at_st
-
-            era5_hum_coarse = era5_hum_flat[:n_bg].reshape(N_BG_LAT, N_BG_LON)
-            era5_hum_fine   = bilinear_to_fine(
-                era5_hum_coarse, bg_lats, bg_lons, fine_lats, fine_lons
-            )
-            hum_corr_grid = compute_idw_grid(
-                st_points[hum_mask], hum_corr,
-                LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
-            )
-            hum_grid = np.clip(era5_hum_fine + hum_corr_grid, 0, 100)
+            if era5_data:
+                era5_hum_at_st  = era5_hum_flat[n_bg:][hum_mask]
+                hum_corr        = hum_values - era5_hum_at_st
+                era5_hum_coarse = era5_hum_flat[:n_bg].reshape(N_BG_LAT, N_BG_LON)
+                era5_hum_fine   = bilinear_to_fine(
+                    era5_hum_coarse, bg_lats, bg_lons, fine_lats, fine_lons
+                )
+                hum_corr_grid = compute_idw_grid(
+                    st_points[hum_mask], hum_corr,
+                    LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+                )
+                hum_grid = np.clip(era5_hum_fine + hum_corr_grid, 0, 100)
+            else:
+                hum_grid = np.clip(
+                    compute_idw_grid(
+                        st_points[hum_mask], hum_values,
+                        LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+                    ),
+                    0, 100,
+                )
             humidity_grid_data = {
                 "lat_min": LAT_MIN,
                 "lat_max": LAT_MAX,

@@ -89,10 +89,10 @@ def fetch_era5_batch(
     max_retries: int = 3,
 ) -> dict:
     """
-    Fetch ERA5/forecast da api.open-meteo.com per una lista di coordinate.
+    Fetch ERA5 da archive-api.open-meteo.com per una lista di coordinate.
 
-    Chunking (max chunk_size punti per request) + retry con backoff esponenziale
-    per evitare SSLEOFError su Open-Meteo free tier con batch grandi.
+    Chunking (max chunk_size punti per request) + retry con backoff esponenziale.
+    In caso di errore non recuperabile restituisce {} invece di crashare.
 
     Args:
         lats, lons        : sequenze di float (stessa lunghezza)
@@ -103,75 +103,87 @@ def fetch_era5_batch(
 
     Returns:
         dict[str, list[float]] — una lista di valori per ogni variabile,
-        nell'ordine corrispondente a lats/lons
+        nell'ordine corrispondente a lats/lons.
+        Ritorna {} se l'intera fetch fallisce (fallback graceful).
     """
     import requests
+    from datetime import timedelta
 
     if variables is None:
         variables = ["temperature_2m"]
 
-    lat_list = list(lats)
-    lon_list = list(lons)
+    lat_list   = list(lats)
+    lon_list   = list(lons)
     target_str = target_hour_utc.strftime("%Y-%m-%dT%H:00")
-    n_chunks = (len(lat_list) + chunk_size - 1) // chunk_size
+    start_date = (target_hour_utc.date() - timedelta(days=1)).isoformat()
+    end_date   = target_hour_utc.date().isoformat()
+    n_chunks   = (len(lat_list) + chunk_size - 1) // chunk_size
     results: dict = {var: [] for var in variables}
 
-    for chunk_idx, chunk_start in enumerate(range(0, len(lat_list), chunk_size)):
-        c_lats = lat_list[chunk_start: chunk_start + chunk_size]
-        c_lons = lon_list[chunk_start: chunk_start + chunk_size]
-        last_exc = None
-        for attempt in range(max_retries):
-            try:
-                r = requests.get(
-                    "https://api.open-meteo.com/v1/forecast",
-                    params={
-                        "latitude":      ",".join(f"{x:.4f}" for x in c_lats),
-                        "longitude":     ",".join(f"{x:.4f}" for x in c_lons),
-                        "hourly":        ",".join(variables),
-                        "forecast_days": 1,
-                        "past_days":     1,
-                        "timezone":      "UTC",
-                    },
-                    timeout=30,
-                )
-                r.raise_for_status()
-                chunk_data = r.json()
-                if isinstance(chunk_data, dict):
-                    chunk_data = [chunk_data]
-                for loc in chunk_data:
-                    times = loc["hourly"]["time"]
-                    for var in variables:
-                        vals = loc["hourly"][var]
-                        lookup = dict(zip(times, vals))
-                        if target_str in lookup and lookup[target_str] is not None:
-                            results[var].append(lookup[target_str])
-                        else:
-                            results[var].append(
-                                next((v for v in reversed(vals) if v is not None), 0.0)
-                            )
-                last_exc = None
-                break
-            except Exception as exc:
-                last_exc = exc
-                if attempt < max_retries - 1:
-                    wait = 10 * (attempt + 1)
-                    print(
-                        f"  [ERA5] chunk {chunk_idx+1}/{n_chunks} "
-                        f"attempt {attempt+1}/{max_retries} fallito, "
-                        f"retry in {wait}s — {type(exc).__name__}: {exc}",
-                        flush=True,
+    try:
+        for chunk_idx, chunk_start in enumerate(range(0, len(lat_list), chunk_size)):
+            c_lats = lat_list[chunk_start: chunk_start + chunk_size]
+            c_lons = lon_list[chunk_start: chunk_start + chunk_size]
+            last_exc = None
+            for attempt in range(max_retries):
+                try:
+                    r = requests.get(
+                        "https://archive-api.open-meteo.com/v1/era5",
+                        params={
+                            "latitude":   ",".join(f"{x:.4f}" for x in c_lats),
+                            "longitude":  ",".join(f"{x:.4f}" for x in c_lons),
+                            "hourly":     ",".join(variables),
+                            "start_date": start_date,
+                            "end_date":   end_date,
+                            "timezone":   "UTC",
+                        },
+                        timeout=30,
                     )
-                    time.sleep(wait)
-                else:
-                    print(
-                        f"  [ERA5] chunk {chunk_idx+1}/{n_chunks} "
-                        f"fallito dopo {max_retries} tentativi — {exc}",
-                        flush=True,
-                    )
-                    raise last_exc
-        if chunk_start + chunk_size < len(lat_list):
-            time.sleep(1)
-    return results
+                    r.raise_for_status()
+                    chunk_data = r.json()
+                    if isinstance(chunk_data, dict):
+                        chunk_data = [chunk_data]
+                    for loc in chunk_data:
+                        times = loc["hourly"]["time"]
+                        for var in variables:
+                            vals = loc["hourly"][var]
+                            lookup = dict(zip(times, vals))
+                            if target_str in lookup and lookup[target_str] is not None:
+                                results[var].append(lookup[target_str])
+                            else:
+                                results[var].append(
+                                    next((v for v in reversed(vals) if v is not None), 0.0)
+                                )
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < max_retries - 1:
+                        wait = 10 * (attempt + 1)
+                        print(
+                            f"  [ERA5] chunk {chunk_idx+1}/{n_chunks} "
+                            f"attempt {attempt+1}/{max_retries} fallito, "
+                            f"retry in {wait}s — {type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                        time.sleep(wait)
+                    else:
+                        print(
+                            f"  [ERA5] chunk {chunk_idx+1}/{n_chunks} "
+                            f"fallito dopo {max_retries} tentativi — {exc}",
+                            flush=True,
+                        )
+                        raise last_exc
+            if chunk_start + chunk_size < len(lat_list):
+                time.sleep(1)
+        return results
+    except Exception as exc:
+        print(
+            f"  [ERA5] fetch fallito, fallback a griglia vuota — "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        return {}
 
 
 def bilinear_to_fine(
