@@ -142,7 +142,7 @@
   }
 
   async function init() {
-    const map = L.map('map', { center: [41.825, 12.525], zoom: 10 });
+    const map = L.map('map', { center: [41.87, 12.44],  zoom: 10 });
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -220,6 +220,11 @@
       switchLayer('temperature');
       const stations = latest.stations || [];
       renderStations(map, stations);
+
+      if (stations.length > 0) {
+        const bounds = stations.map(st => [st.lat, st.lon]);
+        map.fitBounds(bounds, { padding: [50, 50] });
+      }
 
       if (windGrid) {
         windLayer = renderWind(map, windGrid);
