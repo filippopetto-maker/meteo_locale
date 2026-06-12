@@ -225,10 +225,10 @@ NETATMO_PUBDATA_URL = "https://api.netatmo.com/api/getpublicdata"
 
 # Bounding box Roma metropolitana (copre tutta l'area progetto + margine)
 ROMA_BBOX = {
-    "lat_ne": 42.00,
-    "lon_ne": 12.75,
-    "lat_sw": 41.65,
-    "lon_sw": 12.20,
+    "lat_ne": 42.25,
+    "lon_ne": 13.00,
+    "lat_sw": 41.50,
+    "lon_sw": 11.95,
 }
 
 NETATMO_RADIUS_KM  = 5.0   # raggio aggregazione per stazione progetto
@@ -503,6 +503,55 @@ def fetch_netatmo(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Sorgente Phase 2d — METAR LIRE (Pratica di Mare, stazione 30)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_lire_metar() -> dict | None:
+    """
+    Scarica l'ultimo METAR da LIRE (Pratica di Mare) via aviationweather.gov.
+    Ritorna un dict compatibile con insert_observation(), oppure None se fallisce.
+    """
+    from datetime import datetime, timezone
+
+    url = "https://aviationweather.gov/api/data/metar"
+    params = {"ids": "LIRE", "format": "json", "hours": 2}
+
+    try:
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        logger.warning(f"[LIRE] fetch fallito: {exc}")
+        return None
+
+    if not data:
+        logger.warning("[LIRE] risposta vuota")
+        return None
+
+    obs = data[0]  # più recente prima
+
+    # Wind direction: "VRB" → None
+    wdir_raw = obs.get("wdir")
+    wind_dir = None if wdir_raw == "VRB" else (
+        float(wdir_raw) if wdir_raw is not None else None
+    )
+
+    # Wind speed: knots → km/h
+    wspd_raw = obs.get("wspd")
+    wind_speed = round(float(wspd_raw) * 1.852, 1) if wspd_raw is not None else None
+
+    return {
+        "station_id":     33,           # id Pratica di Mare
+        "recorded_at":    datetime.fromtimestamp(obs["obsTime"], tz=timezone.utc),
+        "temperature":    float(obs["temp"])   if obs.get("temp")  is not None else None,
+        "humidity":       None,                # METAR non fornisce RH diretta
+        "wind_speed":     wind_speed,
+        "wind_direction": wind_dir,
+        "raw_source":     {"source": "metar_lire", "raw": obs.get("rawOb")},
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Pipeline: collect → QC → insert
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -643,6 +692,22 @@ def collect_observations(
 
     # Phase 2b — Netatmo (self-contained: gestisce QC + insert internamente)
     fetch_netatmo(stations, dry_run=dry_run)
+
+    # Phase 2d — METAR LIRE (Pratica di Mare, stazione 30)
+    lire_obs = fetch_lire_metar()
+    if lire_obs:
+        history = db.get_observations(30, hours=3)
+        qc_flag, issues = run_qc(lire_obs, history, neighbors=[])
+        if qc_flag < 2:
+            if not dry_run:
+                db.insert_observation(**{k: v for k, v in lire_obs.items()
+                                         if k != "raw_source"},
+                                      qc_flag=qc_flag,
+                                      raw_source=lire_obs["raw_source"])
+            else:
+                logger.info(f"[LIRE] [DRY-RUN] T={lire_obs.get('temperature')}°C  qc_flag={qc_flag}")
+        else:
+            logger.warning(f"[LIRE] SCARTATO dal QC (flag={qc_flag})")
 
     return counts
 

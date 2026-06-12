@@ -72,6 +72,12 @@ STATION_TYPES = {
     27: "urban_canyon", # Trastevere
     28: "quota",        # Tivoli
     29: "quota",        # Castelli Romani
+    33: "standard",     # Pratica di Mare
+    34: "costiera",     # Cerveteri Ladispoli
+    35: "standard",     # Saxa Rubra
+    36: "standard",     # Selva Nera
+    37: "standard",     # Cisterna Latina
+    38: "quota",        # Bracciano
 }
 
 def _fascia_oraria(ora: int) -> str:

@@ -138,11 +138,17 @@ _ARSIAL_BIAS:   dict | None             = None
 # Mapping stazione progetto → stazione proxy ARSIAL per correzione bias mensile.
 # Stazione id=3 (Roma Sud) esclusa: era nel training set, nessuna correzione.
 ARSIAL_PROXY: dict[int, str] = {
-    25: "FIUMICINO T. Lepre",      # Ostia Lido  → bias ~-0.18°C
-    26: "ROMA P. Nona",            # EUR         → bias ~-0.08°C
-    27: "ROMA Lanciani",           # Trastevere  → bias da JSON
-    28: "S. GREGORIO DA SASSOLA",  # Tivoli      → bias ~+2.26°C
-    29: "MONTECOMPATRI C. Mattia", # Castelli    → bias ~+1.50°C
+    25: "FIUMICINO T. Lepre",        # Ostia Lido
+    26: "ROMA P. Nona",              # EUR
+    27: "ROMA Lanciani",             # Trastevere
+    28: "S. GREGORIO DA SASSOLA",    # Tivoli
+    29: "MONTECOMPATRI C. Mattia",   # Castelli Romani
+    33: "ROMA Capocotta",            # Pratica di Mare
+    34: "LADISPOLI",                 # Cerveteri Ladispoli
+    35: "MONTEROTONDO G. Marozza",   # Saxa Rubra
+    36: "FORMELLO",                  # Selva Nera
+    37: "VELLETRI P. Lungo",         # Cisterna Latina
+    38: "FORMELLO",                  # Bracciano (condiviso con Selva Nera)
 }
 
 
