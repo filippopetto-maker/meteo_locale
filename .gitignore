@@ -17,3 +17,5 @@ Miniforge3-MacOSX-arm64.sh
 .claude/
 logs/
 .env
+\.env\ 
+*.bak

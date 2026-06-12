@@ -33,12 +33,13 @@ from features import compute_static_orography
 #   id=3  Roma Sud (Casal Palocco) → unica sul settore sud, mantenuta
 #
 NEW_STATIONS = [
-    # name                lat        lon       microclima       source
-    ("Ostia Lido",      41.7316,  12.2848,  "costiera",      "netatmo"),
-    ("EUR",             41.8302,  12.4677,  "urban_canyon",  "netatmo"),
-    ("Trastevere",      41.8895,  12.4697,  "urban_canyon",  "netatmo"),
-    ("Tivoli",          41.9629,  12.7983,  "quota",         "netatmo"),
-    ("Castelli Romani", 41.8083,  12.6813,  "quota",         "netatmo"),
+    # name                      lat        lon       microclima      source
+    ("Pratica di Mare",       41.656,   12.449,   "standard",    "metar"),
+    ("Cerveteri Ladispoli",   41.9500,  12.0750,  "costiera",    "netatmo"),
+    ("Saxa Rubra",            42.0050,  12.4900,  "standard",    "netatmo"),
+    ("Selva Nera",            41.9100,  12.3800,  "standard",    "netatmo"),
+    ("Cisterna Latina",       41.5900,  12.8270,  "standard",    "netatmo"),
+    ("Bracciano",             42.1040,  12.1710,  "quota",       "netatmo"),
 ]
 
 # ── Calcolo orografia ─────────────────────────────────────────────────────────
@@ -69,16 +70,6 @@ print("  SQL DA ESEGUIRE SU SUPABASE (SQL Editor)")
 print("="*80)
 
 sql_parts = []
-
-# 1. Disattiva le stazioni obsolete
-sql_parts.append("""-- ── STEP 1: Disattiva stazioni obsolete ────────────────────────────────────
--- Roma Nord (id=1) e Roma Centro (id=2): duplicati METAR LIRA
--- Ostia (id=4): sostituita da Ostia Lido più precisa
--- Le osservazioni storiche vengono conservate (solo is_active = FALSE)
-UPDATE stations
-SET    is_active = FALSE
-WHERE  id IN (1, 2, 4);
-""")
 
 # 2. Inserisce le nuove stazioni
 values_lines = []

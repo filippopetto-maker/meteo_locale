@@ -603,6 +603,38 @@ Supporta `--dry-run`. Stub pronto per Phase 2c: `fetch_protezione_civile_lazio()
 
 Dashboard read-only. Mostra previsioni correnti, storico temperature, metriche modello, grafico Previsto vs Osservato con MAE per stazione.
 
+### `grid.py` — Griglia spaziale IDW + ERA5 ✅
+
+Due funzioni principali:
+
+- `compute_idw_grid(points, values, ...)` — IDW vettorizzato con numpy broadcasting. Nessun loop Python, istantaneo su 100×100 con 6 stazioni.
+- `fetch_era5_batch(lats, lons, target_hour_utc, variables)` — singolo HTTP request batch a Open-Meteo per N punti e M variabili (`temperature_2m`, `relativehumidity_2m`). Ritorna `dict[str, list[float]]`.
+- `bilinear_to_fine(coarse, coarse_lats, coarse_lons, fine_lats, fine_lons)` — interpola griglia sparsa ERA5 7×9 a griglia fine 100×100 con `scipy.interpolate.RegularGridInterpolator`.
+- `wind_to_uv(speed_ms, direction_deg)` — decomposizione in componenti U/V con convenzione meteo (direction = "da dove arriva").
+
+**Principio architetturale:** la mappa non mostra IDW puro su valori assoluti ma `T_ERA5(x,y) + IDW_correzioni(x,y)`. ERA5 fornisce il campo fisicamente realistico (lapse rate, SST marina, gradiente costa/interno); le 6 stazioni aggiungono la correzione microclima appresa dal modello. Stesso approccio per umidità.
+
+### `scripts/export_static.py` — Export JSON per GitHub Pages ✅
+
+Eseguito ogni 30 min da `export.yml`. Pipeline:
+
+1. Legge stazioni attive, forecast recenti e osservazioni da Supabase
+2. Fetch ERA5 batch: 63 punti griglia coarse + 6 stazioni = 69 punti, 2 variabili (`temperature_2m`, `relativehumidity_2m`) in un unico request
+3. Calcola correzioni stazione: `T_modello_i − T_ERA5_i`
+4. ERA5 coarse → bilinear → griglia fine 100×100
+5. IDW correzioni 100×100
+6. Griglia finale = ERA5_fine + IDW_correzioni (con `np.clip([0,100])` per umidità)
+7. Scrive `docs/data/latest.json` (stazioni + temp_grid + humidity_grid) e `docs/data/wind_grid.json` (formato nativo leaflet-velocity, componenti U/V)
+
+**Eseguire manualmente:**
+```bash
+cd ~/Desktop/meteo_locale
+conda activate meteo
+python3 scripts/export_static.py
+```
+
+**Rieseguire quando:** si aggiungono nuove stazioni, si modifica il bounding box griglia, si cambia la lista variabili ERA5.
+
 ---
 
 ## 🗺️ Roadmap
@@ -637,15 +669,17 @@ Dashboard read-only. Mostra previsioni correnti, storico temperature, metriche m
 
 1. [ ] Protezione Civile Lazio / OpenAmbiente: 238 centraline, 15 min → `fetch_protezione_civile_lazio()`
 
-### ⏳ Fase 3 — Output avanzato e nuovi target
+### ✅ Fase 3 — Output avanzato (COMPLETATA — giugno 2026)
 
-1. [ ] API REST con FastAPI
-2. [ ] Mappa Cartopy con gradiente microclima
-3. [ ] Aggiunta CAPE alle variabili ERA5 → target thunderstorm
-4. [ ] Target pioggia puntuale (mm)
-5. [ ] LCZ (Local Climate Zones) e impermeabilità Copernicus per isola di calore
-6. [ ] Retraining su storico Netatmo accumulato (~6 mesi) per le 5 nuove zone
-7. [ ] Tuning iperparametri
+1. [x] `grid.py` — IDW vettorizzato numpy, `fetch_era5_batch` (batch multi-variabile Open-Meteo), `bilinear_to_fine` (scipy RegularGridInterpolator)
+2. [x] `scripts/export_static.py` — ERA5 background 7×9 (69 punti, 2 variabili in un unico request) + IDW correzioni microclima → `docs/data/latest.json` + `docs/data/wind_grid.json`
+3. [x] `.github/workflows/export.yml` — commit automatico JSON su GitHub Pages, triggerato da cron-job.org a :05/:35
+4. [x] `docs/index.html` + `docs/js/app.js` — mappa Leaflet.js full-screen, heatmap IDW temperatura (ERA5 + correzioni), heatmap umidità (ERA5 + correzioni), toggle layer, particelle vento leaflet-velocity, popup stazioni, click pointer con `lookupGrid` bilineare (valori coerenti con heatmap), legenda, pannello info timestamp
+5. [x] GitHub Pages live: `https://filippopetto-maker.github.io/meteo_locale/`
+6. [ ] API REST FastAPI — rimandato, sostituito da static JSON su GH Pages
+7. [ ] CAPE da ERA5 → target thunderstorm — post-retraining dicembre 2026
+8. [ ] Target pioggia puntuale (mm) — post-retraining dicembre 2026
+9. [ ] LCZ Copernicus per isola di calore — post-retraining dicembre 2026
 
 ---
 
@@ -670,6 +704,13 @@ Dashboard read-only. Mostra previsioni correnti, storico temperature, metriche m
 | `duplicate key value violates unique constraint "observations_station_id_recorded_at_key"` | METAR riusa il timestamp fisso dell'osservazione aeroportuale — se lo script gira due volte nella stessa mezz'ora, tenta di inserire lo stesso `(station_id, recorded_at)` | `upsert` con `ignore_duplicates=True` su `observations` |
 | `column "microclima" of relation "stations" does not exist` | Le colonne orografiche (`microclima`, `dist_sea_km`, `dist_center_km`, `bearing_sea`) non erano nel DDL originale | `ALTER TABLE stations ADD COLUMN IF NOT EXISTS ...` per ciascuna |
 | `duplicate key value violates unique constraint "stations_latlon_unique"` (su INSERT nuove stazioni) | Le coordinate della nuova stazione coincidevano con una stazione esistente già inattiva | `UPDATE` della stazione esistente invece di `INSERT`; per le coordinate realmente nuove, `INSERT` funziona |
+| `Uncaught TypeError: Cannot read properties of null (reading 'data')` in leaflet-velocity | Header wind_grid.json privo di `parameterCategory: 2` — la libreria identifica U/V via `parameterCategory + "," + parameterNumber` (`"2,2"` e `"2,3"`); senza `parameterCategory` il match fallisce e i component grid restano `null` | Aggiunto `"parameterCategory": 2` a entrambi gli header U e V in `export_static.py` |
+| `.env ` (con spazio in coda) committato → GitHub push protection blocca il push | Claude Code ha creato un file `.env ` (trailing space ASCII 32) non coperto dalla regola `.env` in `.gitignore` | `git update-index --force-remove ".env "` + `git commit --amend` + aggiunto `.env\ ` (backslash-space) in `.gitignore` |
+| `export.yml` fallisce con exit code 128 | GitHub Actions di default ha permessi read-only; il workflow fa `git push` che richiede write | `Settings → Actions → General → Workflow permissions → Read and write permissions` |
+| Conflict su `docs/data/latest.json` durante `git pull --rebase` | Il workflow `export.yml` ha committato i JSON mentre era in corso un push locale | `git checkout --theirs docs/data/latest.json` + `git add` + `git rebase --continue` |
+| Mappa umidità fisicamente sbagliata: mare più secco dell'entroterra | IDW puro non ha conoscenza fisica del territorio — interpola geometricamente tra stazioni senza sapere che il mare è sorgente di umidità | Sostituito IDW puro con ERA5 background (`relativehumidity_2m`) + IDW correzioni microclima, identico all'approccio temperatura |
+| Click popup mostra valori diversi dal colore heatmap | Popup usava IDW da 6 stazioni (valori assoluti), heatmap usava ERA5+correzioni — due calcoli diversi sullo stesso punto | Sostituito `idwPoint` con `lookupGrid` (lookup bilineare diretto sul grid JSON) — garantisce coerenza esatta tra colore e valore mostrato |
+| Particelle vento non visibili, nessun errore apparente | `parameterUnit` assente nell'header leaflet-velocity (necessario per display) | Aggiunto `"parameterUnit": "m.s-1"` agli header U e V |
 
 ---
 
@@ -703,11 +744,21 @@ python3 db.py   # verifica connessione
 
 **Riferimento GitHub:** `https://github.com/filippopetto-maker/meteo_locale`
 
-**Stato corrente:** Phase 1, 2a e 2b in produzione. Due GitHub Actions attivi:
-- `inference.yml` — scrive previsioni ogni 30 min per 6 stazioni
-- `ingestion.yml` — raccoglie osservazioni METAR (Roma Sud) + Netatmo (6 stazioni) ogni 30 min
+**Stato corrente (giugno 2026):** Phase 1, 2a, 2b, 3 in produzione. Phase 2c parziale (bias correction attiva). Tre GitHub Actions attivi, tutti triggerati da cron-job.org:
+- `inference.yml` — previsioni ogni 30 min (LightGBM + RF + ARSIAL bias), trigger :00/:30
+- `ingestion.yml` — osservazioni METAR + Netatmo ogni 30 min, trigger :00/:30
+- `export.yml` — JSON statici per GitHub Pages ogni 30 min, trigger :05/:35
 
-**Prossimo task:** Phase 2c — integrare Protezione Civile Lazio (238 centraline ogni 15 min). Stub `fetch_protezione_civile_lazio()` già presente in `mainMETEO.py`.
+**Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
+
+**Prossima scadenza fissa: Dicembre 2026** — retraining completo con Netatmo accumulato.
+
+**Miglioramenti futuri mappa:**
+- Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
+- Upgrade a MapLibre GL JS per qualità visiva superiore (vettoriale, tile più dettagliate)
+- FastAPI su Render per query dinamiche (storico per stazione, confronto date)
+- Layer vento con ERA5 background (attualmente IDW puro — fisicamente meno accurato della temperatura)
+- Upgrade `actions/checkout@v4` → `@v5` e `actions/setup-python@v5` → versione corrente (warning Node.js 20 deprecation)
 
 ---
 
