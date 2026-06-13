@@ -28,16 +28,24 @@ from grid import compute_idw_grid, wind_to_uv, fetch_era5_batch, bilinear_to_fin
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# Bounding box Roma (include Ladispoli a ovest, Bracciano a nord)
-LAT_MIN, LAT_MAX = 41.60, 42.20
-LON_MIN, LON_MAX = 11.90, 12.95
+# Bounding box Roma — definitivo (include Cisterna, Bracciano, Ladispoli)
+LAT_MIN, LAT_MAX = 41.45, 42.22
+LON_MIN, LON_MAX = 11.90, 12.97
 
-# Dimensioni griglia temperatura
+# Dimensioni griglia temperatura fine (output)
 NX, NY = 100, 100
 
-# Griglia di sfondo ERA5 (coarse, poi interpolata a NX×NY)
-N_BG_LAT = 11   # punti latitudine background
-N_BG_LON = 16   # punti longitudine background  (11×16 = 176 punti, 1 request)
+# Griglia di sfondo ERA5 (coarse, poi interpolata a NX×NY; spacing ~0.07°)
+N_BG_LAT = 12   # 0.77° / 0.07 ≈ 11 intervalli → 12 righe
+N_BG_LON = 16   # 1.07° / 0.07 ≈ 15 intervalli → 16 colonne  (12×16 = 192 punti)
+
+# Bbox griglia vento — esclude mare aperto a ovest (evita particelle caotiche)
+WIND_LAT_MIN = 41.45
+WIND_LAT_MAX = 42.22
+WIND_LON_MIN = 12.02
+WIND_LON_MAX = 12.97
+WIND_NY = 12
+WIND_NX = 14    # 0.95° / 0.07 ≈ 13 intervalli → 14 colonne
 
 DOCS_DATA = _PROJECT_ROOT / "docs" / "data"
 MAX_AGE_H = 2  # dati oltre questa soglia sono esclusi dalla griglia IDW
@@ -132,9 +140,9 @@ def build_latest_json(
 
 
 def build_wind_grid_json(stations: list[dict], forecasts: dict) -> list:
-    NX, NY = 50, 50
-    dx = round((LON_MAX - LON_MIN) / (NX - 1), 5)
-    dy = round((LAT_MAX - LAT_MIN) / (NY - 1), 5)
+    NX, NY = WIND_NX, WIND_NY
+    dx = round((WIND_LON_MAX - WIND_LON_MIN) / (NX - 1), 5)
+    dy = round((WIND_LAT_MAX - WIND_LAT_MIN) / (NY - 1), 5)
 
     wind_points, u_values, v_values = [], [], []
     for s in stations:
@@ -160,22 +168,22 @@ def build_wind_grid_json(stations: list[dict], forecasts: dict) -> list:
     else:
         u_grid = compute_idw_grid(
             wind_points, u_values,
-            LAT_MIN, LAT_MAX, LON_MIN, LON_MAX,
+            WIND_LAT_MIN, WIND_LAT_MAX, WIND_LON_MIN, WIND_LON_MAX,
             nx=NX, ny=NY,
         )
         v_grid = compute_idw_grid(
             wind_points, v_values,
-            LAT_MIN, LAT_MAX, LON_MIN, LON_MAX,
+            WIND_LAT_MIN, WIND_LAT_MAX, WIND_LON_MIN, WIND_LON_MAX,
             nx=NX, ny=NY,
         )
         u_flat = [round(v, 4) for v in u_grid.flatten().tolist()]
         v_flat = [round(v, 4) for v in v_grid.flatten().tolist()]
 
     base_header = {
-        "la1": LAT_MAX,
-        "la2": LAT_MIN,
-        "lo1": LON_MIN,
-        "lo2": LON_MAX,
+        "la1": WIND_LAT_MAX,
+        "la2": WIND_LAT_MIN,
+        "lo1": WIND_LON_MIN,
+        "lo2": WIND_LON_MAX,
         "nx": NX,
         "ny": NY,
         "dx": dx,
@@ -229,9 +237,9 @@ def main() -> None:
     temp_grid_data: dict | None = None
     humidity_grid_data: dict | None = None
 
-    # Stazioni con forecast di temperatura valido
+    # Stazioni con forecast di temperatura valido (include observation per IDW)
     stations_with_fc = [
-        {**s, "forecast": forecasts[s["id"]]}
+        {**s, "forecast": forecasts[s["id"]], "observation": observations.get(s["id"])}
         for s in stations
         if s["id"] in forecasts and forecasts[s["id"]].get("temperature") is not None
     ]
@@ -261,7 +269,17 @@ def main() -> None:
         if not era5_data:
             log.warning("ERA5 non disponibile — le griglie useranno IDW puro sui dati stazione")
 
-        t_model   = np.array([st["forecast"]["temperature"] for st in stations_with_fc])
+        # ── 4. Temperatura per IDW: observation se disponibile, forecast altrimenti
+        t_model_list: list[tuple[float, str]] = []
+        for st in stations_with_fc:
+            obs = st.get("observation")
+            if obs and obs.get("temperature") is not None:
+                t_model_list.append((float(obs["temperature"]), "obs"))
+            else:
+                t_model_list.append((float(st["forecast"]["temperature"]), "fc"))
+        t_model   = np.array([v for v, _ in t_model_list])
+        t_sources = [src for _, src in t_model_list]
+
         st_points = np.array(list(zip(st_lats, st_lons)))
         fine_lats = np.linspace(LAT_MAX, LAT_MIN, NY)
         fine_lons = np.linspace(LON_MIN, LON_MAX, NX)
@@ -273,15 +291,15 @@ def main() -> None:
             era5_bg_flat   = era5_temp_flat[:n_bg]
             era5_at_st     = era5_temp_flat[n_bg:]
 
-            # ── 4a. Correzioni microclima (modello − ERA5) ──────────────────
+            # ── 4a. Correzioni microclima (valore_usato − ERA5) ─────────────
             corrections = t_model - era5_at_st
-            log.info(
-                "  Correzioni microclima: " +
-                ", ".join(
-                    f"{st['name'].split()[0]}={c:+.2f}°C"
-                    for st, c in zip(stations_with_fc, corrections)
+            for st, era5_t, t_val, corr, src in zip(
+                stations_with_fc, era5_at_st, t_model, corrections, t_sources
+            ):
+                log.info(
+                    f"  {st['name']:<22} | ERA5={era5_t:.1f}°C"
+                    f" | T={t_val:.1f}°C | corr={corr:+.2f}°C | {src}"
                 )
-            )
 
             # ── 5. ERA5 coarse → griglia fine NX×NY ────────────────────────
             era5_coarse = era5_bg_flat.reshape(N_BG_LAT, N_BG_LON)

@@ -134,7 +134,7 @@
       },
       data:          windGrid,
       colorScale:    ['#ffffff'],
-      velocityScale: 0.005,
+      velocityScale: 0.004,
       particleAge:   64,
       lineWidth:     2,
       opacity:       0.9,
