@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-13T13:05:59Z",
+  "generated_at": "2026-06-13T13:35:57Z",
   "stations": [
     {
       "id": 25,
@@ -105,8 +105,8 @@
         "valid_for": "2026-06-13T14:00:00+00:00"
       },
       "observation": {
-        "temperature": 27.9,
-        "recorded_at": "2026-06-13T13:01:56.778963+00:00"
+        "temperature": 27,
+        "recorded_at": "2026-06-13T13:20:00+00:00"
       }
     },
     {
