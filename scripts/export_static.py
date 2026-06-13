@@ -28,16 +28,16 @@ from grid import compute_idw_grid, wind_to_uv, fetch_era5_batch, bilinear_to_fin
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# Bounding box Roma (include Tivoli a est, colli Albani a sud)
-LAT_MIN, LAT_MAX = 41.55, 42.10
-LON_MIN, LON_MAX = 12.10, 12.95
+# Bounding box Roma (include Ladispoli a ovest, Bracciano a nord)
+LAT_MIN, LAT_MAX = 41.60, 42.20
+LON_MIN, LON_MAX = 11.90, 12.95
 
 # Dimensioni griglia temperatura
 NX, NY = 100, 100
 
 # Griglia di sfondo ERA5 (coarse, poi interpolata a NX×NY)
-N_BG_LAT = 7   # punti latitudine background
-N_BG_LON = 9   # punti longitudine background  (7×9 = 63 punti, 1 request)
+N_BG_LAT = 11   # punti latitudine background
+N_BG_LON = 16   # punti longitudine background  (11×16 = 176 punti, 1 request)
 
 DOCS_DATA = _PROJECT_ROOT / "docs" / "data"
 MAX_AGE_H = 2  # dati oltre questa soglia sono esclusi dalla griglia IDW
