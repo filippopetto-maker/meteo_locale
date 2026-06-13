@@ -42,10 +42,10 @@ N_BG_LON = 16   # 1.07° / 0.07 ≈ 15 intervalli → 16 colonne  (12×16 = 192 
 # Bbox griglia vento — esclude mare aperto a ovest (evita particelle caotiche)
 WIND_LAT_MIN = 41.45
 WIND_LAT_MAX = 42.22
-WIND_LON_MIN = 12.02
+WIND_LON_MIN = 11.90
 WIND_LON_MAX = 12.97
 WIND_NY = 12
-WIND_NX = 14    # 0.95° / 0.07 ≈ 13 intervalli → 14 colonne
+WIND_NX = 16    # 1.07° / 0.07 ≈ 15 intervalli → 16 colonne
 
 DOCS_DATA = _PROJECT_ROOT / "docs" / "data"
 MAX_AGE_H = 2  # dati oltre questa soglia sono esclusi dalla griglia IDW
