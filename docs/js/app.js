@@ -142,7 +142,7 @@
   }
 
   async function init() {
-    const map = L.map('map', { center: [41.87, 12.44],  zoom: 10 });
+    const map = L.map('map', { center: [41.90, 12.35], zoom: 10 });
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
