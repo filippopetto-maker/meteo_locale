@@ -78,6 +78,18 @@ STATION_TYPES = {
     36: "standard",     # Selva Nera
     37: "standard",     # Cisterna Latina
     38: "quota",        # Bracciano
+    # ── Lazio espanso (stazioni 39-49) ───────────────────────────────────
+    39: "standard",     # Viterbo (colline_interne)
+    40: "costiera",     # Santa Marinella
+    41: "standard",     # Latina (pianura)
+    42: "costiera",     # Ardea
+    43: "costiera",     # Sabaudia
+    44: "standard",     # Ceccano (fondovalle)
+    45: "quota",        # Monti Sabini
+    46: "standard",     # Fiano Romano / Tevere Nord (fondovalle)
+    47: "standard",     # Anagni / Ciociaria alta (colline_interne)
+    48: "standard",     # Cassino / Liri Sud (fondovalle)
+    49: "costiera",     # Gaeta / Formia
 }
 
 def _fascia_oraria(ora: int) -> str:

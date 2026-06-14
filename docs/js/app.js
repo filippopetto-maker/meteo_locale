@@ -7,6 +7,18 @@
     return labels[Math.round(deg / 22.5) % 16];
   }
 
+  const WIND_NAMES = [
+    'Tramontana','Bora','Grecale','Schiavo',
+    'Levante','Solano','Scirocco','Africo',
+    'Ostro','Cauro','Libeccio','Etesia',
+    'Ponente','Traversone','Maestrale','Zefiro',
+  ];
+
+  function windName(deg) {
+    if (deg == null) return '';
+    return WIND_NAMES[Math.round(deg / 22.5) % 16];
+  }
+
   function formatTime(isoStr) {
     return new Date(isoStr).toLocaleTimeString('it-IT', {
       timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit',
@@ -141,8 +153,31 @@
     }).addTo(map);
   }
 
+  const _localityCache = {};
+
+  async function getLocalityName(lat, lng) {
+    const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+    if (_localityCache[key]) return _localityCache[key];
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse` +
+        `?lat=${lat}&lon=${lng}&format=json&zoom=10&accept-language=it`,
+        { headers: { 'User-Agent': 'meteo_locale/1.0' } }
+      );
+      const data = await res.json();
+      const a = data.address || {};
+      const name = a.town || a.city || a.village ||
+                   a.suburb || a.county ||
+                   `${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`;
+      _localityCache[key] = name;
+      return name;
+    } catch {
+      return `${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`;
+    }
+  }
+
   async function init() {
-    const map = L.map('map', { center: [41.90, 12.35], zoom: 10 });
+    const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -231,22 +266,23 @@
       }
 
       // IDW al punto cliccato
-      map.on('click', function(e) {
+      map.on('click', async function (e) {
         const lat = e.latlng.lat;
         const lng = e.latlng.lng;
 
-        const temp = latest.temp_grid     ? lookupGrid(lat, lng, latest.temp_grid)     : null;
+        const temp = latest.temp_grid
+          ? lookupGrid(lat, lng, latest.temp_grid) : null;
 
         const windU = idwPoint(lat, lng, stations, st => {
-          const s = (st.forecast?.wind_speed ?? null);
-          const d = (st.forecast?.wind_direction ?? null);
+          const s = st.forecast?.wind_speed    ?? null;
+          const d = st.forecast?.wind_direction ?? null;
           if (s === null || d === null) return null;
           const rad = d * Math.PI / 180;
           return -(s / 3.6) * Math.sin(rad);
         });
         const windV = idwPoint(lat, lng, stations, st => {
-          const s = (st.forecast?.wind_speed ?? null);
-          const d = (st.forecast?.wind_direction ?? null);
+          const s = st.forecast?.wind_speed    ?? null;
+          const d = st.forecast?.wind_direction ?? null;
           if (s === null || d === null) return null;
           const rad = d * Math.PI / 180;
           return -(s / 3.6) * Math.cos(rad);
@@ -256,17 +292,32 @@
         let dir = Math.atan2(-windU, -windV) * 180 / Math.PI;
         if (dir < 0) dir += 360;
 
-        const hum  = latest.humidity_grid ? lookupGrid(lat, lng, latest.humidity_grid) : null;
+        const hum = latest.humidity_grid
+          ? lookupGrid(lat, lng, latest.humidity_grid) : null;
 
-        L.popup({ className: 'meteo-popup' })
-          .setLatLng(e.latlng)
-          .setContent(
-            `<b>${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E</b><br>` +
+        const cardinal = degreesToCardinal(dir);
+        const wName    = windName(dir);
+
+        function buildContent(localita) {
+          return (
+            `<b>${localita}</b><br>` +
             `🌡️ <b>${temp !== null ? temp.toFixed(1) + '°C' : 'n/d'}</b><br>` +
-            `💨 <b>${speed.toFixed(1)} km/h</b> — ${degreesToCardinal(dir)}<br>` +
+            `💨 <b>${speed.toFixed(1)} km/h</b> — ${cardinal}<br>` +
+            `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` +
             `💧 Umidità: <b>${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>`
-          )
+          );
+        }
+
+        // Apri subito il popup con placeholder, poi aggiorna con la località
+        let popupClosed = false;
+        const popup = L.popup({ className: 'meteo-popup' })
+          .setLatLng(e.latlng)
+          .setContent(buildContent('📍 ...'))
           .openOn(map);
+        popup.on('remove', () => { popupClosed = true; });
+
+        const localita = await getLocalityName(lat, lng);
+        if (!popupClosed) popup.setContent(buildContent(localita));
       });
 
       document.getElementById('wind-check').addEventListener('change', e => {

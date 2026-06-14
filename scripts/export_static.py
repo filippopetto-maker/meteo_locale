@@ -28,24 +28,25 @@ from grid import compute_idw_grid, wind_to_uv, fetch_era5_batch, bilinear_to_fin
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# Bounding box Roma — definitivo (include Cisterna, Bracciano, Ladispoli)
-LAT_MIN, LAT_MAX = 41.45, 42.22
-LON_MIN, LON_MAX = 11.90, 12.97
+# Bounding box Lazio completo
+LAT_MIN, LAT_MAX = 41.18, 42.85
+LON_MIN, LON_MAX = 11.40, 14.05
 
 # Dimensioni griglia temperatura fine (output)
-NX, NY = 100, 100
+# Risoluzione invariata (~0.0077° lat, ~0.0107° lon) su area più grande
+NX, NY = 250, 220
 
-# Griglia di sfondo ERA5 (coarse, poi interpolata a NX×NY; spacing ~0.07°)
-N_BG_LAT = 12   # 0.77° / 0.07 ≈ 11 intervalli → 12 righe
-N_BG_LON = 16   # 1.07° / 0.07 ≈ 15 intervalli → 16 colonne  (12×16 = 192 punti)
+# Griglia di sfondo ERA5 (coarse, poi interpolata a NX×NY; spacing ~0.1°)
+N_BG_LAT = 17   # (42.85 - 41.18) / 0.1 ≈ 17 righe
+N_BG_LON = 27   # (14.05 - 11.40) / 0.1 ≈ 27 colonne  (17×27 = 459 punti)
 
-# Bbox griglia vento — esclude mare aperto a ovest (evita particelle caotiche)
-WIND_LAT_MIN = 41.45
-WIND_LAT_MAX = 42.22
-WIND_LON_MIN = 11.90
-WIND_LON_MAX = 12.97
-WIND_NY = 12
-WIND_NX = 16    # 1.07° / 0.07 ≈ 15 intervalli → 16 colonne
+# Bbox griglia vento — esclude mare aperto tirrenico a ovest (lon_sw=11.55)
+WIND_LAT_MIN = 41.18
+WIND_LAT_MAX = 42.85
+WIND_LON_MIN = 11.55   # costa più occidentale del Lazio (S.Marinella/Civitavecchia)
+WIND_LON_MAX = 14.05
+WIND_NY = 24   # ~0.07° spacing su 1.67° lat
+WIND_NX = 36   # ~0.07° spacing su 2.50° lon
 
 DOCS_DATA = _PROJECT_ROOT / "docs" / "data"
 MAX_AGE_H = 2  # dati oltre questa soglia sono esclusi dalla griglia IDW

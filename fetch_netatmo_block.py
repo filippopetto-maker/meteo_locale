@@ -22,6 +22,7 @@ import logging
 import math
 import os
 import statistics
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -37,13 +38,19 @@ logger = logging.getLogger(__name__)
 NETATMO_TOKEN_URL   = "https://api.netatmo.com/oauth2/token"
 NETATMO_PUBDATA_URL = "https://api.netatmo.com/api/getpublicdata"
 
-# Bounding box Roma metropolitana (copre tutta l'area progetto + margine)
-ROMA_BBOX = {
-    "lat_ne": 42.00,  # nord
-    "lon_ne": 12.75,  # est
-    "lat_sw": 41.65,  # sud
-    "lon_sw": 12.20,  # ovest
-}
+# Bounding boxes Lazio completo (5 tile sovrapposti per coprire tutto il territorio)
+LAZIO_BBOXES = [
+    # Roma metropolitana (densa, bbox originale)
+    {"lat_sw": 41.65, "lat_ne": 42.05, "lon_sw": 12.20, "lon_ne": 12.80},
+    # Lazio nord (Viterbo, Santa Marinella, Fiano Romano)
+    {"lat_sw": 41.90, "lat_ne": 42.55, "lon_sw": 11.55, "lon_ne": 12.55},
+    # Lazio sud-ovest (Ardea, Latina, Sabaudia, Gaeta)
+    {"lat_sw": 41.00, "lat_ne": 41.65, "lon_sw": 12.40, "lon_ne": 13.30},
+    # Lazio est (Anagni, Ceccano, Frosinone, Cassino)
+    {"lat_sw": 41.25, "lat_ne": 42.00, "lon_sw": 13.10, "lon_ne": 14.10},
+    # Lazio nord-est (Monti Sabini, Rieti)
+    {"lat_sw": 42.15, "lat_ne": 42.70, "lon_sw": 12.45, "lon_ne": 13.20},
+]
 
 NETATMO_RADIUS_KM = 5.0   # raggio aggregazione per stazione progetto
 NETATMO_MIN_CLUSTER = 2   # minimo stazioni Netatmo nel raggio per procedere
@@ -207,25 +214,42 @@ def fetch_netatmo(
         logger.error(f"[Netatmo] Token refresh fallito: {exc}")
         return []
 
-    # ── 2. Fetch getpublicdata per Roma ───────────────────────────────────────
-    try:
-        r = requests.get(
-            NETATMO_PUBDATA_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            params={
-                **ROMA_BBOX,
-                "required_data": "temperature",  # filtra stazioni senza temperatura
-                "filter":        "true",         # solo stazioni con dati recenti
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        raw_stations = r.json().get("body", [])
-    except Exception as exc:
-        logger.error(f"[Netatmo] getpublicdata fallito: {exc}")
+    # ── 2. Fetch getpublicdata per tutti i bbox Lazio ────────────────────────
+    raw_stations_all = []
+    for i, bbox in enumerate(LAZIO_BBOXES):
+        try:
+            r = requests.get(
+                NETATMO_PUBDATA_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                params={**bbox, "required_data": "temperature", "filter": "true"},
+                timeout=30,
+            )
+            r.raise_for_status()
+            batch = r.json().get("body", [])
+            raw_stations_all.extend(batch)
+            logger.info(f"[Netatmo] bbox {i+1}/{len(LAZIO_BBOXES)}: {len(batch)} stazioni raw")
+            if i < len(LAZIO_BBOXES) - 1:
+                time.sleep(0.5)  # rate limiting gentile
+        except Exception as exc:
+            logger.error(f"[Netatmo] getpublicdata bbox {i+1} fallito: {exc}")
+
+    # Deduplica per coordinata (la stessa stazione può apparire in bbox sovrapposti)
+    seen = set()
+    raw_stations = []
+    for s in raw_stations_all:
+        try:
+            loc = tuple(s["place"]["location"])
+            if loc not in seen:
+                seen.add(loc)
+                raw_stations.append(s)
+        except Exception:
+            pass
+
+    if not raw_stations:
+        logger.error("[Netatmo] Nessuna stazione ottenuta da nessun bbox")
         return []
 
-    logger.info(f"[Netatmo] {len(raw_stations)} stazioni raw nel bbox")
+    logger.info(f"[Netatmo] {len(raw_stations)} stazioni raw totali (dopo deduplicazione)")
 
     # ── 3. Parsing di tutti i record ──────────────────────────────────────────
     now_ts = int(datetime.now(timezone.utc).timestamp())
