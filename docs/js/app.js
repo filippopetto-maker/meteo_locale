@@ -28,23 +28,21 @@
     });
   }
 
-  // Scale fisse — garantiscono confrontabilità tra aggiornamenti diversi
-  const TEMP_SCALE_MIN = -10;  // °C
-  const TEMP_SCALE_MAX =  50;  // °C
   const HUM_SCALE_MIN  =   0;  // %
   const HUM_SCALE_MAX  = 100;  // %
+  const TEMP_MIN_SPAN  =  15;  // °C — larghezza minima scala temperatura
 
   // Palettes: ogni stop ha { t, r, g, b }
   const TEMP_PALETTE = [
-    { t: 0.0000, r: 0x2c, g: 0x3e, b: 0x95 }, // -10°C
-    { t: 0.1667, r: 0x3a, g: 0x6f, b: 0xc4 }, //   0°C
-    { t: 0.3333, r: 0x4f, g: 0xb8, b: 0xc4 }, //  10°C
-    { t: 0.4667, r: 0x6f, g: 0xc4, b: 0x6a }, //  18°C
-    { t: 0.5667, r: 0xd4, g: 0xd2, b: 0x4a }, //  24°C
-    { t: 0.6667, r: 0xf4, g: 0xa9, b: 0x3f }, //  30°C
-    { t: 0.7667, r: 0xe8, g: 0x54, b: 0x2f }, //  36°C
-    { t: 0.8667, r: 0xa5, g: 0x00, b: 0x26 }, //  42°C
-    { t: 1.0000, r: 0x67, g: 0x00, b: 0x1f }, //  50°C
+    { t: 0.000, r: 0x2c, g: 0x3e, b: 0x95 },
+    { t: 0.125, r: 0x3a, g: 0x6f, b: 0xc4 },
+    { t: 0.250, r: 0x4f, g: 0xb8, b: 0xc4 },
+    { t: 0.375, r: 0x6f, g: 0xc4, b: 0x6a },
+    { t: 0.500, r: 0xd4, g: 0xd2, b: 0x4a },
+    { t: 0.625, r: 0xf4, g: 0xa9, b: 0x3f },
+    { t: 0.750, r: 0xe8, g: 0x54, b: 0x2f },
+    { t: 0.875, r: 0xa5, g: 0x00, b: 0x26 },
+    { t: 1.000, r: 0x67, g: 0x00, b: 0x1f },
   ];
   const HUM_PALETTE = [
     { t: 0.00, r: 0xd4, g: 0x87, b: 0x5a }, // #d4875a — terracotta/secco
@@ -90,10 +88,16 @@
     return L.imageOverlay(canvas.toDataURL(), bounds, { opacity: 1.0 });
   }
 
-  function renderTemperature(latest) {
-    const tg = latest.temp_grid;
+  function ensureMinSpan(vMin, vMax, minSpan) {
+    const span = vMax - vMin;
+    if (span >= minSpan) return [vMin, vMax];
+    const mid = (vMin + vMax) / 2;
+    return [mid - minSpan / 2, mid + minSpan / 2];
+  }
+
+  function renderTemperature(tg, vMin, vMax) {
     if (!tg || !tg.values || tg.values.length === 0) return null;
-    return renderGridLayer(tg, TEMP_SCALE_MIN, TEMP_SCALE_MAX, TEMP_PALETTE);
+    return renderGridLayer(tg, vMin, vMax, TEMP_PALETTE);
   }
 
   function renderHumidity(latest) {
@@ -235,12 +239,12 @@
           layer === 'temperature' ? `Temperatura (${unit})` : `Umidità (${unit})`;
         document.getElementById('legend-bar').style.background =
           layer === 'temperature'
-            ? 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 16.7%, #4fb8c4 33.3%, #6fc46a 46.7%, #d4d24a 56.7%, #f4a93f 66.7%, #e8542f 76.7%, #a50026 86.7%, #67001f 100%)'
+            ? 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)'
             : 'linear-gradient(to right, #d4875a, #f5deb3, #c8e6f5, #4d9de0, #023858)';
         const labelsEl = document.getElementById('legend-labels');
         labelsEl.innerHTML = '';
         const ticks = layer === 'temperature'
-          ? [-10, 0, 10, 20, 30, 40, 50]
+          ? Array.from({ length: 5 }, (_, i) => vMin + (vMax - vMin) * i / 4)
           : [0, 25, 50, 75, 100];
         ticks.forEach(v => {
           const pos = ((v - vMin) / (vMax - vMin)) * 100;
@@ -256,11 +260,13 @@
         activeLayer = layer;
         if (heatOverlay) map.removeLayer(heatOverlay);
         if (layer === 'temperature') {
-          heatOverlay = renderTemperature(latest);
+          const tg = latest.temp_grid;
           document.getElementById('btn-temp').classList.add('active');
           document.getElementById('btn-hum').classList.remove('active');
-          if (latest.temp_grid) {
-            updateLegend('temperature', TEMP_SCALE_MIN, TEMP_SCALE_MAX, '°C');
+          if (tg && tg.values && tg.values.length > 0) {
+            const [vMin, vMax] = ensureMinSpan(tg.t_min, tg.t_max, TEMP_MIN_SPAN);
+            heatOverlay = renderTemperature(tg, vMin, vMax);
+            updateLegend('temperature', vMin, vMax, '°C');
           }
         } else {
           heatOverlay = renderHumidity(latest);
