@@ -7,16 +7,19 @@
     return labels[Math.round(deg / 22.5) % 16];
   }
 
-  const WIND_NAMES = [
-    'Tramontana','Bora','Grecale','Schiavo',
-    'Levante','Solano','Scirocco','Africo',
-    'Ostro','Cauro','Libeccio','Etesia',
-    'Ponente','Traversone','Maestrale','Zefiro',
-  ];
+  const WIND_NAMES = {
+    N:   'Tramontana', NNE: 'Bora',        NE: 'Grecale',   ENE: 'Schiavo',
+    E:   'Levante',    ESE: 'Solano',      SE: 'Scirocco',  SSE: 'Africo',
+    S:   'Ostro',      SSO: 'Cauro',       SO: 'Libeccio',  OSO: 'Etesia',
+    O:   'Ponente',    ONO: 'Traversone',  NO: 'Maestrale', NNO: 'Zefiro',
+  };
 
   function windName(deg) {
     if (deg == null) return '';
-    return WIND_NAMES[Math.round(deg / 22.5) % 16];
+    const label = degreesToCardinal(deg);
+    if (label.length <= 2) return WIND_NAMES[label];
+    // 3 lettere: il primo carattere della sigla è sempre il vento a 1 lettera più vicino
+    return `${WIND_NAMES[label[0]]} - ${WIND_NAMES[label]}`;
   }
 
   function formatTime(isoStr) {
@@ -25,13 +28,23 @@
     });
   }
 
+  // Scale fisse — garantiscono confrontabilità tra aggiornamenti diversi
+  const TEMP_SCALE_MIN = -10;  // °C
+  const TEMP_SCALE_MAX =  50;  // °C
+  const HUM_SCALE_MIN  =   0;  // %
+  const HUM_SCALE_MAX  = 100;  // %
+
   // Palettes: ogni stop ha { t, r, g, b }
   const TEMP_PALETTE = [
-    { t: 0.00, r: 0x31, g: 0x36, b: 0x95 }, // #313695
-    { t: 0.25, r: 0x74, g: 0xad, b: 0xd1 }, // #74add1
-    { t: 0.50, r: 0xfe, g: 0xe0, b: 0x90 }, // #fee090
-    { t: 0.75, r: 0xf4, g: 0x6d, b: 0x43 }, // #f46d43
-    { t: 1.00, r: 0xa5, g: 0x00, b: 0x26 }, // #a50026
+    { t: 0.0000, r: 0x2c, g: 0x3e, b: 0x95 }, // -10°C
+    { t: 0.1667, r: 0x3a, g: 0x6f, b: 0xc4 }, //   0°C
+    { t: 0.3333, r: 0x4f, g: 0xb8, b: 0xc4 }, //  10°C
+    { t: 0.4667, r: 0x6f, g: 0xc4, b: 0x6a }, //  18°C
+    { t: 0.5667, r: 0xd4, g: 0xd2, b: 0x4a }, //  24°C
+    { t: 0.6667, r: 0xf4, g: 0xa9, b: 0x3f }, //  30°C
+    { t: 0.7667, r: 0xe8, g: 0x54, b: 0x2f }, //  36°C
+    { t: 0.8667, r: 0xa5, g: 0x00, b: 0x26 }, //  42°C
+    { t: 1.0000, r: 0x67, g: 0x00, b: 0x1f }, //  50°C
   ];
   const HUM_PALETTE = [
     { t: 0.00, r: 0xd4, g: 0x87, b: 0x5a }, // #d4875a — terracotta/secco
@@ -80,13 +93,13 @@
   function renderTemperature(latest) {
     const tg = latest.temp_grid;
     if (!tg || !tg.values || tg.values.length === 0) return null;
-    return renderGridLayer(tg, tg.t_min, tg.t_max, TEMP_PALETTE);
+    return renderGridLayer(tg, TEMP_SCALE_MIN, TEMP_SCALE_MAX, TEMP_PALETTE);
   }
 
   function renderHumidity(latest) {
     const hg = latest.humidity_grid;
     if (!hg || !hg.values || hg.values.length === 0) return null;
-    return renderGridLayer(hg, hg.h_min, hg.h_max, HUM_PALETTE, 179); // 0.70 * 255
+    return renderGridLayer(hg, HUM_SCALE_MIN, HUM_SCALE_MAX, HUM_PALETTE, 179);
   }
 
   // Stato layer attivo
@@ -212,9 +225,7 @@
       legend.innerHTML =
         `<div id="legend-title" class="legend-title"></div>` +
         `<div id="legend-bar" class="legend-bar"></div>` +
-        `<div class="legend-labels">` +
-        `<span id="legend-min"></span><span id="legend-max"></span>` +
-        `</div>`;
+        `<div id="legend-labels" class="legend-labels"></div>`;
       document.getElementById('map').appendChild(legend);
 
       function updateLegend(layer, vMin, vMax, unit) {
@@ -222,10 +233,21 @@
           layer === 'temperature' ? `Temperatura (${unit})` : `Umidità (${unit})`;
         document.getElementById('legend-bar').style.background =
           layer === 'temperature'
-            ? 'linear-gradient(to right, #313695, #74add1, #fee090, #f46d43, #a50026)'
+            ? 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 16.7%, #4fb8c4 33.3%, #6fc46a 46.7%, #d4d24a 56.7%, #f4a93f 66.7%, #e8542f 76.7%, #a50026 86.7%, #67001f 100%)'
             : 'linear-gradient(to right, #d4875a, #f5deb3, #c8e6f5, #4d9de0, #023858)';
-        document.getElementById('legend-min').textContent = vMin.toFixed(1) + unit;
-        document.getElementById('legend-max').textContent = vMax.toFixed(1) + unit;
+        const labelsEl = document.getElementById('legend-labels');
+        labelsEl.innerHTML = '';
+        const ticks = layer === 'temperature'
+          ? [-10, 0, 10, 20, 30, 40, 50]
+          : [0, 25, 50, 75, 100];
+        ticks.forEach(v => {
+          const pos = ((v - vMin) / (vMax - vMin)) * 100;
+          const span = document.createElement('span');
+          span.className = 'legend-tick';
+          span.textContent = Math.round(v) + unit;
+          span.style.left = pos + '%';
+          labelsEl.appendChild(span);
+        });
       }
 
       function switchLayer(layer) {
@@ -236,14 +258,14 @@
           document.getElementById('btn-temp').classList.add('active');
           document.getElementById('btn-hum').classList.remove('active');
           if (latest.temp_grid) {
-            updateLegend('temperature', latest.temp_grid.t_min, latest.temp_grid.t_max, '°C');
+            updateLegend('temperature', TEMP_SCALE_MIN, TEMP_SCALE_MAX, '°C');
           }
         } else {
           heatOverlay = renderHumidity(latest);
           document.getElementById('btn-temp').classList.remove('active');
           document.getElementById('btn-hum').classList.add('active');
           if (latest.humidity_grid) {
-            updateLegend('humidity', latest.humidity_grid.h_min, latest.humidity_grid.h_max, '%');
+            updateLegend('humidity', HUM_SCALE_MIN, HUM_SCALE_MAX, '%');
           }
         }
         if (heatOverlay) heatOverlay.addTo(map);
