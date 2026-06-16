@@ -76,7 +76,15 @@
     }
     .legend-title { font-weight: bold; margin-bottom: 4px; }
     .legend-bar { height: 12px; border-radius: 3px; margin-bottom: 3px; }
-    .legend-labels { display: flex; justify-content: space-between; font-size: 11px; }
+    .legend-labels { position: relative; height: 1.2em; margin-top: 4px; }
+    .legend-tick {
+      position: absolute;
+      transform: translateX(-50%);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .legend-tick:first-child { transform: translateX(0); }
+    .legend-tick:last-child  { transform: translateX(-100%); }
   </style>
 </head>
 <body>
