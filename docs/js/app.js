@@ -130,6 +130,7 @@
       const tOss  = ob?.temperature    != null ? ob.temperature.toFixed(1)  + '°C' : 'n/d';
       const vento = fc?.wind_speed     != null ? fc.wind_speed.toFixed(1)   + ' km/h' : 'n/d';
       const dir   = fc?.wind_direction != null ? degreesToCardinal(fc.wind_direction) : 'n/d';
+      const wName = fc?.wind_direction != null ? windName(fc.wind_direction) : '';
       const hum   = fc?.humidity       != null ? fc.humidity.toFixed(0)     + '%' : 'n/d';
       const ore   = fc?.valid_for      ? formatTime(fc.valid_for) : '';
 
@@ -137,6 +138,7 @@
         `<b>${st.name}</b> <small style="opacity:.7">${st.microclima}</small><br>` +
         `🌡️ Prevista: <b>${tPrev}</b> — Osservata: <b>${tOss}</b><br>` +
         `💨 <b>${vento}</b> da <b>${dir}</b><br>` +
+        (wName ? `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` : '') +
         `💧 Umidità: <b>${hum}</b><br>` +
         `<small style="opacity:.6">Valido ore ${ore}</small>`,
         { maxWidth: 220 }
