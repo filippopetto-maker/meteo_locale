@@ -95,9 +95,10 @@
     return [mid - minSpan / 2, mid + minSpan / 2];
   }
 
-  function renderTemperature(tg, vMin, vMax) {
+  function renderTemperature(latest, time) {
+    const tg = time === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
     if (!tg || !tg.values || tg.values.length === 0) return null;
-    return renderGridLayer(tg, vMin, vMax, TEMP_PALETTE);
+    return renderGridLayer(tg, tg.t_min, tg.t_max, TEMP_PALETTE);
   }
 
   function renderHumidity(latest) {
@@ -108,6 +109,7 @@
 
   // Stato layer attivo
   let activeLayer = 'temperature';
+  let activeTime = 'observed';  // 'observed' | 'forecast'
   let heatOverlay = null;
 
   const MICROCLIMA_COLORS = {
@@ -223,6 +225,10 @@
         `<div class="layer-toggle">` +
         `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
         `<button id="btn-hum">💧 Umidità</button>` +
+        `</div>` +
+        `<div class="layer-toggle" id="time-toggle">` +
+        `<button id="btn-now" class="active">Adesso</button>` +
+        `<button id="btn-plus1">+1h</button>` +
         `</div>`;
       document.getElementById('map').appendChild(infoPanel);
 
@@ -259,13 +265,14 @@
       function switchLayer(layer) {
         activeLayer = layer;
         if (heatOverlay) map.removeLayer(heatOverlay);
+        document.getElementById('time-toggle').style.display = layer === 'temperature' ? 'flex' : 'none';
         if (layer === 'temperature') {
-          const tg = latest.temp_grid;
+          heatOverlay = renderTemperature(latest, activeTime);
           document.getElementById('btn-temp').classList.add('active');
           document.getElementById('btn-hum').classList.remove('active');
-          if (tg && tg.values && tg.values.length > 0) {
+          const tg = activeTime === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
+          if (tg) {
             const [vMin, vMax] = ensureMinSpan(tg.t_min, tg.t_max, TEMP_MIN_SPAN);
-            heatOverlay = renderTemperature(tg, vMin, vMax);
             updateLegend('temperature', vMin, vMax, '°C');
           }
         } else {
@@ -273,14 +280,23 @@
           document.getElementById('btn-temp').classList.remove('active');
           document.getElementById('btn-hum').classList.add('active');
           if (latest.humidity_grid) {
-            updateLegend('humidity', HUM_SCALE_MIN, HUM_SCALE_MAX, '%');
+            updateLegend('humidity', latest.humidity_grid.h_min, latest.humidity_grid.h_max, '%');
           }
         }
         if (heatOverlay) heatOverlay.addTo(map);
       }
 
+      function switchTime(time) {
+        activeTime = time;
+        document.getElementById('btn-now').classList.toggle('active', time === 'observed');
+        document.getElementById('btn-plus1').classList.toggle('active', time === 'forecast');
+        if (activeLayer === 'temperature') switchLayer('temperature');
+      }
+
       document.getElementById('btn-temp').addEventListener('click', () => switchLayer('temperature'));
       document.getElementById('btn-hum').addEventListener('click', () => switchLayer('humidity'));
+      document.getElementById('btn-now').addEventListener('click', () => switchTime('observed'));
+      document.getElementById('btn-plus1').addEventListener('click', () => switchTime('forecast'));
 
       switchLayer('temperature');
       const stations = latest.stations || [];
@@ -300,8 +316,8 @@
         const lat = e.latlng.lat;
         const lng = e.latlng.lng;
 
-        const temp = latest.temp_grid
-          ? lookupGrid(lat, lng, latest.temp_grid) : null;
+        const tgActive = activeTime === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
+        const temp = tgActive ? lookupGrid(lat, lng, tgActive) : null;
 
         const windU = idwPoint(lat, lng, stations, st => {
           const s = st.forecast?.wind_speed    ?? null;

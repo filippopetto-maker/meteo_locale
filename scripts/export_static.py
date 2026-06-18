@@ -100,7 +100,8 @@ def build_latest_json(
     stations: list[dict],
     forecasts: dict,
     observations: dict,
-    temp_grid_data: dict | None = None,
+    temp_grid_observed_data: dict | None = None,
+    temp_grid_forecast_data: dict | None = None,
     humidity_grid_data: dict | None = None,
 ) -> dict:
     station_list = []
@@ -134,8 +135,10 @@ def build_latest_json(
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "stations": station_list,
     }
-    if temp_grid_data:
-        payload["temp_grid"] = temp_grid_data
+    if temp_grid_observed_data:
+        payload["temp_grid_observed"] = temp_grid_observed_data
+    if temp_grid_forecast_data:
+        payload["temp_grid_forecast"] = temp_grid_forecast_data
     if humidity_grid_data:
         payload["humidity_grid"] = humidity_grid_data
     return payload
@@ -236,31 +239,40 @@ def main() -> None:
     log.info(f"  {len(observations)}/{len(stations)} stazioni con observation recente")
 
     log.info("Calcolo griglia temperatura (ERA5 background + IDW correzioni)...")
-    temp_grid_data: dict | None = None
-    humidity_grid_data: dict | None = None
+    temp_grid_observed = None
+    temp_grid_forecast = None
 
-    # Stazioni con forecast di temperatura valido (include observation per IDW)
-    stations_with_fc = [
-        {**s, "forecast": forecasts[s["id"]], "observation": observations.get(s["id"])}
-        for s in stations
-        if s["id"] in forecasts and forecasts[s["id"]].get("temperature") is not None
-    ]
+    # Stazioni con observation e/o forecast di temperatura valido (unione, non intersezione)
+    stations_with_data = []
+    for s in stations:
+        fc  = forecasts.get(s["id"])
+        obs = observations.get(s["id"])
+        has_fc  = fc  is not None and fc.get("temperature")  is not None
+        has_obs = obs is not None and obs.get("temperature") is not None
+        if has_fc or has_obs:
+            stations_with_data.append({
+                **s,
+                "forecast":    fc  if has_fc  else None,
+                "observation": obs if has_obs else None,
+                "has_fc":      has_fc,
+                "has_obs":     has_obs,
+            })
 
-    if len(stations_with_fc) >= 2:
+    if len(stations_with_data) >= 2:
         now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
         # ── 1. Griglia coarse ERA5 ──────────────────────────────────────────
-        bg_lats = np.linspace(LAT_MAX, LAT_MIN, N_BG_LAT)  # nord → sud
-        bg_lons = np.linspace(LON_MIN, LON_MAX, N_BG_LON)  # ovest → est
+        bg_lats = np.linspace(LAT_MAX, LAT_MIN, N_BG_LAT)
+        bg_lons = np.linspace(LON_MIN, LON_MAX, N_BG_LON)
         bg_lat_grid, bg_lon_grid = np.meshgrid(bg_lats, bg_lons, indexing="ij")
         bg_lats_flat = bg_lat_grid.flatten().tolist()
         bg_lons_flat = bg_lon_grid.flatten().tolist()
 
-        # ── 2. Coordinate stazioni ──────────────────────────────────────────
-        st_lats = [st["lat"] for st in stations_with_fc]
-        st_lons = [st["lon"] for st in stations_with_fc]
+        # ── 2. Coordinate stazioni (unione obs+forecast) ─────────────────────
+        st_lats = [st["lat"] for st in stations_with_data]
+        st_lons = [st["lon"] for st in stations_with_data]
 
-        # ── 3. Fetch ERA5 batch: background + stazioni in unico request ─────
+        # ── 3. Fetch ERA5 batch ────────────────────────────────────────────────
         log.info(f"  Fetch ERA5 ({N_BG_LAT * N_BG_LON + len(st_lats)} punti, 2 variabili)...")
         all_lats = bg_lats_flat + st_lats
         all_lons = bg_lons_flat + st_lons
@@ -271,101 +283,90 @@ def main() -> None:
         if not era5_data:
             log.warning("ERA5 non disponibile — le griglie useranno IDW puro sui dati stazione")
 
-        # ── 4. Temperatura per IDW: observation se disponibile, forecast altrimenti
-        t_model_list: list[tuple[float, str]] = []
-        for st in stations_with_fc:
-            obs = st.get("observation")
-            if obs and obs.get("temperature") is not None:
-                t_model_list.append((float(obs["temperature"]), "obs"))
-            else:
-                t_model_list.append((float(st["forecast"]["temperature"]), "fc"))
-        t_model   = np.array([v for v, _ in t_model_list])
-        t_sources = [src for _, src in t_model_list]
-
-        st_points = np.array(list(zip(st_lats, st_lons)))
         fine_lats = np.linspace(LAT_MAX, LAT_MIN, NY)
         fine_lons = np.linspace(LON_MIN, LON_MAX, NX)
 
+        n_bg = len(bg_lats_flat)
         if era5_data:
             era5_temp_flat = np.array(era5_data["temperature_2m"])
             era5_hum_flat  = np.array(era5_data["relativehumidity_2m"])
-            n_bg           = len(bg_lats_flat)
             era5_bg_flat   = era5_temp_flat[:n_bg]
-            era5_at_st     = era5_temp_flat[n_bg:]
+            era5_coarse    = era5_bg_flat.reshape(N_BG_LAT, N_BG_LON)
+            era5_fine      = bilinear_to_fine(era5_coarse, bg_lats, bg_lons, fine_lats, fine_lons)
 
-            # ── 4a. Correzioni microclima (valore_usato − ERA5) ─────────────
-            corrections = t_model - era5_at_st
-            for st, era5_t, t_val, corr, src in zip(
-                stations_with_fc, era5_at_st, t_model, corrections, t_sources
-            ):
-                log.info(
-                    f"  {st['name']:<22} | ERA5={era5_t:.1f}°C"
-                    f" | T={t_val:.1f}°C | corr={corr:+.2f}°C | {src}"
-                )
-
-            # ── 5. ERA5 coarse → griglia fine NX×NY ────────────────────────
-            era5_coarse = era5_bg_flat.reshape(N_BG_LAT, N_BG_LON)
-            era5_fine   = bilinear_to_fine(era5_coarse, bg_lats, bg_lons, fine_lats, fine_lons)
-
-            # ── 6. IDW correzioni NX×NY ─────────────────────────────────────
-            corr_grid = compute_idw_grid(
-                st_points, corrections,
-                LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
-            )
-
-            # ── 7. Griglia finale temperatura ────────────────────────────────
-            temp_grid = era5_fine + corr_grid
-        else:
-            # ── 4b. Fallback: IDW puro sui valori assoluti stazione ──────────
-            temp_grid = compute_idw_grid(
-                st_points, t_model,
-                LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
-            )
-
-        # ── SST: blend graduale mare/terra (fascia lato mare, w=0 sulla terra) ──
+        # ── Blend mare (SST), condiviso da entrambe le griglie ────────────────
         sst_values = get_sst_values()
+        blend_w  = None
+        sst_grid = None
         if sst_values and len(sst_values) >= 2:
-            sst_points_arr = np.array([
-                [p["lat"], p["lon"]] for p in SST_POINTS if p["name"] in sst_values
-            ])
-            sst_vals_arr = np.array([
-                sst_values[p["name"]] for p in SST_POINTS if p["name"] in sst_values
-            ])
+            sst_points_arr = np.array([[p["lat"], p["lon"]] for p in SST_POINTS if p["name"] in sst_values])
+            sst_vals_arr   = np.array([sst_values[p["name"]] for p in SST_POINTS if p["name"] in sst_values])
             sst_grid = compute_idw_grid(
                 sst_points_arr, sst_vals_arr,
                 LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
             )
             blend_w = compute_sea_blend_weight(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY)
-            temp_grid = blend_w * sst_grid + (1 - blend_w) * temp_grid
-            log.info(
-                f"  Blend SST applicato — fascia {SEA_BLEND_BAND_KM}km lato mare | "
-                f"{(blend_w >= 0.99).sum()} celle mare pieno | "
-                f"{((blend_w > 0) & (blend_w < 0.99)).sum()} celle in transizione"
-            )
         else:
-            log.warning("SST non disponibile — temp_grid resta ERA5+IDW anche sul mare (comportamento legacy)")
+            log.warning("SST non disponibile — griglie senza blend mare (comportamento legacy)")
 
-        temp_grid_data = {
-            "lat_min": LAT_MIN,
-            "lat_max": LAT_MAX,
-            "lon_min": LON_MIN,
-            "lon_max": LON_MAX,
-            "nx": NX,
-            "ny": NY,
-            "values": [round(v, 2) for v in temp_grid.flatten().tolist()],
-            "t_min": round(float(temp_grid.min()), 2),
-            "t_max": round(float(temp_grid.max()), 2),
-        }
+        def _build_temp_grid(mask: np.ndarray, values: np.ndarray) -> dict | None:
+            """Costruisce un temp_grid_data da un sottoinsieme di stazioni
+            (osservato o forecast, indifferente al chiamante)."""
+            if mask.sum() < 2:
+                return None
+            pts = np.array(list(zip(np.array(st_lats)[mask], np.array(st_lons)[mask])))
+            if era5_data:
+                era5_at_subset = era5_temp_flat[n_bg:][mask]
+                corrections = values[mask] - era5_at_subset
+                corr_grid = compute_idw_grid(
+                    pts, corrections,
+                    LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+                )
+                grid = era5_fine + corr_grid
+            else:
+                grid = compute_idw_grid(
+                    pts, values[mask],
+                    LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+                )
+            if blend_w is not None and sst_grid is not None:
+                grid = blend_w * sst_grid + (1 - blend_w) * grid
+            return {
+                "lat_min": LAT_MIN, "lat_max": LAT_MAX,
+                "lon_min": LON_MIN, "lon_max": LON_MAX,
+                "nx": NX, "ny": NY,
+                "values": [round(v, 2) for v in grid.flatten().tolist()],
+                "t_min": round(float(grid.min()), 2),
+                "t_max": round(float(grid.max()), 2),
+            }
 
-        # ── 8. Griglia umidità (ERA5 background + IDW correzioni) ───────────
-        hum_mask = np.array(
-            [st["forecast"].get("humidity") is not None for st in stations_with_fc]
-        )
+        obs_mask = np.array([st["has_obs"] for st in stations_with_data])
+        fc_mask  = np.array([st["has_fc"]  for st in stations_with_data])
+        obs_vals = np.array([
+            st["observation"]["temperature"] if st["has_obs"] else np.nan
+            for st in stations_with_data
+        ])
+        fc_vals  = np.array([
+            st["forecast"]["temperature"] if st["has_fc"] else np.nan
+            for st in stations_with_data
+        ])
+
+        temp_grid_observed = _build_temp_grid(obs_mask, obs_vals)
+        temp_grid_forecast = _build_temp_grid(fc_mask,  fc_vals)
+
+        if temp_grid_observed is None:
+            log.warning(f"Solo {int(obs_mask.sum())} stazioni con osservazione valida (< 2) — temp_grid_observed non incluso")
+        if temp_grid_forecast is None:
+            log.warning(f"Solo {int(fc_mask.sum())} stazioni con forecast valido (< 2) — temp_grid_forecast non incluso")
+
+        # ── Umidità (resta solo forecast, nessun "osservato" per ora) ────────
+        hum_mask = fc_mask & np.array([
+            (st.get("forecast") or {}).get("humidity") is not None
+            for st in stations_with_data
+        ])
         if hum_mask.sum() >= 2:
             hum_values = np.array([
                 st["forecast"]["humidity"]
-                for st in stations_with_fc
-                if st["forecast"].get("humidity") is not None
+                for st, m in zip(stations_with_data, hum_mask) if m
             ])
             if era5_data:
                 era5_hum_at_st  = era5_hum_flat[n_bg:][hum_mask]
@@ -375,43 +376,38 @@ def main() -> None:
                     era5_hum_coarse, bg_lats, bg_lons, fine_lats, fine_lons
                 )
                 hum_corr_grid = compute_idw_grid(
-                    st_points[hum_mask], hum_corr,
+                    np.array(list(zip(np.array(st_lats)[hum_mask], np.array(st_lons)[hum_mask]))), hum_corr,
                     LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
                 )
                 hum_grid = np.clip(era5_hum_fine + hum_corr_grid, 0, 100)
             else:
                 hum_grid = np.clip(
                     compute_idw_grid(
-                        st_points[hum_mask], hum_values,
+                        np.array(list(zip(np.array(st_lats)[hum_mask], np.array(st_lons)[hum_mask]))), hum_values,
                         LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
                     ),
                     0, 100,
                 )
             humidity_grid_data = {
-                "lat_min": LAT_MIN,
-                "lat_max": LAT_MAX,
-                "lon_min": LON_MIN,
-                "lon_max": LON_MAX,
-                "nx": NX,
-                "ny": NY,
+                "lat_min": LAT_MIN, "lat_max": LAT_MAX,
+                "lon_min": LON_MIN, "lon_max": LON_MAX,
+                "nx": NX, "ny": NY,
                 "values": [round(v, 1) for v in hum_grid.flatten().tolist()],
                 "h_min": round(float(hum_grid.min()), 1),
                 "h_max": round(float(hum_grid.max()), 1),
             }
         else:
-            log.warning(
-                f"Solo {int(hum_mask.sum())} stazioni valide per umidità "
-                "(< 2) — humidity_grid non inclusa"
-            )
+            log.warning(f"Solo {int(hum_mask.sum())} stazioni valide per umidità (< 2) — humidity_grid non incluso")
             humidity_grid_data = None
     else:
-        log.warning(
-            f"Solo {len(stations_with_fc)} stazioni valide per temperatura "
-            "(< 2) — temp_grid non inclusa"
-        )
+        log.warning(f"Solo {len(stations_with_data)} stazioni con dati validi (< 2) — temp_grid non incluso")
+        humidity_grid_data = None
 
     log.info("Calcolo latest.json...")
-    latest = build_latest_json(stations, forecasts, observations, temp_grid_data, humidity_grid_data)
+    latest = build_latest_json(
+        stations, forecasts, observations,
+        temp_grid_observed, temp_grid_forecast, humidity_grid_data,
+    )
     latest_path = DOCS_DATA / "latest.json"
     latest_path.write_text(json.dumps(latest, indent=2, ensure_ascii=False))
     log.info(f"  Scritto {latest_path}")
