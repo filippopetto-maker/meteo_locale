@@ -218,14 +218,18 @@ def is_sea_mask(lat_min, lat_max, lon_min, lon_max, nx, ny) -> np.ndarray:
     return mask
 
 
-SEA_BLEND_BAND_KM = 10.0  # ampiezza fascia di transizione, SOLO lato mare
+SEA_BLEND_BAND_KM = 25.0  # era 10.0 — più largo per leggere come sfumatura, non contorno
 
 
 def compute_coast_distance_grid(lat_min, lat_max, lon_min, lon_max, nx, ny) -> np.ndarray:
     """
-    Distanza in km (non firmata) dal punto di LATIUM_COAST più vicino,
-    per ogni cella della griglia fine. Stessa convenzione riga/colonna
-    di compute_idw_grid (riga 0 = lat_max nord, col 0 = lon_min ovest).
+    Distanza in km dal SEGMENTO di costa più vicino (non dal solo vertice
+    più vicino) — evita gli artefatti "a cerchi concentrici" vicino ai
+    promontori (es. Circeo) dove i punti di LATIUM_COAST sono più radi.
+
+    Approssimazione planare locale (equirettangolare) attorno alla
+    latitudine media del bbox: errore trascurabile su questa scala,
+    non serve precisione geodetica per una fascia di sfumatura visiva.
     """
     from features import LATIUM_COAST
 
@@ -233,16 +237,32 @@ def compute_coast_distance_grid(lat_min, lat_max, lon_min, lon_max, nx, ny) -> n
     lons = np.linspace(lon_min, lon_max, nx)
     grid_lon, grid_lat = np.meshgrid(lons, lats)  # (ny, nx)
 
-    coast = np.array(LATIUM_COAST)  # (M, 2) — lat, lon
-    R = 6371.0
-    lat1 = np.radians(grid_lat[:, :, np.newaxis])
-    lon1 = np.radians(grid_lon[:, :, np.newaxis])
-    lat2 = np.radians(coast[:, 0])
-    lon2 = np.radians(coast[:, 1])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-    dist = R * 2 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))  # (ny, nx, M)
+    ref_lat = (lat_min + lat_max) / 2
+    km_lat = 111.32
+    km_lon = 111.32 * np.cos(np.radians(ref_lat))
+
+    gx = grid_lon * km_lon  # (ny, nx)
+    gy = grid_lat * km_lat
+
+    coast = np.array(LATIUM_COAST)  # (M, 2) — lat, lon, ordine geografico lungo la costa
+    cx = coast[:, 1] * km_lon  # (M,)
+    cy = coast[:, 0] * km_lat
+
+    ax, ay = cx[:-1], cy[:-1]   # inizio di ciascun segmento (M-1,)
+    bx, by = cx[1:], cy[1:]     # fine di ciascun segmento (M-1,)
+
+    px = gx[:, :, np.newaxis]   # (ny, nx, 1)
+    py = gy[:, :, np.newaxis]
+    abx = bx - ax               # (M-1,)
+    aby = by - ay
+    seg_len2 = abx ** 2 + aby ** 2
+
+    t = ((px - ax) * abx + (py - ay) * aby) / seg_len2  # (ny, nx, M-1)
+    t = np.clip(t, 0.0, 1.0)
+    proj_x = ax + t * abx
+    proj_y = ay + t * aby
+
+    dist = np.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)  # (ny, nx, M-1)
     return dist.min(axis=2)  # (ny, nx)
 
 
