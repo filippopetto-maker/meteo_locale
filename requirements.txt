@@ -18,3 +18,4 @@ supabase
 
 # Dashboard
 streamlit
+matplotlib

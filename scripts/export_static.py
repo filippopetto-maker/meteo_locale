@@ -23,7 +23,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from db import get_client, get_active_stations
-from grid import compute_idw_grid, wind_to_uv, fetch_era5_batch, bilinear_to_fine
+from grid import compute_idw_grid, wind_to_uv, fetch_era5_batch, bilinear_to_fine, is_sea_mask
+from sst import get_sst_values, SST_POINTS
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -320,6 +321,25 @@ def main() -> None:
                 st_points, t_model,
                 LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
             )
+
+        # ── SST: sovrascrive le celle mare con temperatura superficiale reale ──
+        sst_values = get_sst_values()
+        if sst_values and len(sst_values) >= 2:
+            sst_points_arr = np.array([
+                [p["lat"], p["lon"]] for p in SST_POINTS if p["name"] in sst_values
+            ])
+            sst_vals_arr = np.array([
+                sst_values[p["name"]] for p in SST_POINTS if p["name"] in sst_values
+            ])
+            sst_grid = compute_idw_grid(
+                sst_points_arr, sst_vals_arr,
+                LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+            )
+            sea_mask = is_sea_mask(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY)
+            temp_grid = np.where(sea_mask, sst_grid, temp_grid)
+            log.info(f"  SST applicata su {sea_mask.sum()} celle mare (valori: {sst_values})")
+        else:
+            log.warning("SST non disponibile — celle mare useranno ERA5+IDW come prima (comportamento legacy)")
 
         temp_grid_data = {
             "lat_min": LAT_MIN,

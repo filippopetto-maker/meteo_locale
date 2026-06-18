@@ -186,6 +186,38 @@ def fetch_era5_batch(
         return {}
 
 
+def build_sea_polygon(lon_min: float, lat_min: float, lat_max: float) -> list:
+    """
+    Poligono che racchiude il mare: bordo ovest del bbox + coastline (sud→nord).
+    Punti in ordine (lat, lon) per restare coerenti col resto del modulo.
+    """
+    from features import LATIUM_COAST
+    coast_sorted = sorted(LATIUM_COAST, key=lambda c: c[0])  # sud → nord
+    polygon = [(lat_min, lon_min), (lat_max, lon_min)]
+    polygon += [(lat, lon) for lat, lon in reversed(coast_sorted)]  # nord → sud
+    polygon.append((lat_min, lon_min))  # chiude il poligono
+    return polygon
+
+
+def is_sea_mask(lat_min, lat_max, lon_min, lon_max, nx, ny) -> np.ndarray:
+    """
+    Maschera booleana (ny, nx) — True dove la cella è mare.
+    Stessa convenzione di compute_idw_grid: riga 0 = lat_max (nord), col 0 = lon_min (ovest).
+    """
+    from matplotlib.path import Path
+
+    polygon = build_sea_polygon(lon_min, lat_min, lat_max)
+    poly_path = Path([(lo, la) for la, lo in polygon])  # Path vuole (x, y) = (lon, lat)
+
+    lats = np.linspace(lat_max, lat_min, ny)
+    lons = np.linspace(lon_min, lon_max, nx)
+    grid_lon, grid_lat = np.meshgrid(lons, lats)
+    points = np.column_stack([grid_lon.ravel(), grid_lat.ravel()])
+
+    mask = poly_path.contains_points(points).reshape(ny, nx)
+    return mask
+
+
 def bilinear_to_fine(
     coarse: np.ndarray,
     coarse_lats: np.ndarray,

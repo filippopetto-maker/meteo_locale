@@ -260,6 +260,12 @@ LATIUM_COAST = [
     (41.66, 12.39),
     (41.58, 12.50),
     (41.45, 12.63),  # Anzio
+    (41.35, 12.78),  # Nettuno/Torre Astura (punto intermedio)
+    (41.27, 12.92),  # Sabaudia
+    (41.24, 13.08),  # Promontorio del Circeo
+    (41.29, 13.25),  # Terracina
+    (41.25, 13.45),  # tratto sud, prima di Gaeta
+    (41.22, 13.57),  # Gaeta/Formia
 ]
 
 # Centro di Roma (Piazza Venezia) — proxy del nucleo dell'isola di calore urbana
