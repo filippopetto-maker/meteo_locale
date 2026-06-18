@@ -250,6 +250,12 @@ import math
 # Linea di costa laziale approssimata (punti lungo il litorale tirrenico).
 # Usata per calcolare la distanza dal mare di un punto qualsiasi.
 LATIUM_COAST = [
+    (42.85, 10.85),  # ancoraggio al lat_max del bbox, zona Follonica (Toscana) — solo geometria
+    (42.77, 10.93),  # Punta Ala
+    (42.60, 10.97),  # Castiglione della Pescaia (punto intermedio, segmento altrimenti troppo lungo)
+    (42.42, 11.21),  # Orbetello / Ansedonia
+    (42.34, 11.61),  # Montalto di Castro (confine Lazio-Toscana)
+    (42.25, 11.76),  # Tarquinia
     (42.10, 11.80),  # Civitavecchia
     (42.02, 11.93),
     (41.95, 12.07),  # Ladispoli
