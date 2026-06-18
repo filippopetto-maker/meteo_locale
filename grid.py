@@ -218,6 +218,54 @@ def is_sea_mask(lat_min, lat_max, lon_min, lon_max, nx, ny) -> np.ndarray:
     return mask
 
 
+SEA_BLEND_BAND_KM = 10.0  # ampiezza fascia di transizione, SOLO lato mare
+
+
+def compute_coast_distance_grid(lat_min, lat_max, lon_min, lon_max, nx, ny) -> np.ndarray:
+    """
+    Distanza in km (non firmata) dal punto di LATIUM_COAST più vicino,
+    per ogni cella della griglia fine. Stessa convenzione riga/colonna
+    di compute_idw_grid (riga 0 = lat_max nord, col 0 = lon_min ovest).
+    """
+    from features import LATIUM_COAST
+
+    lats = np.linspace(lat_max, lat_min, ny)
+    lons = np.linspace(lon_min, lon_max, nx)
+    grid_lon, grid_lat = np.meshgrid(lons, lats)  # (ny, nx)
+
+    coast = np.array(LATIUM_COAST)  # (M, 2) — lat, lon
+    R = 6371.0
+    lat1 = np.radians(grid_lat[:, :, np.newaxis])
+    lon1 = np.radians(grid_lon[:, :, np.newaxis])
+    lat2 = np.radians(coast[:, 0])
+    lon2 = np.radians(coast[:, 1])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    dist = R * 2 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))  # (ny, nx, M)
+    return dist.min(axis=2)  # (ny, nx)
+
+
+def compute_sea_blend_weight(lat_min, lat_max, lon_min, lon_max, nx, ny,
+                              band_km: float = SEA_BLEND_BAND_KM) -> np.ndarray:
+    """
+    Peso w (ny, nx) in [0, 1] per il blend SST.
+
+    w = 0 su tutta la terraferma (nessuna diluizione delle stazioni, anche
+    quelle a pochi metri dalla costa). w cresce da 0 a 1 SOLO andando
+    verso mare aperto, su una fascia di band_km — continuità garantita
+    esattamente sulla linea di costa (a distanza 0 il blend coincide col
+    valore di terra).
+    """
+    dist_km = compute_coast_distance_grid(lat_min, lat_max, lon_min, lon_max, nx, ny)
+    sea = is_sea_mask(lat_min, lat_max, lon_min, lon_max, nx, ny)
+
+    signed = np.where(sea, dist_km, -dist_km)
+    t = np.clip(signed / band_km, 0.0, 1.0)
+    w = t * t * (3 - 2 * t)  # smoothstep
+    return w
+
+
 def bilinear_to_fine(
     coarse: np.ndarray,
     coarse_lats: np.ndarray,

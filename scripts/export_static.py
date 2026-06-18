@@ -23,7 +23,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from db import get_client, get_active_stations
-from grid import compute_idw_grid, wind_to_uv, fetch_era5_batch, bilinear_to_fine, is_sea_mask
+from grid import compute_idw_grid, wind_to_uv, fetch_era5_batch, bilinear_to_fine, compute_sea_blend_weight, SEA_BLEND_BAND_KM
 from sst import get_sst_values, SST_POINTS
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -322,7 +322,7 @@ def main() -> None:
                 LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
             )
 
-        # ── SST: sovrascrive le celle mare con temperatura superficiale reale ──
+        # ── SST: blend graduale mare/terra (fascia lato mare, w=0 sulla terra) ──
         sst_values = get_sst_values()
         if sst_values and len(sst_values) >= 2:
             sst_points_arr = np.array([
@@ -335,11 +335,15 @@ def main() -> None:
                 sst_points_arr, sst_vals_arr,
                 LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
             )
-            sea_mask = is_sea_mask(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY)
-            temp_grid = np.where(sea_mask, sst_grid, temp_grid)
-            log.info(f"  SST applicata su {sea_mask.sum()} celle mare (valori: {sst_values})")
+            blend_w = compute_sea_blend_weight(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY)
+            temp_grid = blend_w * sst_grid + (1 - blend_w) * temp_grid
+            log.info(
+                f"  Blend SST applicato — fascia {SEA_BLEND_BAND_KM}km lato mare | "
+                f"{(blend_w >= 0.99).sum()} celle mare pieno | "
+                f"{((blend_w > 0) & (blend_w < 0.99)).sum()} celle in transizione"
+            )
         else:
-            log.warning("SST non disponibile — celle mare useranno ERA5+IDW come prima (comportamento legacy)")
+            log.warning("SST non disponibile — temp_grid resta ERA5+IDW anche sul mare (comportamento legacy)")
 
         temp_grid_data = {
             "lat_min": LAT_MIN,
