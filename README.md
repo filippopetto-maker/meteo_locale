@@ -2,7 +2,7 @@
 
 Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
-**Stato:** Phase 1, Phase 2a e Phase 2b completate e in produzione. GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **6 stazioni attive** su Roma metropolitana con copertura Netatmo live.
+**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità + particelle vento). GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **10 stazioni attive** su tutto il Lazio con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h).
 
 ---
 
@@ -62,7 +62,7 @@ Con una sola stazione le feature orografiche (quota, distanza dal mare, esposizi
 
 Le feature orografiche diventano predittori appresi e generalizzabili **solo addestrando simultaneamente su più stazioni con profili di terreno contrastanti** (costiero, pianura, urbano denso, quota).
 
-**Stazioni attive (6, profili contrastanti):**
+**Stazioni attive (10, profili contrastanti):**
 
 | ID | Nome | Fonte live | Profilo | Alt | Dist. mare |
 |:---|:-----|:-----------|:--------|:----|:-----------|
@@ -72,8 +72,14 @@ Le feature orografiche diventano predittori appresi e generalizzabili **solo add
 | 27 | Trastevere | Netatmo | urban_canyon, centro storico | 27 m | 22 km |
 | 28 | Tivoli | Netatmo | quota, versante collinare est | 226 m | 48 km |
 | 29 | Castelli Romani | Netatmo | quota, Frascati ~342 m | 342 m | 29 km |
+| 51 | Fiano Romano | Netatmo | collinare, vallata Tevere nord | 92 m | 47.7 km |
+| 52 | Civitavecchia | Netatmo | brezza_marina, porto tirrenico | 25 m | 0.8 km |
+| 53 | Filettino | Netatmo | quota, Appennino laziale | 1044 m | 67.2 km |
+| 54 | Gaeta | Netatmo | brezza_marina, golfo di Gaeta | 12 m | 0.9 km |
 
 *Stazioni inattive (storico conservato): id 1 Roma Nord, id 2 Roma Centro (duplicati METAR LIRA), id 4 Ostia (sostituita da Ostia Lido).*
+
+*Nota Filettino (id 53): prima stazione quota elevata dell'Appennino laziale (1044 m). `NETATMO_MIN_CLUSTER` abbassato a 1 per stazioni `quota` in `fetch_netatmo_block.py` perché la zona è scarsamente abitata e non ci sono altre stazioni Netatmo entro 5 km.*
 
 **Gradiente microclima osservato (sera estiva tipica):**
 Trastevere 24.8°C → EUR 24.7°C → Roma Sud 24.1°C → Ostia Lido 23.8°C → Tivoli 23.4°C → Castelli Romani 22.3°C — isola di calore, brezza marina e lapse rate altitudinale tutti visibili contemporaneamente.
@@ -614,6 +620,12 @@ Due funzioni principali:
 
 **Principio architetturale:** la mappa non mostra IDW puro su valori assoluti ma `T_ERA5(x,y) + IDW_correzioni(x,y)`. ERA5 fornisce il campo fisicamente realistico (lapse rate, SST marina, gradiente costa/interno); le 6 stazioni aggiungono la correzione microclima appresa dal modello. Stesso approccio per umidità.
 
+Nuove funzioni aggiunte (giugno 2026): `build_sea_polygon()` — chiude `LATIUM_COAST` in un poligono mare/terra; `is_sea_mask()` — point-in-polygon vettorizzato via `matplotlib.path.Path`; `compute_coast_distance_grid()` — distanza punto-**segmento** (non solo vertice) dalla costa, evita artefatti circolari attorno ai promontori; `compute_sea_blend_weight()` — peso blend SST asimmetrico lato mare (smoothstep su fascia 25 km, `w=0` su tutta la terraferma incluse stazioni costiere).
+
+### `sst.py`
+
+Fetch Sea Surface Temperature da Open-Meteo Marine API (`marine-api.open-meteo.com/v1/marine`, variabile `sea_surface_temperature`). 5 punti offshore lungo la costa laziale (Civitavecchia, Fiumicino, Anzio, Sabaudia, Gaeta). Cache su `data/sst_cache.json` con TTL 4h — committata da `export.yml` così persiste tra run stateless di GitHub Actions. Fallback su cache scaduta se API non disponibile; se nessuna cache, restituisce `None` senza crashare (comportamento legacy).
+
 ### `scripts/export_static.py` — Export JSON per GitHub Pages ✅
 
 Eseguito ogni 30 min da `export.yml`. Pipeline:
@@ -711,6 +723,11 @@ python3 scripts/export_static.py
 | Mappa umidità fisicamente sbagliata: mare più secco dell'entroterra | IDW puro non ha conoscenza fisica del territorio — interpola geometricamente tra stazioni senza sapere che il mare è sorgente di umidità | Sostituito IDW puro con ERA5 background (`relativehumidity_2m`) + IDW correzioni microclima, identico all'approccio temperatura |
 | Click popup mostra valori diversi dal colore heatmap | Popup usava IDW da 6 stazioni (valori assoluti), heatmap usava ERA5+correzioni — due calcoli diversi sullo stesso punto | Sostituito `idwPoint` con `lookupGrid` (lookup bilineare diretto sul grid JSON) — garantisce coerenza esatta tra colore e valore mostrato |
 | Particelle vento non visibili, nessun errore apparente | `parameterUnit` assente nell'header leaflet-velocity (necessario per display) | Aggiunto `"parameterUnit": "m.s-1"` agli header U e V |
+| Login ARSIAL SIARL non automatizzabile | siarl.arsial.it richiede CIE/SPID (identità digitale nazionale) | Download manuale CSV + bias correction one-shot |
+| Temperatura mare gonfiata (31°C su Ostia) | IDW spalma correzione stazioni di terra anche sulle celle di mare; nessuna distinzione terra/mare nella griglia | SST reale da Marine API + maschera `is_sea_mask` + blend graduale asimmetrico in `export_static.py` |
+| Bordo netto / arcobaleno lungo la costa | Maschera binaria (`np.where`) + fascia blend troppo stretta (10 km) + distanza da vertice crea cerchi concentrici sui promontori (Circeo) | Distanza punto-segmento + smoothstep su fascia 25 km + blend asimmetrico (w=0 su terra, 0→1 solo verso mare) |
+| Riga diagonale artificiale sopra Civitavecchia | `LATIUM_COAST` si fermava a 42.10° (Civitavecchia); il poligono chiudeva dritto all'angolo del bbox classificando Tarquinia/Orbetello come mare | Estesa la coastline a nord fino a (42.85, 10.85) seguendo la costa reale Toscana; il poligono si restringe a zero naturalmente nell'angolo NO |
+| `ModuleNotFoundError: No module named 'matplotlib'` | Aggiunto a `requirements.txt` ma non installato nell'ambiente `meteo` locale; il blocco SST in `export_static.py` falliva silenziosamente nel try/except | `pip install matplotlib` nell'ambiente conda `meteo`; aggiunto anche a `pip install` nel workflow |
 
 ---
 
@@ -752,6 +769,15 @@ python3 db.py   # verifica connessione
 **Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
 
 **Prossima scadenza fissa: Dicembre 2026** — retraining completo con Netatmo accumulato.
+
+**Completato (giugno 2026):**
+- Correzione SST sul mare: `sst.py` + blend graduale asimmetrico in `grid.py` + `export_static.py`; `LATIUM_COAST` estesa da Anzio→Gaeta a sud e fino a (42.85, 10.85) a nord
+- Toggle T / T+1h sulla mappa: `temp_grid_observed` + `temp_grid_forecast` in `latest.json`; scala colori unificata tra i due stati
+- 4 nuove stazioni (id 51–54): Fiano Romano, Civitavecchia, Filettino 1044m, Gaeta; `min_cluster=1` per microclima `quota`
+
+**Prossimo task immediato:** Fase 4b — dashboard GitHub Pages con Chart.js (forecast vs observed, MAE per stazione, ultime osservazioni). Estendere `export_static.py` per esportare `dashboard_data.json`; aggiungere `dashboard.html` al sito; aggiornato dallo stesso `export.yml` già esistente — niente Streamlit Cloud.
+
+Poi Fase 4a — pipeline Open-Meteo *Forecast* API per le 48h (versione 0) e verifica *Historical Forecast* API, dato che condiziona lo schema della nuova tabella di training.
 
 **Miglioramenti futuri mappa:**
 - Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
