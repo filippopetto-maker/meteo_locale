@@ -45,11 +45,11 @@
     { t: 1.000, r: 0x67, g: 0x00, b: 0x1f },
   ];
   const HUM_PALETTE = [
-    { t: 0.00, r: 0xd4, g: 0x87, b: 0x5a }, // #d4875a — terracotta/secco
-    { t: 0.25, r: 0xf5, g: 0xde, b: 0xb3 }, // #f5deb3 — grano/neutro
-    { t: 0.50, r: 0xc8, g: 0xe6, b: 0xf5 }, // #c8e6f5 — azzurro chiaro
-    { t: 0.75, r: 0x4d, g: 0x9d, b: 0xe0 }, // #4d9de0 — blu medio
-    { t: 1.00, r: 0x02, g: 0x38, b: 0x58 }, // #023858 — blu profondo/umido
+    { t: 0.00, r: 0xd9, g: 0x6f, b: 0x27 }, // #d96f27 — arancio secco
+    { t: 0.30, r: 0xfe, g: 0xe0, b: 0x80 }, // #fee080 — giallo paglierino
+    { t: 0.50, r: 0xb0, g: 0xe0, b: 0x90 }, // #b0e090 — verde chiaro (pivot visivo)
+    { t: 0.75, r: 0x31, g: 0x7e, b: 0xc8 }, // #317ec8 — blu medio
+    { t: 1.00, r: 0x08, g: 0x30, b: 0x6b }, // #08306b — blu scuro umido
   ];
 
   function lerp(a, b, f) { return a + (b - a) * f; }
@@ -256,7 +256,7 @@
         document.getElementById('legend-bar').style.background =
           layer === 'temperature'
             ? 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)'
-            : 'linear-gradient(to right, #d4875a, #f5deb3, #c8e6f5, #4d9de0, #023858)';
+            : 'linear-gradient(to right, #d96f27, #fee080, #b0e090, #317ec8, #08306b)';
         const labelsEl = document.getElementById('legend-labels');
         labelsEl.innerHTML = '';
         const ticks = layer === 'temperature'
