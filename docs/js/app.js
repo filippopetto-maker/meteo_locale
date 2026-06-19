@@ -98,7 +98,7 @@
   function renderTemperature(latest, time) {
     const tg = time === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
     if (!tg || !tg.values || tg.values.length === 0) return null;
-    return renderGridLayer(tg, tg.t_min, tg.t_max, TEMP_PALETTE);
+    return renderGridLayer(tg, globalTMin, globalTMax, TEMP_PALETTE);
   }
 
   function renderHumidity(latest) {
@@ -110,6 +110,10 @@
   // Stato layer attivo
   let activeLayer = 'temperature';
   let activeTime = 'observed';  // 'observed' | 'forecast'
+
+  // Range temperatura unificato tra le due griglie (Adesso e +1h)
+  let globalTMin = 0;
+  let globalTMax = 40;
   let heatOverlay = null;
 
   const MICROCLIMA_COLORS = {
@@ -217,6 +221,12 @@
       const latest   = await latestRes.json();
       const windGrid = windRes.ok ? await windRes.json() : null;
 
+      // Range unificato T / T+1 — scala fissa per rendere confrontabile il toggle
+      const tgObs = latest.temp_grid_observed;
+      const tgFc  = latest.temp_grid_forecast;
+      globalTMin = Math.min(tgObs?.t_min ?? Infinity,  tgFc?.t_min ?? Infinity);
+      globalTMax = Math.max(tgObs?.t_max ?? -Infinity, tgFc?.t_max ?? -Infinity);
+
       // Pannello info — top-left con toggle layer
       const infoPanel = L.DomUtil.create('div', 'info-panel');
       infoPanel.innerHTML =
@@ -270,11 +280,7 @@
           heatOverlay = renderTemperature(latest, activeTime);
           document.getElementById('btn-temp').classList.add('active');
           document.getElementById('btn-hum').classList.remove('active');
-          const tg = activeTime === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
-          if (tg) {
-            const [vMin, vMax] = ensureMinSpan(tg.t_min, tg.t_max, TEMP_MIN_SPAN);
-            updateLegend('temperature', vMin, vMax, '°C');
-          }
+          updateLegend('temperature', globalTMin, globalTMax, '°C');
         } else {
           heatOverlay = renderHumidity(latest);
           document.getElementById('btn-temp').classList.remove('active');
