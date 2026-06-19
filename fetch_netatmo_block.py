@@ -283,10 +283,11 @@ def fetch_netatmo(
             if _haversine_km(ps_lat, ps_lon, s["lat"], s["lon"]) <= NETATMO_RADIUS_KM
         ]
 
-        if len(nearby) < NETATMO_MIN_CLUSTER:
+        min_cluster = 1 if ps.get("microclima") == "quota" else NETATMO_MIN_CLUSTER
+        if len(nearby) < min_cluster:
             logger.warning(
                 f"[Netatmo] st.{ps_id} ({ps_name}): {len(nearby)} stazioni entro "
-                f"{NETATMO_RADIUS_KM} km — sotto la soglia ({NETATMO_MIN_CLUSTER}), skip"
+                f"{NETATMO_RADIUS_KM} km — sotto la soglia ({min_cluster}), skip"
             )
             continue
 
