@@ -223,15 +223,15 @@ def fetch_observations_metar(stations: list[dict]) -> list[dict]:
 NETATMO_TOKEN_URL   = "https://api.netatmo.com/oauth2/token"
 NETATMO_PUBDATA_URL = "https://api.netatmo.com/api/getpublicdata"
 
-# Bounding box Roma metropolitana (copre tutta l'area progetto + margine)
-ROMA_BBOX = {
-    "lat_ne": 42.85,
-    "lon_ne": 14.05,
-    "lat_sw": 41.18,
-    "lon_sw": 11.40,
-}
-# Nota: nome storico "ROMA_BBOX" mantenuto per non rompere altri riferimenti,
-# ma ora copre l'intero Lazio (allineato al bbox usato in grid.py/export_static.py).
+# 5 sotto-bbox sovrapposti che coprono l'intero Lazio.
+# La sovrapposizione è intenzionale: la dedup su _id evita duplicati.
+LAZIO_BBOXES = [
+    {"lat_sw": 41.50, "lat_ne": 42.20, "lon_sw": 12.05, "lon_ne": 12.95},  # Roma metro
+    {"lat_sw": 41.75, "lat_ne": 42.70, "lon_sw": 11.40, "lon_ne": 12.70},  # Lazio nord
+    {"lat_sw": 41.18, "lat_ne": 41.80, "lon_sw": 12.25, "lon_ne": 13.45},  # Lazio sud-ovest
+    {"lat_sw": 41.18, "lat_ne": 42.15, "lon_sw": 12.95, "lon_ne": 14.05},  # Lazio est
+    {"lat_sw": 42.00, "lat_ne": 42.85, "lon_sw": 12.30, "lon_ne": 13.35},  # Lazio nord-est
+]
 
 NETATMO_RADIUS_KM  = 5.0   # raggio aggregazione per stazione progetto
 NETATMO_MIN_CLUSTER = 2    # minimo stazioni Netatmo nel raggio per procedere
@@ -355,24 +355,34 @@ def fetch_netatmo(
         logger.error(f"[Netatmo] Token refresh fallito: {exc}")
         return []
 
-    try:
-        r = requests.get(
-            NETATMO_PUBDATA_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            params={
-                **ROMA_BBOX,
-                "required_data": "temperature",
-                "filter":        "true",
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        raw_stations = r.json().get("body", [])
-    except Exception as exc:
-        logger.error(f"[Netatmo] getpublicdata fallito: {exc}")
-        return []
-
-    logger.info(f"[Netatmo] {len(raw_stations)} stazioni raw nel bbox")
+    raw_stations: list[dict] = []
+    seen_ids: set[str] = set()
+    for bbox in LAZIO_BBOXES:
+        try:
+            r = requests.get(
+                NETATMO_PUBDATA_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    **bbox,
+                    "required_data": "temperature",
+                    "filter":        "true",
+                },
+                timeout=30,
+            )
+            r.raise_for_status()
+            batch = r.json().get("body", [])
+        except Exception as exc:
+            logger.warning(f"[Netatmo] getpublicdata fallito per bbox {bbox}: {exc}")
+            continue
+        new = 0
+        for s in batch:
+            sid = s.get("_id")
+            if sid and sid not in seen_ids:
+                seen_ids.add(sid)
+                raw_stations.append(s)
+                new += 1
+        logger.info(f"[Netatmo] bbox {bbox}: {len(batch)} stazioni ({new} nuove dopo dedup)")
+    logger.info(f"[Netatmo] {len(raw_stations)} stazioni raw totali (dedup su {len(LAZIO_BBOXES)} bbox)")
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
     parsed = [
@@ -399,7 +409,10 @@ def fetch_netatmo(
             s for s in parsed
             if _haversine_km_nt(ps_lat, ps_lon, s["lat"], s["lon"]) <= NETATMO_RADIUS_KM
         ]
-        min_cluster = 1 if (ps["id"] >= 39 or ps.get("microclima") == "quota") else NETATMO_MIN_CLUSTER
+        min_cluster = 1 if (
+            ps["id"] >= 39
+            or ps.get("microclima") in ("quota", "alta_quota", "colline_interne")
+        ) else NETATMO_MIN_CLUSTER
         if len(nearby) < min_cluster:
             logger.warning(
                 f"[Netatmo] st.{ps_id} ({ps_name}): {len(nearby)} stazioni entro "
