@@ -225,11 +225,13 @@ NETATMO_PUBDATA_URL = "https://api.netatmo.com/api/getpublicdata"
 
 # Bounding box Roma metropolitana (copre tutta l'area progetto + margine)
 ROMA_BBOX = {
-    "lat_ne": 42.25,
-    "lon_ne": 13.00,
-    "lat_sw": 41.50,
-    "lon_sw": 11.95,
+    "lat_ne": 42.85,
+    "lon_ne": 14.05,
+    "lat_sw": 41.18,
+    "lon_sw": 11.40,
 }
+# Nota: nome storico "ROMA_BBOX" mantenuto per non rompere altri riferimenti,
+# ma ora copre l'intero Lazio (allineato al bbox usato in grid.py/export_static.py).
 
 NETATMO_RADIUS_KM  = 5.0   # raggio aggregazione per stazione progetto
 NETATMO_MIN_CLUSTER = 2    # minimo stazioni Netatmo nel raggio per procedere
@@ -397,10 +399,11 @@ def fetch_netatmo(
             s for s in parsed
             if _haversine_km_nt(ps_lat, ps_lon, s["lat"], s["lon"]) <= NETATMO_RADIUS_KM
         ]
-        if len(nearby) < NETATMO_MIN_CLUSTER:
+        min_cluster = 1 if (ps["id"] >= 39 or ps.get("microclima") == "quota") else NETATMO_MIN_CLUSTER
+        if len(nearby) < min_cluster:
             logger.warning(
                 f"[Netatmo] st.{ps_id} ({ps_name}): {len(nearby)} stazioni entro "
-                f"{NETATMO_RADIUS_KM} km — sotto soglia ({NETATMO_MIN_CLUSTER}), skip"
+                f"{NETATMO_RADIUS_KM} km — sotto soglia ({min_cluster}), skip"
             )
             continue
 
