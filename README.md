@@ -2,7 +2,7 @@
 
 Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
-**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità + particelle vento). GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **10 stazioni attive** su tutto il Lazio con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h).
+**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità + particelle vento). GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **27 stazioni attive** su tutto il Lazio con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h).
 
 ---
 
@@ -62,20 +62,37 @@ Con una sola stazione le feature orografiche (quota, distanza dal mare, esposizi
 
 Le feature orografiche diventano predittori appresi e generalizzabili **solo addestrando simultaneamente su più stazioni con profili di terreno contrastanti** (costiero, pianura, urbano denso, quota).
 
-**Stazioni attive (10, profili contrastanti):**
+**Stazioni attive (27, profili contrastanti):**
 
-| ID | Nome | Fonte live | Profilo | Alt | Dist. mare |
-|:---|:-----|:-----------|:--------|:----|:-----------|
-| 3  | Roma Sud – Casal Palocco | METAR LIRF + Netatmo | standard, suburbano | 15 m | 7 km |
-| 25 | Ostia Lido | Netatmo | costiera, prima linea | 14 m | 0.4 km |
-| 26 | EUR | Netatmo | urban_canyon, sud | 27 m | 19 km |
-| 27 | Trastevere | Netatmo | urban_canyon, centro storico | 27 m | 22 km |
-| 28 | Tivoli | Netatmo | quota, versante collinare est | 226 m | 48 km |
-| 29 | Castelli Romani | Netatmo | quota, Frascati ~342 m | 342 m | 29 km |
-| 51 | Fiano Romano | Netatmo | collinare, vallata Tevere nord | 92 m | 47.7 km |
-| 52 | Civitavecchia | Netatmo | brezza_marina, porto tirrenico | 25 m | 0.8 km |
-| 53 | Filettino | Netatmo | quota, Appennino laziale | 1044 m | 67.2 km |
-| 54 | Gaeta | Netatmo | brezza_marina, golfo di Gaeta | 12 m | 0.9 km |
+| ID | Nome | Fonte | Profilo | Alt | Dist. mare |
+|:---|:-----|:------|:--------|:----|:-----------|
+| 3 | Roma Sud (Casal Palocco) | METAR + Netatmo | standard | 15 m | 7.0 km |
+| 25 | Ostia Lido | Netatmo | costiera | 14 m | 0.4 km |
+| 26 | EUR | Netatmo | urban_canyon | 27 m | 19.1 km |
+| 27 | Trastevere | Netatmo | urban_canyon | 27 m | 22.5 km |
+| 28 | Tivoli | Netatmo | colline_interne | 226 m | 47.7 km |
+| 29 | Castelli Romani | Netatmo | quota | 342 m | 29.3 km |
+| 33 | Pratica di Mare | METAR + Netatmo | standard | 16 m | 4.9 km |
+| 34 | Cerveteri Ladispoli | Netatmo | costiera | 10 m | 0.4 km |
+| 35 | Saxa Rubra | Netatmo | standard | 48 m | 30.3 km |
+| 36 | Selva Nera | Netatmo | standard | 78 m | 16.6 km |
+| 37 | Cisterna Latina | Netatmo | standard | 81 m | 22.6 km |
+| 38 | Bracciano | Netatmo | colline_interne | 296 m | 19.1 km |
+| 39 | Viterbo | Netatmo | colline_interne | 339 m | 42.1 km |
+| 40 | Santa Marinella | Netatmo | costiera | 23 m | 3.9 km |
+| 41 | Latina | Netatmo | pianura | 29 m | 21.2 km |
+| 42 | Ardea | Netatmo | costiera | 50 m | 8.3 km |
+| 43 | Sabaudia | Netatmo | costiera | 24 m | 44.7 km |
+| 44 | Ceccano | Netatmo | fondovalle | 205 m | 62.8 km |
+| 46 | Labaro | Netatmo | fondovalle | 22 m | 30.4 km |
+| 47 | Anagni / Ciociaria alta | Netatmo | colline_interne | 259 m | 42.9 km |
+| 48 | Cassino / Liri Sud | Netatmo | fondovalle | 44 m | 100.3 km |
+| 49 | Fondi | Netatmo | pianura | 4 m | 67.0 km |
+| 50 | Rieti | Netatmo | colline_interne | 393 m | 82.8 km |
+| 51 | Fiano Romano | Netatmo | fondovalle | 92 m | 47.7 km |
+| 52 | Civitavecchia | Netatmo | brezza_marina | 25 m | 0.8 km |
+| 53 | Filettino | Netatmo | alta_quota | 1044 m | 67.2 km |
+| 54 | Gaeta | Netatmo | brezza_marina | 12 m | 0.9 km |
 
 *Stazioni inattive (storico conservato): id 1 Roma Nord, id 2 Roma Centro (duplicati METAR LIRA), id 4 Ostia (sostituita da Ostia Lido).*
 
@@ -728,6 +745,8 @@ python3 scripts/export_static.py
 | Bordo netto / arcobaleno lungo la costa | Maschera binaria (`np.where`) + fascia blend troppo stretta (10 km) + distanza da vertice crea cerchi concentrici sui promontori (Circeo) | Distanza punto-segmento + smoothstep su fascia 25 km + blend asimmetrico (w=0 su terra, 0→1 solo verso mare) |
 | Riga diagonale artificiale sopra Civitavecchia | `LATIUM_COAST` si fermava a 42.10° (Civitavecchia); il poligono chiudeva dritto all'angolo del bbox classificando Tarquinia/Orbetello come mare | Estesa la coastline a nord fino a (42.85, 10.85) seguendo la costa reale Toscana; il poligono si restringe a zero naturalmente nell'angolo NO |
 | `ModuleNotFoundError: No module named 'matplotlib'` | Aggiunto a `requirements.txt` ma non installato nell'ambiente `meteo` locale; il blocco SST in `export_static.py` falliva silenziosamente nel try/except | `pip install matplotlib` nell'ambiente conda `meteo`; aggiunto anche a `pip install` nel workflow |
+| Stazioni Tivoli/Filettino/Cassino sempre "osservata: n/d" | Due funzioni `fetch_netatmo()` esistevano in due file diversi (`mainMETEO.py` e `fetch_netatmo_block.py`); solo `mainMETEO.py` è collegata a `ingestion.yml`, l'altra non è mai stata eseguita in produzione nonostante avesse `LAZIO_BBOXES` e la fix `min_cluster` già pronte | Fix applicate sul file giusto (`mainMETEO.py`); `fetch_netatmo_block.py` rinominato `_unused_fetch_netatmo_block.py` per evitare confusione futura |
+| `getpublicdata` Netatmo azzera cluster su zone dense (EUR, Trastevere) con bbox esteso a tutto il Lazio | L'API sembra avere un tetto di risultati per chiamata: bbox più ampio non aggiunge stazioni nelle zone dense, le diluisce a favore di copertura geografica più ampia | 5 sotto-bbox (`LAZIO_BBOXES`, margine 0.15° di sovrapposizione) con fetch separato + merge deduplicato su `_id` Netatmo, invece di un singolo bbox per tutto il Lazio |
 
 ---
 
@@ -773,7 +792,11 @@ python3 db.py   # verifica connessione
 **Completato (giugno 2026):**
 - Correzione SST sul mare: `sst.py` + blend graduale asimmetrico in `grid.py` + `export_static.py`; `LATIUM_COAST` estesa da Anzio→Gaeta a sud e fino a (42.85, 10.85) a nord
 - Toggle T / T+1h sulla mappa: `temp_grid_observed` + `temp_grid_forecast` in `latest.json`; scala colori unificata tra i due stati
-- 4 nuove stazioni (id 51–54): Fiano Romano, Civitavecchia, Filettino 1044m, Gaeta; `min_cluster=1` per microclima `quota`
+- 4 nuove stazioni (id 51–54): Fiano Romano, Civitavecchia, Filettino 1044m, Gaeta
+- Palette umidità ridisegnata per contrasto reale nel range 40-80% (pivot verde)
+- Fix copertura Netatmo: `mainMETEO.py` portato da `ROMA_BBOX` singolo a `LAZIO_BBOXES` (5 sotto-zone con dedup), risolve sia i buchi geografici (Cassino, Filettino) sia il "soffocamento" delle zone dense (EUR, Trastevere) causato dal tetto di risultati per chiamata Netatmo
+- `min_cluster` rilassato a 1 per id≥39 e per microclima `quota`/`alta_quota`/`colline_interne`
+- Pulizia naming: rinominate stazioni con nomi duplicati/imprecisi (Saxa Rubra id46→Labaro, Gaeta/Formia id49→Fondi); riclassificati microclima (Tivoli/Bracciano/Rieti→`colline_interne`, Filettino→`alta_quota`, isolando `quota` alla sola Castelli Romani)
 
 **Prossimo task immediato:** Fase 4b — dashboard GitHub Pages con Chart.js (forecast vs observed, MAE per stazione, ultime osservazioni). Estendere `export_static.py` per esportare `dashboard_data.json`; aggiungere `dashboard.html` al sito; aggiornato dallo stesso `export.yml` già esistente — niente Streamlit Cloud.
 
