@@ -107,6 +107,13 @@
     return renderGridLayer(hg, HUM_SCALE_MIN, HUM_SCALE_MAX, HUM_PALETTE, 179);
   }
 
+  let windUnit = 'kmh'; // 'kmh' | 'kts'
+
+  function formatWind(kmh) {
+    if (windUnit === 'kts') return (kmh * 0.539957).toFixed(1) + ' kts';
+    return kmh.toFixed(1) + ' km/h';
+  }
+
   // Stato layer attivo
   let activeLayer = 'temperature';
   let activeTime = 'observed';  // 'observed' | 'forecast'
@@ -123,11 +130,30 @@
     standard:      '#f39c12',
   };
 
-  function renderStations(map, stations) {
-    stations.forEach(st => {
+  function updateStationPopups(markers, stations) {
+    stations.forEach((st, i) => {
       const fc = st.forecast;
       const ob = st.observation;
+      const tPrev = fc?.temperature    != null ? fc.temperature.toFixed(1)  + '°C' : 'n/d';
+      const tOss  = ob?.temperature    != null ? ob.temperature.toFixed(1)  + '°C' : 'n/d';
+      const vento = fc?.wind_speed     != null ? formatWind(fc.wind_speed)          : 'n/d';
+      const dir   = fc?.wind_direction != null ? degreesToCardinal(fc.wind_direction) : 'n/d';
+      const wName = fc?.wind_direction != null ? windName(fc.wind_direction)        : '';
+      const hum   = fc?.humidity       != null ? fc.humidity.toFixed(0)     + '%'  : 'n/d';
+      const ore   = fc?.valid_for      ? formatTime(fc.valid_for) : '';
+      markers[i].setPopupContent(
+        `<b>${st.name}</b> <small style="opacity:.7">${st.microclima}</small><br>` +
+        `🌡️ Prevista: <b>${tPrev}</b> — Osservata: <b>${tOss}</b><br>` +
+        `💨 <b>${vento}</b> da <b>${dir}</b><br>` +
+        (wName ? `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` : '') +
+        `💧 Umidità: <b>${hum}</b><br>` +
+        `<small style="opacity:.6">Valido ore ${ore}</small>`
+      );
+    });
+  }
 
+  function renderStations(map, stations) {
+    const markers = stations.map(st => {
       const marker = L.circleMarker([st.lat, st.lon], {
         radius:      8,
         color:       '#fff',
@@ -135,25 +161,11 @@
         fillColor:   '#9ca3af',
         fillOpacity: 0.9,
       }).addTo(map);
-
-      const tPrev = fc?.temperature    != null ? fc.temperature.toFixed(1)  + '°C' : 'n/d';
-      const tOss  = ob?.temperature    != null ? ob.temperature.toFixed(1)  + '°C' : 'n/d';
-      const vento = fc?.wind_speed     != null ? fc.wind_speed.toFixed(1)   + ' km/h' : 'n/d';
-      const dir   = fc?.wind_direction != null ? degreesToCardinal(fc.wind_direction) : 'n/d';
-      const wName = fc?.wind_direction != null ? windName(fc.wind_direction) : '';
-      const hum   = fc?.humidity       != null ? fc.humidity.toFixed(0)     + '%' : 'n/d';
-      const ore   = fc?.valid_for      ? formatTime(fc.valid_for) : '';
-
-      marker.bindPopup(
-        `<b>${st.name}</b> <small style="opacity:.7">${st.microclima}</small><br>` +
-        `🌡️ Prevista: <b>${tPrev}</b> — Osservata: <b>${tOss}</b><br>` +
-        `💨 <b>${vento}</b> da <b>${dir}</b><br>` +
-        (wName ? `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` : '') +
-        `💧 Umidità: <b>${hum}</b><br>` +
-        `<small style="opacity:.6">Valido ore ${ore}</small>`,
-        { maxWidth: 220 }
-      );
+      marker.bindPopup('', { maxWidth: 220 });
+      return marker;
     });
+    updateStationPopups(markers, stations);
+    return markers;
   }
 
   function renderWind(map, windGrid) {
@@ -306,7 +318,7 @@
 
       switchLayer('temperature');
       const stations = latest.stations || [];
-      renderStations(map, stations);
+      const markers = renderStations(map, stations);
 
       if (stations.length > 0) {
         const bounds = stations.map(st => [st.lat, st.lon]);
@@ -354,7 +366,7 @@
           return (
             `<b>${localita}</b><br>` +
             `🌡️ <b>${temp !== null ? temp.toFixed(1) + '°C' : 'n/d'}</b><br>` +
-            `💨 <b>${speed.toFixed(1)} km/h</b> — ${cardinal}<br>` +
+            `💨 <b>${formatWind(speed)}</b> — ${cardinal}<br>` +
             `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` +
             `💧 Umidità: <b>${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>`
           );
@@ -370,6 +382,13 @@
 
         const localita = await getLocalityName(lat, lng);
         if (!popupClosed) popup.setContent(buildContent(localita));
+      });
+
+      document.querySelectorAll('input[name="wind-unit"]').forEach(radio => {
+        radio.addEventListener('change', e => {
+          windUnit = e.target.value;
+          updateStationPopups(markers, stations);
+        });
       });
 
       document.getElementById('wind-check').addEventListener('change', e => {

@@ -2,7 +2,7 @@
 
 Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
-**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità + particelle vento). GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **27 stazioni attive** su tutto il Lazio con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h).
+**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità + particelle vento). GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **32 stazioni attive** su tutto il Lazio (6 Roma metro + 26 espansione Lazio) con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h).
 
 ---
 
@@ -62,7 +62,7 @@ Con una sola stazione le feature orografiche (quota, distanza dal mare, esposizi
 
 Le feature orografiche diventano predittori appresi e generalizzabili **solo addestrando simultaneamente su più stazioni con profili di terreno contrastanti** (costiero, pianura, urbano denso, quota).
 
-**Stazioni attive (27, profili contrastanti):**
+**Stazioni attive (32, profili contrastanti):**
 
 | ID | Nome | Fonte | Profilo | Alt | Dist. mare |
 |:---|:-----|:------|:--------|:----|:-----------|
@@ -93,6 +93,13 @@ Le feature orografiche diventano predittori appresi e generalizzabili **solo add
 | 52 | Civitavecchia | Netatmo | brezza_marina | 25 m | 0.8 km |
 | 53 | Filettino | Netatmo | alta_quota | 1044 m | 67.2 km |
 | 54 | Gaeta | Netatmo | brezza_marina | 12 m | 0.9 km |
+| 56 | Rocca Sinibalda | Netatmo | alta_quota, Appennino reatino | 980 m | 80 km |
+| 57 | Sigillo | Netatmo | quota, Appennino nord | 648 m | 102 km |
+| 58 | Tarquinia | Netatmo | costiera, costa nord Viterbo | 138 m | 0.3 km |
+| 59 | Tor Bella Monaca | Netatmo | urban_canyon, periferia est Roma | 70 m | 31 km |
+| 60 | Tor Vergata Est | Netatmo | urban_canyon, periferia est Roma | 59 m | 29 km |
+
+*In sospeso: Castelli Romani alta quota (~530m, `quota`, MAC `70:ee:50:2c:be:10`) — offline al 23/06/2026, da aggiungere come id 61 quando torna attiva.*
 
 *Stazioni inattive (storico conservato): id 1 Roma Nord, id 2 Roma Centro (duplicati METAR LIRA), id 4 Ostia (sostituita da Ostia Lido).*
 
@@ -211,7 +218,7 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
 
 ### Etichette microclima (schema Supabase)
 
-`urban_canyon` · `esposta_sole` · `quota` · `costiera` · `verde_parco` · `standard`
+`urban_canyon` · `esposta_sole` · `quota` · `alta_quota` · `costiera` · `colline_interne` · `verde_parco` · `standard`
 
 ---
 
@@ -262,9 +269,22 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
 - [x] `db.py`: `raw_source` ora incluso nell'insert `observations`
 - [x] `db.py`: upsert `observations` con `ignore_duplicates=True` — fix errore 409 su METAR timestamp fisso
 - [x] Schema `stations` arricchito: `microclima`, `dist_sea_km`, `dist_center_km`, `bearing_sea`
-- [x] Rete espansa da 4 a **6 stazioni attive**: Ostia Lido, EUR, Trastevere, Tivoli, Castelli Romani
+- [x] Rete espansa 4 → **6 stazioni attive** Roma metro: Ostia Lido, EUR, Trastevere, Tivoli, Castelli Romani
 - [x] `qc.py` `STATION_TYPES` aggiornato con nuovi ID (25–29)
 - [x] Secrets `NETATMO_CLIENT_ID`, `NETATMO_CLIENT_SECRET`, `NETATMO_REFRESH_TOKEN` configurati in GitHub Actions
+
+### ✅ Blocco 5b — Espansione rete Lazio (COMPLETATA — giugno 2026)
+
+- [x] Rete espansa da 6 → **32 stazioni attive** su tutto il Lazio (commit `82467c6`)
+- [x] LAZIO_BBOXES: 5 sub-bbox sovrapposte con deduplicazione MAC address (sostituisce ROMA_BBOX)
+- [x] `min_cluster=1` per stazioni id≥39 o microclima in `quota`/`alta_quota`/`colline_interne`
+- [x] Stazioni 56–60 aggiunte il 23/06/2026:
+  - 56 Rocca Sinibalda (alta_quota, 980m, Appennino reatino)
+  - 57 Sigillo (quota, 648m, Appennino nord)
+  - 58 Tarquinia (costiera, 138m, costa nord Viterbo)
+  - 59 Tor Bella Monaca (urban_canyon, 70m, periferia est Roma)
+  - 60 Tor Vergata Est (urban_canyon, 59m, coordinate approssimative)
+- [ ] Castelli Romani alta quota (~530m, MAC `70:ee:50:2c:be:10`) — offline, da aggiungere come id 61
 
 ### 🔄 Blocco 6 — Pipeline live Phase 2c (PROSSIMA)
 
@@ -287,6 +307,10 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
 4. [ ] Target pioggia puntuale (mm)
 5. [ ] LCZ Copernicus per isola di calore
 6. [ ] **Dicembre 2026**: retraining completo con Netatmo accumulato + ARSIAL daily
+   - ARSIAL daily come **validazione** e cross-check sui bias stagionali
+   - Stazioni 56–60 (e 61 se attiva): escono dal cold start, modello impara i gradienti orografici reali
+   - Feature aggiuntive già in pipeline: `precipitation`, `cloudcover`, `shortwave_radiation` (ERA5 + NWP)
+   - Lag e rolling su `precipitation` e `shortwave_radiation` da aggiungere in `features.py` prima del retraining
 
 ---
 
@@ -355,6 +379,11 @@ qualità dipende da quanto il profilo orografico è rappresentato nel training:
 | Trastevere (27) | urban_canyon | 🟡 Discreta | urban_canyon presente, ma zona più centrale |
 | Tivoli (28) | quota | 🟠 Approssimata | `quota` **mai vista** nel training — extrapolazione da altitude |
 | Castelli Romani (29) | quota | 🟠 Approssimata | quota più alta, massima incertezza sistematica |
+| Rocca Sinibalda (56) | alta_quota | 🔵 Cold start | Extrapolazione fino a dic 2026 |
+| Sigillo (57) | quota | 🔵 Cold start | Extrapolazione fino a dic 2026 |
+| Tarquinia (58) | costiera | 🔵 Cold start | Extrapolazione fino a dic 2026 |
+| Tor Bella Monaca (59) | urban_canyon | 🔵 Cold start | Extrapolazione fino a dic 2026 |
+| Tor Vergata Est (60) | urban_canyon | 🔵 Cold start | Extrapolazione fino a dic 2026 |
 
 ### Il ciclo virtuoso
 
@@ -747,6 +776,12 @@ python3 scripts/export_static.py
 | `ModuleNotFoundError: No module named 'matplotlib'` | Aggiunto a `requirements.txt` ma non installato nell'ambiente `meteo` locale; il blocco SST in `export_static.py` falliva silenziosamente nel try/except | `pip install matplotlib` nell'ambiente conda `meteo`; aggiunto anche a `pip install` nel workflow |
 | Stazioni Tivoli/Filettino/Cassino sempre "osservata: n/d" | Due funzioni `fetch_netatmo()` esistevano in due file diversi (`mainMETEO.py` e `fetch_netatmo_block.py`); solo `mainMETEO.py` è collegata a `ingestion.yml`, l'altra non è mai stata eseguita in produzione nonostante avesse `LAZIO_BBOXES` e la fix `min_cluster` già pronte | Fix applicate sul file giusto (`mainMETEO.py`); `fetch_netatmo_block.py` rinominato `_unused_fetch_netatmo_block.py` per evitare confusione futura |
 | `getpublicdata` Netatmo azzera cluster su zone dense (EUR, Trastevere) con bbox esteso a tutto il Lazio | L'API sembra avere un tetto di risultati per chiamata: bbox più ampio non aggiunge stazioni nelle zone dense, le diluisce a favore di copertura geografica più ampia | 5 sotto-bbox (`LAZIO_BBOXES`, margine 0.15° di sovrapposizione) con fetch separato + merge deduplicato su `_id` Netatmo, invece di un singolo bbox per tutto il Lazio |
+| IDW usava previsioni LGBM invece di osservazioni Netatmo | Bug logico in export_static.py | Corretto: IDW ora usa dati Netatmo reali per stazioni 33–38 |
+
+**23/06/2026 — Aggiornamenti UI:**
+- Toggle unità vento km/h ↔ nodi in `app.js` + `index.html` (radio button sotto checkbox vento)
+- Popup stazioni aggiornato in tempo reale al cambio unità via `setPopupContent`
+- Popup IDW (click mappa) usa `formatWind()` — aggiornato al click successivo
 
 ---
 

@@ -28,6 +28,13 @@
       cursor: pointer;
     }
     #wind-toggle input { cursor: pointer; }
+    .wind-unit-toggle {
+      display: flex;
+      gap: 8px;
+      margin-top: 5px;
+      font-size: 12px;
+    }
+    .wind-unit-toggle label { cursor: pointer; }
 
     /* Pannello info — top-left (iniettato da JS) */
     .info-panel {
@@ -95,6 +102,10 @@
       <input type="checkbox" id="wind-check" checked />
       Mostra vento
     </label>
+    <div class="wind-unit-toggle">
+      <label><input type="radio" name="wind-unit" value="kmh" checked> km/h</label>
+      <label><input type="radio" name="wind-unit" value="kts"> nodi</label>
+    </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
