@@ -436,7 +436,7 @@ def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
     for sid in station_ids:
         fc_rows = (
             client.table("forecasts")
-            .select("valid_for, temperature, forecast_at")
+            .select("valid_for, temperature, humidity, forecast_at")
             .eq("station_id", sid)
             .gte("valid_for", since)
             .order("valid_for")
@@ -450,14 +450,14 @@ def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
             if vf not in fc_by_valid or row["forecast_at"] > fc_by_valid[vf]["forecast_at"]:
                 fc_by_valid[vf] = row
         forecast_series = [
-            {"t": r["valid_for"], "temp": r["temperature"]}
+            {"t": r["valid_for"], "temp": r["temperature"], "hum": r["humidity"]}
             for r in sorted(fc_by_valid.values(), key=lambda x: x["valid_for"])
             if r["temperature"] is not None
         ]
 
         obs_rows = (
             client.table("observations")
-            .select("recorded_at, temperature")
+            .select("recorded_at, temperature, humidity")
             .eq("station_id", sid)
             .gte("recorded_at", since)
             .lt("qc_flag", 2)
@@ -466,7 +466,7 @@ def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
             .data
         )
         observed_series = [
-            {"t": r["recorded_at"], "temp": r["temperature"]}
+            {"t": r["recorded_at"], "temp": r["temperature"], "hum": r["humidity"]}
             for r in obs_rows
             if r["temperature"] is not None
         ]
@@ -492,12 +492,29 @@ def build_dashboard_json(stations: list[dict], series: dict) -> dict:
                     pairs.append(abs(fc["temp"] - obs["temp"]))
                     break
 
+        pairs_hum = []
+        for obs in obs_list:
+            if obs.get("hum") is None:
+                continue
+            obs_t = datetime.fromisoformat(obs["t"].replace("Z", "+00:00"))
+            for fc in fc_list:
+                if fc.get("hum") is None:
+                    continue
+                fc_t = datetime.fromisoformat(fc["t"].replace("Z", "+00:00"))
+                if abs((fc_t - obs_t).total_seconds()) <= 1800:
+                    pairs_hum.append(abs(fc["hum"] - obs["hum"]))
+                    break
+
+        mae_hum = round(sum(pairs_hum) / len(pairs_hum), 3) if pairs_hum else None
+
         if pairs:
             mae_per_station.append({
                 "id": sid,
                 "name": s["name"],
                 "mae": round(sum(pairs) / len(pairs), 3),
                 "n_pairs": len(pairs),
+                "mae_hum": mae_hum,
+                "n_pairs_hum": len(pairs_hum),
             })
         else:
             mae_per_station.append({
@@ -505,10 +522,15 @@ def build_dashboard_json(stations: list[dict], series: dict) -> dict:
                 "name": s["name"],
                 "mae": None,
                 "n_pairs": 0,
+                "mae_hum": mae_hum,
+                "n_pairs_hum": len(pairs_hum),
             })
 
     valid_maes = [e["mae"] for e in mae_per_station if e["n_pairs"] > 0]
     mae_global = round(sum(valid_maes) / len(valid_maes), 3) if valid_maes else None
+
+    valid_maes_hum = [e["mae_hum"] for e in mae_per_station if e["n_pairs_hum"] > 0]
+    mae_global_hum = round(sum(valid_maes_hum) / len(valid_maes_hum), 3) if valid_maes_hum else None
 
     return {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -519,6 +541,7 @@ def build_dashboard_json(stations: list[dict], series: dict) -> dict:
         "series": series,
         "mae_per_station": mae_per_station,
         "mae_global": mae_global,
+        "mae_global_hum": mae_global_hum,
     }
 
 

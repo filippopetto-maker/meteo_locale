@@ -32,9 +32,20 @@
       </label>
     </div>
 
+    <div style="margin-bottom:20px;">
+      <button id="btn-temp" onclick="setVariable('temp')"
+        style="background:rgba(255,255,255,0.25); color:white; border:none; padding:6px 16px; border-radius:4px 0 0 4px; cursor:pointer; font-size:13px;">
+        🌡️ Temperatura
+      </button>
+      <button id="btn-hum" onclick="setVariable('hum')"
+        style="background:rgba(255,255,255,0.08); color:white; border:none; padding:6px 16px; border-radius:0 4px 4px 0; cursor:pointer; font-size:13px;">
+        💧 Umidità
+      </button>
+    </div>
+
     <!-- Chart previsto vs osservato -->
     <div style="background:rgba(255,255,255,0.05); border-radius:8px; padding:16px; margin-bottom:20px;">
-      <h2 style="font-size:15px; margin:0 0 12px 0;">Previsto vs Osservato — ultimi 7 giorni</h2>
+      <h2 id="series-title" style="font-size:15px; margin:0 0 12px 0;">Previsto vs Osservato — Temperatura</h2>
       <canvas id="chart-series" height="120"></canvas>
     </div>
 
@@ -49,7 +60,19 @@
 
   <script>
     let seriesChart = null;
+    let maeChart = null;
     let dashboardData = null;
+    let activeVar = 'temp';
+
+    function setVariable(v) {
+      activeVar = v;
+      document.getElementById('btn-temp').style.background =
+        v === 'temp' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)';
+      document.getElementById('btn-hum').style.background =
+        v === 'hum'  ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)';
+      updateSeriesChart(document.getElementById('station-select').value);
+      buildMaeChart();
+    }
 
     async function loadData() {
       try {
@@ -98,8 +121,14 @@
       const sid = String(stationId);
       const s = (dashboardData.series[sid] || { forecast: [], observed: [] });
 
-      const fcData = s.forecast.map(p => ({ x: new Date(p.t), y: p.temp }));
-      const obsData = s.observed.map(p => ({ x: new Date(p.t), y: p.temp }));
+      const fcData  = s.forecast.map(p => ({ x: new Date(p.t), y: p[activeVar] }))
+                                 .filter(p => p.y !== null && p.y !== undefined);
+      const obsData = s.observed.map(p => ({ x: new Date(p.t), y: p[activeVar] }))
+                                 .filter(p => p.y !== null && p.y !== undefined);
+
+      const unit = activeVar === 'temp' ? '°C' : '%';
+      document.getElementById('series-title').textContent =
+        activeVar === 'temp' ? 'Previsto vs Osservato — Temperatura' : 'Previsto vs Osservato — Umidità';
 
       if (seriesChart) {
         seriesChart.destroy();
@@ -140,7 +169,7 @@
               ticks: { color: 'rgba(255,255,255,0.7)' }
             },
             y: {
-              title: { display: true, text: '°C', color: 'rgba(255,255,255,0.7)' },
+              title: { display: true, text: unit, color: 'rgba(255,255,255,0.7)' },
               grid: { color: 'rgba(255,255,255,0.1)' },
               ticks: { color: 'rgba(255,255,255,0.7)' }
             }
@@ -153,31 +182,45 @@
     }
 
     function buildMaeChart() {
+      const maeField    = activeVar === 'temp' ? 'mae'        : 'mae_hum';
+      const pairsField  = activeVar === 'temp' ? 'n_pairs'    : 'n_pairs_hum';
+      const globalField = activeVar === 'temp' ? 'mae_global' : 'mae_global_hum';
+      const unit        = activeVar === 'temp' ? '°C'         : '%';
+      const threshold   = activeVar === 'temp' ? 1.0          : 5.0;
+
       const maeData = [...dashboardData.mae_per_station].sort((a, b) => {
-        if (a.mae === null && b.mae === null) return 0;
-        if (a.mae === null) return 1;
-        if (b.mae === null) return -1;
-        return a.mae - b.mae;
+        const av = a[maeField], bv = b[maeField];
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv;
       });
 
-      const labels = maeData.map(e => e.mae === null ? e.name + ' (n/d)' : e.name);
-      const values = maeData.map(e => e.mae ?? 0);
+      const labels = maeData.map(e => e[maeField] === null ? e.name + ' (n/d)' : e.name);
+      const values = maeData.map(e => e[maeField] ?? 0);
       const colors = maeData.map(e => {
-        if (e.mae === null) return 'rgba(255,255,255,0.2)';
-        return e.mae < 1.0 ? '#2ecc71' : '#e74c3c';
+        if (e[maeField] === null) return 'rgba(255,255,255,0.2)';
+        return e[maeField] < threshold ? '#2ecc71' : '#e74c3c';
       });
 
-      const global = dashboardData.mae_global;
+      const globalVal = dashboardData[globalField];
       document.getElementById('mae-global').textContent =
-        global !== null ? `MAE medio globale: ${global} °C` : 'MAE medio globale: n/d';
+        globalVal !== null && globalVal !== undefined
+          ? `MAE medio globale: ${globalVal} ${unit}`
+          : 'MAE medio globale: n/d';
+
+      if (maeChart) {
+        maeChart.destroy();
+        maeChart = null;
+      }
 
       const ctx = document.getElementById('chart-mae').getContext('2d');
-      new Chart(ctx, {
+      maeChart = new Chart(ctx, {
         type: 'bar',
         data: {
           labels,
           datasets: [{
-            label: 'MAE (°C)',
+            label: `MAE (${unit})`,
             data: values,
             backgroundColor: colors,
             borderColor: 'transparent',
@@ -188,7 +231,7 @@
           responsive: true,
           scales: {
             x: {
-              title: { display: true, text: '°C', color: 'rgba(255,255,255,0.7)' },
+              title: { display: true, text: unit, color: 'rgba(255,255,255,0.7)' },
               grid: { color: 'rgba(255,255,255,0.1)' },
               ticks: { color: 'rgba(255,255,255,0.7)' }
             },
