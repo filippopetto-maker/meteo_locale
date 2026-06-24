@@ -420,6 +420,117 @@ def main() -> None:
 
     log.info("Export completato.")
 
+    log.info("Calcolo dashboard_data.json...")
+    dashboard_series = fetch_dashboard_series(station_ids, days=7)
+    dashboard = build_dashboard_json(stations, dashboard_series)
+    dashboard_path = DOCS_DATA / "dashboard_data.json"
+    dashboard_path.write_text(json.dumps(dashboard, indent=2, ensure_ascii=False))
+    log.info(f"  Scritto {dashboard_path}")
+
+
+def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
+    """Recupera serie storiche forecast+observed per ogni stazione (ultimi `days` giorni)."""
+    client = get_client()
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    result: dict[str, dict] = {}
+    for sid in station_ids:
+        fc_rows = (
+            client.table("forecasts")
+            .select("valid_for, temperature, forecast_at")
+            .eq("station_id", sid)
+            .gte("valid_for", since)
+            .order("valid_for")
+            .execute()
+            .data
+        )
+        # Dedup per valid_for tenendo il forecast_at più recente
+        fc_by_valid: dict[str, dict] = {}
+        for row in fc_rows:
+            vf = row["valid_for"]
+            if vf not in fc_by_valid or row["forecast_at"] > fc_by_valid[vf]["forecast_at"]:
+                fc_by_valid[vf] = row
+        forecast_series = [
+            {"t": r["valid_for"], "temp": r["temperature"]}
+            for r in sorted(fc_by_valid.values(), key=lambda x: x["valid_for"])
+            if r["temperature"] is not None
+        ]
+
+        obs_rows = (
+            client.table("observations")
+            .select("recorded_at, temperature")
+            .eq("station_id", sid)
+            .gte("recorded_at", since)
+            .lt("qc_flag", 2)
+            .order("recorded_at")
+            .execute()
+            .data
+        )
+        observed_series = [
+            {"t": r["recorded_at"], "temp": r["temperature"]}
+            for r in obs_rows
+            if r["temperature"] is not None
+        ]
+
+        result[str(sid)] = {"forecast": forecast_series, "observed": observed_series}
+    return result
+
+
+def build_dashboard_json(stations: list[dict], series: dict) -> dict:
+    """Calcola MAE forecast vs observed e costruisce il payload dashboard."""
+    mae_per_station = []
+    for s in stations:
+        sid = s["id"]
+        fc_list = series.get(str(sid), {}).get("forecast", [])
+        obs_list = series.get(str(sid), {}).get("observed", [])
+
+        pairs = []
+        for obs in obs_list:
+            obs_t = datetime.fromisoformat(obs["t"].replace("Z", "+00:00"))
+            for fc in fc_list:
+                fc_t = datetime.fromisoformat(fc["t"].replace("Z", "+00:00"))
+                if abs((fc_t - obs_t).total_seconds()) <= 1800:  # ±30 min
+                    pairs.append(abs(fc["temp"] - obs["temp"]))
+                    break
+
+        if pairs:
+            mae_per_station.append({
+                "id": sid,
+                "name": s["name"],
+                "mae": round(sum(pairs) / len(pairs), 3),
+                "n_pairs": len(pairs),
+            })
+        else:
+            mae_per_station.append({
+                "id": sid,
+                "name": s["name"],
+                "mae": None,
+                "n_pairs": 0,
+            })
+
+    valid_maes = [e["mae"] for e in mae_per_station if e["n_pairs"] > 0]
+    mae_global = round(sum(valid_maes) / len(valid_maes), 3) if valid_maes else None
+
+    return {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "stations": [
+            {"id": s["id"], "name": s["name"], "microclima": s.get("microclima", "standard")}
+            for s in stations
+        ],
+        "series": series,
+        "mae_per_station": mae_per_station,
+        "mae_global": mae_global,
+    }
+
 
 if __name__ == "__main__":
-    main()
+    if "--dashboard-only" in sys.argv:
+        DOCS_DATA.mkdir(parents=True, exist_ok=True)
+        stations = get_active_stations()
+        station_ids = [s["id"] for s in stations]
+        dashboard_series = fetch_dashboard_series(station_ids, days=7)
+        dashboard = build_dashboard_json(stations, dashboard_series)
+        dashboard_path = DOCS_DATA / "dashboard_data.json"
+        dashboard_path.write_text(json.dumps(dashboard, indent=2, ensure_ascii=False))
+        log.info(f"Scritto {dashboard_path}")
+    else:
+        main()

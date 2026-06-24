@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meteo Locale — Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body style="background:#1a1a2e; color:white; font-family:sans-serif; margin:0; padding:20px;">
+
+  <!-- Header -->
+  <div style="display:flex; align-items:center; gap:16px; margin-bottom:20px; flex-wrap:wrap;">
+    <a href="index.html" style="color:#74c0fc; text-decoration:none; font-size:14px;">← Mappa</a>
+    <h1 style="font-size:20px; margin:0;">🌦️ Meteo Locale — Dashboard</h1>
+    <span id="generated-at" style="opacity:0.6; font-size:13px;"></span>
+  </div>
+
+  <!-- Errore dati non disponibili -->
+  <div id="error-msg" style="display:none; background:rgba(255,255,255,0.07); border-radius:8px; padding:24px; text-align:center; font-size:14px; opacity:0.8;">
+    Dashboard non ancora disponibile — i dati vengono generati alle 08:00 e 20:00 UTC.
+  </div>
+
+  <!-- Contenuto dashboard (nascosto finché i dati non sono pronti) -->
+  <div id="dashboard-content" style="display:none;">
+
+    <!-- Selector stazione -->
+    <div style="margin-bottom:20px;">
+      <label style="font-size:14px;">
+        Stazione:
+        <select id="station-select" style="margin-left:8px; background:#2a2a4a; color:white; border:1px solid rgba(255,255,255,0.2); border-radius:4px; padding:4px 8px; font-size:14px;"></select>
+      </label>
+    </div>
+
+    <!-- Chart previsto vs osservato -->
+    <div style="background:rgba(255,255,255,0.05); border-radius:8px; padding:16px; margin-bottom:20px;">
+      <h2 style="font-size:15px; margin:0 0 12px 0;">Previsto vs Osservato — ultimi 7 giorni</h2>
+      <canvas id="chart-series" height="120"></canvas>
+    </div>
+
+    <!-- Chart MAE per stazione -->
+    <div style="background:rgba(255,255,255,0.05); border-radius:8px; padding:16px;">
+      <h2 style="font-size:15px; margin:0 0 4px 0;">MAE per stazione</h2>
+      <p id="mae-global" style="font-size:12px; opacity:0.7; margin:0 0 12px 0;"></p>
+      <canvas id="chart-mae" height="300"></canvas>
+    </div>
+
+  </div>
+
+  <script>
+    let seriesChart = null;
+    let dashboardData = null;
+
+    async function loadData() {
+      try {
+        const resp = await fetch('data/dashboard_data.json');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        dashboardData = await resp.json();
+      } catch (e) {
+        document.getElementById('error-msg').style.display = 'block';
+        return;
+      }
+
+      // Timestamp aggiornamento
+      const dt = new Date(dashboardData.generated_at);
+      const day = String(dt.getUTCDate()).padStart(2, '0');
+      const month = String(dt.getUTCMonth() + 1).padStart(2, '0');
+      const hours = String(dt.getUTCHours()).padStart(2, '0');
+      const minutes = String(dt.getUTCMinutes()).padStart(2, '0');
+      document.getElementById('generated-at').textContent =
+        `Aggiornato: ${day}/${month} ore ${hours}:${minutes}`;
+
+      // Popola selector stazioni (ordinate per nome)
+      const select = document.getElementById('station-select');
+      const sorted = [...dashboardData.stations].sort((a, b) =>
+        a.name.localeCompare(b.name, 'it')
+      );
+      sorted.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        select.appendChild(opt);
+      });
+
+      select.addEventListener('change', () => updateSeriesChart(select.value));
+
+      document.getElementById('dashboard-content').style.display = 'block';
+
+      if (sorted.length > 0) {
+        select.value = sorted[0].id;
+        updateSeriesChart(sorted[0].id);
+      }
+
+      buildMaeChart();
+    }
+
+    function updateSeriesChart(stationId) {
+      const sid = String(stationId);
+      const s = (dashboardData.series[sid] || { forecast: [], observed: [] });
+
+      const fcData = s.forecast.map(p => ({ x: new Date(p.t), y: p.temp }));
+      const obsData = s.observed.map(p => ({ x: new Date(p.t), y: p.temp }));
+
+      if (seriesChart) {
+        seriesChart.destroy();
+        seriesChart = null;
+      }
+
+      const ctx = document.getElementById('chart-series').getContext('2d');
+      seriesChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          datasets: [
+            {
+              label: '🔵 Previsto',
+              data: fcData,
+              borderColor: '#3498db',
+              backgroundColor: 'transparent',
+              pointRadius: 2,
+              tension: 0.3,
+            },
+            {
+              label: '🟠 Osservato',
+              data: obsData,
+              borderColor: '#e67e22',
+              backgroundColor: 'transparent',
+              pointRadius: 2,
+              tension: 0.3,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: {
+              type: 'time',
+              time: { unit: 'day' },
+              adapters: { date: {} },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)' }
+            },
+            y: {
+              title: { display: true, text: '°C', color: 'rgba(255,255,255,0.7)' },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)' }
+            }
+          },
+          plugins: {
+            legend: { labels: { color: 'white' } }
+          }
+        }
+      });
+    }
+
+    function buildMaeChart() {
+      const maeData = [...dashboardData.mae_per_station].sort((a, b) => {
+        if (a.mae === null && b.mae === null) return 0;
+        if (a.mae === null) return 1;
+        if (b.mae === null) return -1;
+        return a.mae - b.mae;
+      });
+
+      const labels = maeData.map(e => e.mae === null ? e.name + ' (n/d)' : e.name);
+      const values = maeData.map(e => e.mae ?? 0);
+      const colors = maeData.map(e => {
+        if (e.mae === null) return 'rgba(255,255,255,0.2)';
+        return e.mae < 1.0 ? '#2ecc71' : '#e74c3c';
+      });
+
+      const global = dashboardData.mae_global;
+      document.getElementById('mae-global').textContent =
+        global !== null ? `MAE medio globale: ${global} °C` : 'MAE medio globale: n/d';
+
+      const ctx = document.getElementById('chart-mae').getContext('2d');
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'MAE (°C)',
+            data: values,
+            backgroundColor: colors,
+            borderColor: 'transparent',
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          scales: {
+            x: {
+              title: { display: true, text: '°C', color: 'rgba(255,255,255,0.7)' },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)' }
+            },
+            y: {
+              grid: { color: 'rgba(255,255,255,0.05)' },
+              ticks: { color: 'rgba(255,255,255,0.8)', font: { size: 11 } }
+            }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
