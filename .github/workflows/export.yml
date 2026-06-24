@@ -40,6 +40,7 @@ jobs:
           git push --force-with-lease
 
   export-dashboard:
+    needs: export
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
