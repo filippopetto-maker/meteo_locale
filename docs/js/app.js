@@ -203,12 +203,11 @@
       );
       const data = await res.json();
       const a = data.address || {};
-      const name =
-        a.neighbourhood || a.suburb || a.quarter ||
-        a.village || a.town ||
-        a.municipality ||
-        a.city ||
-        `${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`;
+      const city    = a.city || a.town || a.municipality || '';
+      const quarter = a.neighbourhood || a.quarter || a.suburb || a.village || '';
+      const name = city && quarter && quarter !== city
+        ? `${city}, ${quarter}`
+        : city || quarter || `${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`;
       _localityCache[key] = name;
       return name;
     } catch {
@@ -249,6 +248,7 @@
       infoPanel.innerHTML =
         `<span class="info-title">🌦️ Meteo Locale — Roma</span><br>` +
         `<span class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</span>` +
+        `<br>` +
         `<span class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</span>` +
         `<div class="layer-toggle">` +
         `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
