@@ -2,7 +2,7 @@
 
 Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
-**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità + particelle vento). GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **32 stazioni attive** su tutto il Lazio (6 Roma metro + 26 espansione Lazio) con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h).
+**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità + particelle vento). GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **32 stazioni attive** su tutto il Lazio (6 Roma metro + 26 espansione Lazio) con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h). **Dashboard Chart.js live** (`dashboard.html`) con forecast vs observed 7 giorni per stazione, MAE per stazione, switch Temperatura/Umidità.
 
 ---
 
@@ -286,6 +286,19 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
   - 60 Tor Vergata Est (urban_canyon, 59m, coordinate approssimative)
 - [ ] Castelli Romani alta quota (~530m, MAC `70:ee:50:2c:be:10`) — offline, da aggiungere come id 61
 
+### ✅ Blocco 7 — Dashboard GitHub Pages (COMPLETATO — giugno 2026)
+
+- [x] `docs/dashboard.html` — pagina statica Chart.js, link "📊 Dashboard →" in `#info-panel` di `index.html`
+- [x] Switch Temperatura/Umidità — aggiorna entrambi i chart contemporaneamente
+- [x] Chart 1: Previsto vs Osservato (7 giorni) per stazione — Chart.js line, asse X `time` con `chartjs-adapter-date-fns`; filtra punti null (umidità spesso assente nelle osservazioni)
+- [x] Chart 2: MAE per stazione — barre orizzontali; verde < 1.0°C (< 5.0% umidità), rosso altrimenti; null → barra trasparente "(n/d)"
+- [x] `docs/data/dashboard_data.json` — serie storiche 7 giorni (temp + hum) + `mae_per_station` con `mae`, `mae_hum`, `n_pairs`, `n_pairs_hum`; `mae_global`, `mae_global_hum`
+- [x] `fetch_dashboard_series()` — query Supabase forecast (dedup `valid_for` per `forecast_at` più recente) + observed QC-ok; ogni punto ha `{"t", "temp", "hum"}`
+- [x] `build_dashboard_json()` — coppie forecast/observed entro ±30 min per MAE temperatura e umidità separati
+- [x] `scripts/export_static.py --dashboard-only` — genera solo `dashboard_data.json` senza griglie ERA5/IDW
+- [x] Job `export-dashboard` in `export.yml` — triggerato 2×/giorno (08:00 e 20:00 UTC) da cron-job.org via `workflow_dispatch`
+- [x] `git pull --rebase origin main` prima del push in entrambi i job — fix conflict da run parallele sullo stesso branch
+
 ### 🔄 Blocco 6 — Pipeline live Phase 2c (PROSSIMA)
 
 - [ ] Protezione Civile Lazio / OpenAmbiente — 238 centraline ogni 15 min → `fetch_protezione_civile_lazio()` stub già in `mainMETEO.py`
@@ -385,6 +398,10 @@ qualità dipende da quanto il profilo orografico è rappresentato nel training:
 | Tor Bella Monaca (59) | urban_canyon | 🔵 Cold start | Extrapolazione fino a dic 2026 |
 | Tor Vergata Est (60) | urban_canyon | 🔵 Cold start | Extrapolazione fino a dic 2026 |
 
+### Nota architetturale — correzione orografica in quota
+
+La griglia IDW in quota (es. area Simbruini/Ernici) appare meno accurata perché le stazioni `alta_quota` (Filettino, Rocca Sinibalda, Sigillo) sono in cold-start. Non applicare correzioni empiriche di lapse rate sulla griglia — violerebbe il principio ERA5-as-background. La copertura migliorerà con il retraining dicembre 2026 quando LightGBM imparerà la relazione quota→temperatura dai dati accumulati.
+
 ### Il ciclo virtuoso
 
 Ogni run di `mainMETEO.py` accumula osservazioni Netatmo reali in `observations`
@@ -416,7 +433,8 @@ meteo_locale/
 ├── .github/
 │   └── workflows/
 │       ├── inference.yml        # GitHub Actions — cron 30 min ✅ ATTIVO
-│       └── ingestion.yml        # GitHub Actions — cron 30 min ✅ ATTIVO
+│       ├── ingestion.yml        # GitHub Actions — cron 30 min ✅ ATTIVO
+│       └── export.yml           # Job export (30 min) + job export-dashboard (08:00/20:00 UTC) ✅ ATTIVO
 │
 ├── db.py                        # Data Access Layer (connessione Supabase) ✅
 ├── qc.py                        # Quality Control 4 livelli ✅
@@ -439,8 +457,18 @@ meteo_locale/
 ├── data/
 │   └── training.parquet         # Dataset storico (NON nel repo — .gitignore)
 │
-└── output/
-    └── dashboard.py             # Streamlit dashboard read-only ✅
+├── output/
+│   └── dashboard.py             # Streamlit dashboard read-only ✅
+│
+└── docs/                        # GitHub Pages (sito statico)
+    ├── index.html               # Mappa Leaflet full-screen ✅
+    ├── dashboard.html           # Dashboard Chart.js (forecast vs observed, MAE) ✅
+    ├── js/
+    │   └── app.js               # Logica mappa, popup, legenda ✅
+    └── data/
+        ├── latest.json          # Stazioni + griglie T/H (aggiornato ogni 30 min)
+        ├── wind_grid.json       # Griglia vento U/V per leaflet-velocity
+        └── dashboard_data.json  # Serie storiche 7 gg + MAE (aggiornato 2×/giorno)
 ```
 
 **Nota path:** `correttore.py` e `inference.py` vivono in `model/` con un `sys.path` hack per trovare `forecast.py` e `db.py` nella root. Eseguire sempre dalla root del progetto: `cd ~/Desktop/meteo_locale`.
@@ -693,6 +721,23 @@ python3 scripts/export_static.py
 
 **Rieseguire quando:** si aggiungono nuove stazioni, si modifica il bounding box griglia, si cambia la lista variabili ERA5.
 
+**Dashboard-only mode:**
+```bash
+python3 scripts/export_static.py --dashboard-only
+```
+Genera solo `docs/data/dashboard_data.json` (serie storiche 7 giorni + MAE temperatura e umidità) senza le griglie ERA5/IDW. Usato dal job `export-dashboard` per aggiornarsi 2×/giorno.
+
+### `docs/dashboard.html` — Dashboard Chart.js ✅
+
+Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboard.html`. Link "📊 Dashboard →" nell'`#info-panel` di `index.html`.
+
+**Sezioni:**
+- **Switch Temperatura/Umidità** — aggiorna entrambi i chart in un click
+- **Chart Previsto vs Osservato** (Chart.js line, asse X `time` via `chartjs-adapter-date-fns`): serie 7 giorni per la stazione selezionata; blu = previsto, arancio = osservato; filtra automaticamente i punti null (umidità spesso assente nelle osservazioni storiche)
+- **Chart MAE per stazione** (Chart.js bar orizzontale): verde se MAE < 1.0°C (temperatura) o < 5.0% (umidità), rosso altrimenti; stazioni senza coppie → barra trasparente "(n/d)"; questo chart non cambia al cambio stazione
+
+**Dati:** `docs/data/dashboard_data.json` — aggiornato 2×/giorno (08:00 e 20:00 UTC) dal job `export-dashboard` in `export.yml`.
+
 ---
 
 ## 🗺️ Roadmap
@@ -783,6 +828,13 @@ python3 scripts/export_static.py
 - Popup stazioni aggiornato in tempo reale al cambio unità via `setPopupContent`
 - Popup IDW (click mappa) usa `formatWind()` — aggiornato al click successivo
 
+**Giugno 2026 — Dashboard e fix workflow:**
+- Job `export` e `export-dashboard` in conflitto su push: run parallele sullo stesso branch → il secondo trova il remote già avanzato e fallisce con `fetch first` → `git pull --rebase origin main` prima del push in entrambi i job
+- Info panel: label "Previsioni per le ore XX:XX" era inline accanto a "Aggiornato:" → aggiunto `<br>` tra i due `<span>`; label si aggiorna anche al toggle Adesso/+1h
+- Nominatim restituiva "Municipio Roma XII": `suburb` conteneva il nome del municipio → logica cambiata in `"${city}, ${quarter}"` con `city = a.city||a.town||a.municipality` e `quarter = a.neighbourhood||a.quarter||a.suburb||a.village`; `zoom=10→14`
+- Tick legenda sovrapposti con 5 tick su 160 px → ridotti a 3 tick dinamici `[vMin, mid, vMax]` per entrambi i layer
+- `displayValues: true` su leaflet-velocity mostrava pannello "Wind Direction / Wind Speed" al movimento del cursore → `displayValues: false`
+
 ---
 
 ## 🏆 Differenziali competitivi
@@ -818,7 +870,7 @@ python3 db.py   # verifica connessione
 **Stato corrente (giugno 2026):** Phase 1, 2a, 2b, 3 in produzione. Phase 2c parziale (bias correction attiva). Tre GitHub Actions attivi, tutti triggerati da cron-job.org:
 - `inference.yml` — previsioni ogni 30 min (LightGBM + RF + ARSIAL bias), trigger :00/:30
 - `ingestion.yml` — osservazioni METAR + Netatmo ogni 30 min, trigger :00/:30
-- `export.yml` — JSON statici per GitHub Pages ogni 30 min, trigger :05/:35
+- `export.yml` — due job: `export` (JSON statici ogni 30 min, trigger :05/:35) + `export-dashboard` (`dashboard_data.json` 2×/giorno, 08:00/20:00 UTC via cron-job.org `workflow_dispatch`)
 
 **Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
 
@@ -833,9 +885,9 @@ python3 db.py   # verifica connessione
 - `min_cluster` rilassato a 1 per id≥39 e per microclima `quota`/`alta_quota`/`colline_interne`
 - Pulizia naming: rinominate stazioni con nomi duplicati/imprecisi (Saxa Rubra id46→Labaro, Gaeta/Formia id49→Fondi); riclassificati microclima (Tivoli/Bracciano/Rieti→`colline_interne`, Filettino→`alta_quota`, isolando `quota` alla sola Castelli Romani)
 
-**Prossimo task immediato:** Fase 4b — dashboard GitHub Pages con Chart.js (forecast vs observed, MAE per stazione, ultime osservazioni). Estendere `export_static.py` per esportare `dashboard_data.json`; aggiungere `dashboard.html` al sito; aggiornato dallo stesso `export.yml` già esistente — niente Streamlit Cloud.
+**Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
 
-Poi Fase 4a — pipeline Open-Meteo *Forecast* API per le 48h (versione 0) e verifica *Historical Forecast* API, dato che condiziona lo schema della nuova tabella di training.
+**Prossimo task:** da definire. Dashboard completata. Candidati: pipeline Open-Meteo *Forecast* API per le 48h (Fase 4a) o espansione rete stazioni (id 61, Castelli Romani alta quota, quando torna online).
 
 **Miglioramenti futuri mappa:**
 - Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
