@@ -173,7 +173,7 @@
       return null;
     }
     return L.velocityLayer({
-      displayValues: true,
+      displayValues: false,
       displayOptions: {
         velocityType:   'Wind',
         position:       'bottomright',
@@ -198,14 +198,17 @@
     try {
       const res = await fetch(
         `https://nominatim.openstreetmap.org/reverse` +
-        `?lat=${lat}&lon=${lng}&format=json&zoom=10&accept-language=it`,
+        `?lat=${lat}&lon=${lng}&format=json&zoom=14&accept-language=it`,
         { headers: { 'User-Agent': 'meteo_locale/1.0' } }
       );
       const data = await res.json();
       const a = data.address || {};
-      const name = a.town || a.city || a.village ||
-                   a.suburb || a.county ||
-                   `${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`;
+      const name =
+        a.neighbourhood || a.suburb || a.quarter ||
+        a.village || a.town ||
+        a.municipality ||
+        a.city ||
+        `${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`;
       _localityCache[key] = name;
       return name;
     } catch {
@@ -241,9 +244,12 @@
 
       // Pannello info — top-left con toggle layer
       const infoPanel = L.DomUtil.create('div', 'info-panel');
+      const firstFc = (latest.stations || []).find(s => s.forecast?.valid_for);
+      const validOre = firstFc ? formatTime(firstFc.forecast.valid_for) : '';
       infoPanel.innerHTML =
         `<span class="info-title">🌦️ Meteo Locale — Roma</span><br>` +
         `<span class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</span>` +
+        `<span class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</span>` +
         `<div class="layer-toggle">` +
         `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
         `<button id="btn-hum">💧 Umidità</button>` +
@@ -271,9 +277,7 @@
             : 'linear-gradient(to right, #d96f27, #fee080, #b0e090, #317ec8, #08306b)';
         const labelsEl = document.getElementById('legend-labels');
         labelsEl.innerHTML = '';
-        const ticks = layer === 'temperature'
-          ? Array.from({ length: 5 }, (_, i) => vMin + (vMax - vMin) * i / 4)
-          : [0, 25, 50, 75, 100];
+        const ticks = [vMin, (vMin + vMax) / 2, vMax];
         ticks.forEach(v => {
           const pos = ((v - vMin) / (vMax - vMin)) * 100;
           const span = document.createElement('span');
@@ -308,6 +312,13 @@
         activeTime = time;
         document.getElementById('btn-now').classList.toggle('active', time === 'observed');
         document.getElementById('btn-plus1').classList.toggle('active', time === 'forecast');
+        const label = document.getElementById('valid-for-label');
+        if (label) {
+          const firstFc  = (latest.stations || []).find(s => s.forecast?.valid_for);
+          const firstFc1 = (latest.stations || []).find(s => s.forecast1?.valid_for);
+          const src = time === 'observed' ? firstFc : firstFc1;
+          label.textContent = src ? `Previsioni per le ore ${formatTime(src.forecast?.valid_for || src.forecast1?.valid_for)}` : '';
+        }
         if (activeLayer === 'temperature') switchLayer('temperature');
       }
 
