@@ -784,6 +784,14 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 8. [ ] Target pioggia puntuale (mm) — post-retraining dicembre 2026
 9. [ ] LCZ Copernicus per isola di calore — post-retraining dicembre 2026
 
+### 🔜 Fase 4 — Layer Vento interattivo (PROSSIMA)
+
+1. [ ] Terzo pulsante nel toggle layer, primo a sinistra: `[ 🌬️ Vento ] [ 🌡️ Temperatura ] [ 💧 Umidità ]`; toggle `Adesso/+1h` nascosto quando il layer vento è attivo (il vento non ha griglia T+1 separata)
+2. [ ] **Componente 1 — heatmap velocità**: canvas `L.imageOverlay`, stessa architettura di `renderGridLayer()`; palette bianco→ciano→blu→viola per velocità crescente; legenda 3 tick `[vMin, mid, vMax]` in km/h
+3. [ ] **Componente 2 — frecce direzionali** (toggle checkbox, default off): griglia fissa di frecce SVG ruotate secondo `atan2(U, V)`; densità adattiva allo zoom (più frecce a zoom alto, fino a un massimo fissato); dimensione e spessore proporzionali alla velocità
+4. [ ] Dati: `wind_grid.json` già esistente (36×24 celle, U+V in m/s, aggiornato ogni 30 min) — nessuna modifica al backend necessaria
+5. [ ] Click su punto: temperatura + vento IDW + umidità come negli altri layer (già funziona, solo verificare coerenza con `wind_grid.json` attivo)
+
 ---
 
 ## 🐛 Diario degli errori risolti
@@ -887,13 +895,13 @@ python3 db.py   # verifica connessione
 
 **Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
 
-**Prossimo task:** da definire. Dashboard completata. Candidati: pipeline Open-Meteo *Forecast* API per le 48h (Fase 4a) o espansione rete stazioni (id 61, Castelli Romani alta quota, quando torna online).
+**Prossimo task:** Layer Vento interattivo (Fase 4) — terzo pulsante toggle `🌬️ Vento`, heatmap velocità `L.imageOverlay` + frecce SVG direzionali (densità adattiva allo zoom). Dati `wind_grid.json` già disponibili, nessuna modifica backend. Vedere roadmap Fase 4 per spec completa.
 
 **Miglioramenti futuri mappa:**
 - Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
 - Upgrade a MapLibre GL JS per qualità visiva superiore (vettoriale, tile più dettagliate)
 - FastAPI su Render per query dinamiche (storico per stazione, confronto date)
-- Layer vento con ERA5 background (attualmente IDW puro — fisicamente meno accurato della temperatura)
+- Layer vento interattivo (Fase 4): heatmap velocità + frecce SVG direzionali — spec completa in roadmap
 - Upgrade `actions/checkout@v4` → `@v5` e `actions/setup-python@v5` → versione corrente (warning Node.js 20 deprecation)
 
 ---
