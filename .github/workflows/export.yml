@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '15 * * * *'   # ogni ora a :15, sfasato dall'inference
 
+concurrency:
+  group: export-push
+  cancel-in-progress: false
+
 jobs:
   export:
     runs-on: ubuntu-latest
@@ -65,4 +69,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/data/dashboard_data.json
           git diff --staged --quiet || git commit -m "chore: update dashboard data [skip ci]"
-          git push --force-with-lease
+          git pull --rebase origin main
+          git push
