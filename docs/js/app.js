@@ -232,6 +232,7 @@
   }
 
   let arrowMarkers = [];
+  let stationMarkers = [];
 
   function clearArrowLayer(map) {
     arrowMarkers.forEach(m => map.removeLayer(m));
@@ -504,7 +505,7 @@
       document.getElementById('btn-plus1').addEventListener('click', () => switchTime('forecast'));
 
       const stations = latest.stations || [];
-      const stationMarkers = renderStations(map, stations);
+      stationMarkers = renderStations(map, stations);
       switchLayer('temperature');
 
       if (stations.length > 0) {
