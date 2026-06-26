@@ -458,7 +458,8 @@
           if (windToggle)  windToggle.style.display  = 'none';
           if (arrowToggle) arrowToggle.style.display = '';
           heatOverlay = renderWindSpeed(latest);
-          updateLegend('wind', WIND_SPEED_MIN, WIND_SPEED_MAX, ' km/h');
+          updateLegend('wind', WIND_SPEED_MIN, WIND_SPEED_MAX, '');
+          updateWindLegendTitle();
           // Frecce off di default → reset checkbox e mostra particelle
           if (arrowCheck) arrowCheck.checked = false;
           clearArrowLayer(map);
@@ -580,10 +581,18 @@
         if (!popupClosed) popup.setContent(buildContent(localita));
       });
 
+      function updateWindLegendTitle() {
+        if (activeLayer !== 'wind') return;
+        const isKts = document.querySelector('input[name="wind-unit"][value="kts"]')?.checked;
+        document.getElementById('legend-title').textContent =
+          isKts ? 'Velocità vento (nodi)' : 'Velocità vento (km/h)';
+      }
+
       document.querySelectorAll('input[name="wind-unit"]').forEach(radio => {
         radio.addEventListener('change', e => {
           windUnit = e.target.value;
           updateStationPopups(markers, stations);
+          updateWindLegendTitle();
         });
       });
 
