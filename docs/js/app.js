@@ -449,28 +449,36 @@
         document.getElementById('btn-hum').classList.toggle('active',  layer === 'humidity');
         document.getElementById('time-toggle').style.display = layer === 'temperature' ? 'flex' : 'none';
 
-        if (layer === 'temperature') {
-          heatOverlay = renderTemperature(latest, activeTime);
-          updateLegend('temperature', globalTMin, globalTMax, '°C');
-          if (windLayer) windLayer.addTo(map);
-          clearArrowLayer(map);
-        } else if (layer === 'humidity') {
-          heatOverlay = renderHumidity(latest);
-          if (latest.humidity_grid)
-            updateLegend('humidity', latest.humidity_grid.h_min, latest.humidity_grid.h_max, '%');
-          if (windLayer) windLayer.addTo(map);
-          clearArrowLayer(map);
-        } else if (layer === 'wind') {
+        const windToggle  = document.getElementById('wind-toggle');
+        const arrowToggle = document.getElementById('arrow-toggle');
+        const windCheck   = document.getElementById('wind-check');
+        const arrowCheck  = document.getElementById('arrow-check');
+
+        if (layer === 'wind') {
+          if (windToggle)  windToggle.style.display  = 'none';
+          if (arrowToggle) arrowToggle.style.display = '';
           heatOverlay = renderWindSpeed(latest);
           updateLegend('wind', WIND_SPEED_MIN, WIND_SPEED_MAX, ' km/h');
-          const arrowCheck = document.getElementById('wind-check');
-          const arrowsActive = arrowCheck && arrowCheck.checked;
-          if (arrowsActive) {
-            if (windLayer) map.removeLayer(windLayer);
-            renderArrowLayer(map, windGrid);
+          // Frecce off di default → reset checkbox e mostra particelle
+          if (arrowCheck) arrowCheck.checked = false;
+          clearArrowLayer(map);
+          if (windLayer) windLayer.addTo(map);
+        } else {
+          if (windToggle)  windToggle.style.display  = '';
+          if (arrowToggle) arrowToggle.style.display = 'none';
+          clearArrowLayer(map);
+          // Particelle: rispetta stato di #wind-check
+          if (windLayer) {
+            if (windCheck && windCheck.checked) windLayer.addTo(map);
+            else map.removeLayer(windLayer);
+          }
+          if (layer === 'temperature') {
+            heatOverlay = renderTemperature(latest, activeTime);
+            updateLegend('temperature', globalTMin, globalTMax, '°C');
           } else {
-            if (windLayer) windLayer.addTo(map);
-            clearArrowLayer(map);
+            heatOverlay = renderHumidity(latest);
+            if (latest.humidity_grid)
+              updateLegend('humidity', latest.humidity_grid.h_min, latest.humidity_grid.h_max, '%');
           }
         }
 
@@ -512,7 +520,7 @@
 
       map.on('zoomend', () => {
         if (activeLayer === 'wind') {
-          const arrowCheck = document.getElementById('wind-check');
+          const arrowCheck = document.getElementById('arrow-check');
           if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid);
         }
       });
@@ -580,13 +588,20 @@
       });
 
       document.getElementById('wind-check').addEventListener('change', e => {
+        if (!windLayer) return;
+        if (e.target.checked) windLayer.addTo(map);
+        else map.removeLayer(windLayer);
+      });
+
+      document.getElementById('arrow-check').addEventListener('change', e => {
         if (activeLayer !== 'wind') return;
         if (e.target.checked) {
           if (windLayer) map.removeLayer(windLayer);
           renderArrowLayer(map, windGrid);
         } else {
           clearArrowLayer(map);
-          if (windLayer) windLayer.addTo(map);
+          const windCheck = document.getElementById('wind-check');
+          if (windLayer && windCheck && windCheck.checked) windLayer.addTo(map);
         }
       });
 

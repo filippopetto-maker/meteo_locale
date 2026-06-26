@@ -24,13 +24,13 @@
     }
     #info-panel label { font-size: 13px; }
     #info-panel input[type="radio"] { width: 13px; height: 13px; }
-    #wind-toggle {
+    #wind-toggle, #arrow-toggle {
       display: flex;
       align-items: center;
       gap: 6px;
       cursor: pointer;
     }
-    #wind-toggle input { cursor: pointer; }
+    #wind-toggle input, #arrow-toggle input { cursor: pointer; }
     .wind-unit-toggle {
       display: flex;
       gap: 8px;
@@ -102,7 +102,11 @@
 
   <div id="info-panel">
     <label id="wind-toggle">
-      <input type="checkbox" id="wind-check" />
+      <input type="checkbox" id="wind-check" checked>
+      Mostra vento
+    </label>
+    <label id="arrow-toggle" style="display:none">
+      <input type="checkbox" id="arrow-check">
       Mostra frecce direzionali
     </label>
     <div class="wind-unit-toggle">
