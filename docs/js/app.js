@@ -254,6 +254,9 @@
     const half    = Math.floor(remaining / 5);
 
     const shaft   = `M ${halfS} ${s * 0.1} L ${halfS} ${s * 0.85}`;
+    const tipY    = s * 0.85;
+    const tipSize = s * 0.13;
+    const arrowTip = `M ${halfS} ${tipY} L ${halfS - tipSize} ${tipY - tipSize * 1.4} L ${halfS + tipSize} ${tipY - tipSize * 1.4} Z`;
     const step    = s * 0.12;
     const barbLen = s * 0.38;
     const halfBL  = s * 0.22;
@@ -277,6 +280,7 @@
                 xmlns="http://www.w3.org/2000/svg">
               <path d="${shaft}" stroke="white" stroke-width="2" fill="none"
                     stroke-linecap="round"/>
+              <path d="${arrowTip}" fill="white" stroke="none"/>
               <path d="${barbs}" stroke="white" stroke-width="1.8" fill="white"
                     stroke-linecap="round" stroke-linejoin="round"/>
             </svg>`;
