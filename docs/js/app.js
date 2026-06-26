@@ -252,14 +252,6 @@
     const s = size;
     const halfS = s / 2;
 
-    if (speedKmh < 3) {
-      return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"
-                  xmlns="http://www.w3.org/2000/svg">
-                <circle cx="${halfS}" cy="${halfS}" r="${s * 0.18}"
-                        fill="none" stroke="white" stroke-width="1.5"/>
-              </svg>`;
-    }
-
     let remaining = Math.round(speedKmh / 5) * 5;
     const flags   = Math.floor(remaining / 50); remaining -= flags * 50;
     const full    = Math.floor(remaining / 10); remaining -= full * 10;
@@ -357,6 +349,13 @@
         arrowMarkers.push(m);
       }
     }
+  }
+
+  function hideStations(map, markers) {
+    markers.forEach(m => map.removeLayer(m));
+  }
+  function showStations(map, markers) {
+    markers.forEach(m => m.addTo(map));
   }
 
   async function init() {
@@ -468,6 +467,7 @@
           if (windToggle)  windToggle.style.display  = '';
           if (arrowToggle) arrowToggle.style.display = 'none';
           clearArrowLayer(map);
+          showStations(map, stationMarkers);
           // Particelle: rispetta stato di #wind-check
           if (windLayer) {
             if (windCheck && windCheck.checked) windLayer.addTo(map);
@@ -508,7 +508,7 @@
 
       switchLayer('temperature');
       const stations = latest.stations || [];
-      const markers = renderStations(map, stations);
+      const stationMarkers = renderStations(map, stations);
 
       if (stations.length > 0) {
         const bounds = stations.map(st => [st.lat, st.lon]);
@@ -591,7 +591,7 @@
       document.querySelectorAll('input[name="wind-unit"]').forEach(radio => {
         radio.addEventListener('change', e => {
           windUnit = e.target.value;
-          updateStationPopups(markers, stations);
+          updateStationPopups(stationMarkers, stations);
           updateWindLegendTitle();
         });
       });
@@ -606,9 +606,11 @@
         if (activeLayer !== 'wind') return;
         if (e.target.checked) {
           if (windLayer) map.removeLayer(windLayer);
+          hideStations(map, stationMarkers);
           renderArrowLayer(map, windGrid);
         } else {
           clearArrowLayer(map);
+          showStations(map, stationMarkers);
           const windCheck = document.getElementById('wind-check');
           if (windLayer && windCheck && windCheck.checked) windLayer.addTo(map);
         }
