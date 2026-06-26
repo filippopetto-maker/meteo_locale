@@ -503,9 +503,9 @@
       document.getElementById('btn-now').addEventListener('click', () => switchTime('observed'));
       document.getElementById('btn-plus1').addEventListener('click', () => switchTime('forecast'));
 
-      switchLayer('temperature');
       const stations = latest.stations || [];
       const stationMarkers = renderStations(map, stations);
+      switchLayer('temperature');
 
       if (stations.length > 0) {
         const bounds = stations.map(st => [st.lat, st.lon]);
