@@ -784,13 +784,15 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 8. [ ] Target pioggia puntuale (mm) — post-retraining dicembre 2026
 9. [ ] LCZ Copernicus per isola di calore — post-retraining dicembre 2026
 
-### 🔜 Fase 4 — Layer Vento interattivo (PROSSIMA)
+### ✅ Fase 4a — Layer Vento interattivo (COMPLETATA — giugno 2026)
 
-1. [ ] Terzo pulsante nel toggle layer, primo a sinistra: `[ 🌬️ Vento ] [ 🌡️ Temperatura ] [ 💧 Umidità ]`; toggle `Adesso/+1h` nascosto quando il layer vento è attivo (il vento non ha griglia T+1 separata)
-2. [ ] **Componente 1 — heatmap velocità**: canvas `L.imageOverlay`, stessa architettura di `renderGridLayer()`; palette bianco→ciano→blu→viola per velocità crescente; legenda 3 tick `[vMin, mid, vMax]` in km/h
-3. [ ] **Componente 2 — frecce direzionali** (toggle checkbox, default off): griglia fissa di frecce SVG ruotate secondo `atan2(U, V)`; densità adattiva allo zoom (più frecce a zoom alto, fino a un massimo fissato); dimensione e spessore proporzionali alla velocità
-4. [ ] Dati: `wind_grid.json` già esistente (36×24 celle, U+V in m/s, aggiornato ogni 30 min) — nessuna modifica al backend necessaria
-5. [ ] Click su punto: temperatura + vento IDW + umidità come negli altri layer (già funziona, solo verificare coerenza con `wind_grid.json` attivo)
+1. [x] `wind_speed_grid` in `latest.json` — `export_static.py`: ERA5 background + IDW correzioni stazioni, scala adattiva `ws_min`/`ws_max`
+2. [x] **Carta del vento** — sezione dedicata con heatmap velocità (ERA5 background + IDW correzioni, scala adattiva), frecce barbed sinottiche zoom-adaptive (stanghette per intensità, punta direzionale), toggle particelle/frecce, legenda km/h ↔ nodi (`wind_speed_grid` in `latest.json`, `app.js`)
+
+### 🔜 Fase 4b — Dashboard e API (PROSSIMA)
+
+3. [ ] Dashboard GitHub Pages con Chart.js (dati storici per stazione, export `dashboard_data.json`)
+4. [ ] API REST FastAPI (opzionale — query dinamiche storico, confronto date)
 
 ---
 
@@ -826,6 +828,7 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 | Temperatura mare gonfiata (31°C su Ostia) | IDW spalma correzione stazioni di terra anche sulle celle di mare; nessuna distinzione terra/mare nella griglia | SST reale da Marine API + maschera `is_sea_mask` + blend graduale asimmetrico in `export_static.py` |
 | Bordo netto / arcobaleno lungo la costa | Maschera binaria (`np.where`) + fascia blend troppo stretta (10 km) + distanza da vertice crea cerchi concentrici sui promontori (Circeo) | Distanza punto-segmento + smoothstep su fascia 25 km + blend asimmetrico (w=0 su terra, 0→1 solo verso mare) |
 | Riga diagonale artificiale sopra Civitavecchia | `LATIUM_COAST` si fermava a 42.10° (Civitavecchia); il poligono chiudeva dritto all'angolo del bbox classificando Tarquinia/Orbetello come mare | Estesa la coastline a nord fino a (42.85, 10.85) seguendo la costa reale Toscana; il poligono si restringe a zero naturalmente nell'angolo NO |
+| `ReferenceError: Cannot access 'stationMarkers' before initialization` | `const stationMarkers` dichiarato dentro `init()` con closure di `switchLayer` che vi accedeva prima dell'esecuzione della riga `const` (Temporal Dead Zone) — le branch temperatura/umidità di `switchLayer` chiamavano `showStations(map, stationMarkers)` prima che la variabile fosse inizializzata | Spostare `let stationMarkers = []` a livello di modulo (fuori da `init()`), assegnare dentro `init()` senza `const`/`let`; `switchLayer` legge così la variabile già popolata |
 | `ModuleNotFoundError: No module named 'matplotlib'` | Aggiunto a `requirements.txt` ma non installato nell'ambiente `meteo` locale; il blocco SST in `export_static.py` falliva silenziosamente nel try/except | `pip install matplotlib` nell'ambiente conda `meteo`; aggiunto anche a `pip install` nel workflow |
 | Stazioni Tivoli/Filettino/Cassino sempre "osservata: n/d" | Due funzioni `fetch_netatmo()` esistevano in due file diversi (`mainMETEO.py` e `fetch_netatmo_block.py`); solo `mainMETEO.py` è collegata a `ingestion.yml`, l'altra non è mai stata eseguita in produzione nonostante avesse `LAZIO_BBOXES` e la fix `min_cluster` già pronte | Fix applicate sul file giusto (`mainMETEO.py`); `fetch_netatmo_block.py` rinominato `_unused_fetch_netatmo_block.py` per evitare confusione futura |
 | `getpublicdata` Netatmo azzera cluster su zone dense (EUR, Trastevere) con bbox esteso a tutto il Lazio | L'API sembra avere un tetto di risultati per chiamata: bbox più ampio non aggiunge stazioni nelle zone dense, le diluisce a favore di copertura geografica più ampia | 5 sotto-bbox (`LAZIO_BBOXES`, margine 0.15° di sovrapposizione) con fetch separato + merge deduplicato su `_id` Netatmo, invece di un singolo bbox per tutto il Lazio |
@@ -850,6 +853,7 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 - **Statistical downscaling ERA5 → stazioni reali** — approccio corretto e sostenibile vs NWP pesante; impara le correzioni che il modello globale sbaglia
 - **Rete Netatmo densa** — 340+ stazioni pubbliche nel bbox Roma aggregano il segnale urbano reale ogni 30 min, con QC spaziale integrato su cluster di 5 km
 - **Architettura multi-stazione** — 6 stazioni con profili orografici contrastanti (costiera, urbano, quota, pianura) abilitano l'apprendimento dei gradienti territoriali
+- **Carta del vento dedicata** — heatmap velocità ERA5-corretta + frecce barbed sinottiche zoom-adaptive con intensità codificata dalle stanghette; toggle automatico particelle/frecce
 - **Feature orografiche esplicite** — delta quota vs cella ERA5, onshore alignment, isola di calore, one-hot microclima: il territorio codificato come predittori
 - **Modello a due stadi** — LightGBM cattura il segnale principale; RF correttore elimina gli errori sistematici residui per microzona
 - **QC climatologico contestuale** — validazione contro climatologia locale per mese e fascia oraria, con offset per tipo di stazione; raro nei tool open source
@@ -895,13 +899,14 @@ python3 db.py   # verifica connessione
 
 **Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
 
-**Prossimo task:** Layer Vento interattivo (Fase 4) — terzo pulsante toggle `🌬️ Vento`, heatmap velocità `L.imageOverlay` + frecce SVG direzionali (densità adattiva allo zoom). Dati `wind_grid.json` già disponibili, nessuna modifica backend. Vedere roadmap Fase 4 per spec completa.
+**Prossimo task immediato:** Fix legenda nodi — quando si seleziona "nodi" la scala del gradiente (`ws_min`/`ws_max` in `latest.json`) deve essere convertita da km/h a nodi anche per i colori della heatmap, non solo per le etichette tick. Attualmente i colori rimangono calibrati in km/h anche con la radio "nodi" attiva.
+
+**Task successivo (Fase 4b):** Pipeline Open-Meteo Forecast API per le 48h successive — `temp_grid_forecast` e `wind_speed_grid_forecast` in `latest.json`, toggle Adesso/+1h/+2h/+6h/+12h/+24h/+48h nella mappa. Dashboard GitHub Pages (Chart.js) con serie storiche per stazione.
 
 **Miglioramenti futuri mappa:**
 - Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
 - Upgrade a MapLibre GL JS per qualità visiva superiore (vettoriale, tile più dettagliate)
 - FastAPI su Render per query dinamiche (storico per stazione, confronto date)
-- Layer vento interattivo (Fase 4): heatmap velocità + frecce SVG direzionali — spec completa in roadmap
 - Upgrade `actions/checkout@v4` → `@v5` e `actions/setup-python@v5` → versione corrente (warning Node.js 20 deprecation)
 
 ---
