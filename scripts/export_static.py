@@ -103,6 +103,7 @@ def build_latest_json(
     temp_grid_observed_data: dict | None = None,
     temp_grid_forecast_data: dict | None = None,
     humidity_grid_data: dict | None = None,
+    wind_speed_grid_data: dict | None = None,
 ) -> dict:
     station_list = []
     for s in stations:
@@ -141,6 +142,8 @@ def build_latest_json(
         payload["temp_grid_forecast"] = temp_grid_forecast_data
     if humidity_grid_data:
         payload["humidity_grid"] = humidity_grid_data
+    if wind_speed_grid_data:
+        payload["wind_speed_grid"] = wind_speed_grid_data
     return payload
 
 
@@ -273,12 +276,12 @@ def main() -> None:
         st_lons = [st["lon"] for st in stations_with_data]
 
         # ── 3. Fetch ERA5 batch ────────────────────────────────────────────────
-        log.info(f"  Fetch ERA5 ({N_BG_LAT * N_BG_LON + len(st_lats)} punti, 2 variabili)...")
+        log.info(f"  Fetch ERA5 ({N_BG_LAT * N_BG_LON + len(st_lats)} punti, 3 variabili)...")
         all_lats = bg_lats_flat + st_lats
         all_lons = bg_lons_flat + st_lons
         era5_data = fetch_era5_batch(
             all_lats, all_lons, now_utc,
-            variables=["temperature_2m", "relativehumidity_2m"],
+            variables=["temperature_2m", "relativehumidity_2m", "windspeed_10m"],
         )
         if not era5_data:
             log.warning("ERA5 non disponibile — le griglie useranno IDW puro sui dati stazione")
@@ -290,6 +293,7 @@ def main() -> None:
         if era5_data:
             era5_temp_flat = np.array(era5_data["temperature_2m"])
             era5_hum_flat  = np.array(era5_data["relativehumidity_2m"])
+            era5_ws_flat   = np.array(era5_data["windspeed_10m"])
             era5_bg_flat   = era5_temp_flat[:n_bg]
             era5_coarse    = era5_bg_flat.reshape(N_BG_LAT, N_BG_LON)
             era5_fine      = bilinear_to_fine(era5_coarse, bg_lats, bg_lons, fine_lats, fine_lons)
@@ -399,14 +403,61 @@ def main() -> None:
         else:
             log.warning(f"Solo {int(hum_mask.sum())} stazioni valide per umidità (< 2) — humidity_grid non incluso")
             humidity_grid_data = None
+
+        # ── 9. Griglia wind_speed (ERA5 background + IDW correzioni) ────────────
+        wind_mask = fc_mask & np.array([
+            (st.get("forecast") or {}).get("wind_speed") is not None
+            for st in stations_with_data
+        ])
+        wind_speed_grid_data: dict | None = None
+        if wind_mask.sum() >= 2:
+            ws_values = np.array([
+                st["forecast"]["wind_speed"]
+                for st, m in zip(stations_with_data, wind_mask) if m
+            ])
+            if era5_data and "windspeed_10m" in era5_data:
+                era5_ws_at_st  = era5_ws_flat[n_bg:][wind_mask]
+                ws_corr        = ws_values - era5_ws_at_st
+                era5_ws_coarse = era5_ws_flat[:n_bg].reshape(N_BG_LAT, N_BG_LON)
+                era5_ws_fine   = bilinear_to_fine(
+                    era5_ws_coarse, bg_lats, bg_lons, fine_lats, fine_lons
+                )
+                ws_corr_grid = compute_idw_grid(
+                    np.array(list(zip(np.array(st_lats)[wind_mask], np.array(st_lons)[wind_mask]))),
+                    ws_corr,
+                    LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+                )
+                ws_grid = np.clip(era5_ws_fine + ws_corr_grid, 0, None)
+            else:
+                ws_grid = np.clip(
+                    compute_idw_grid(
+                        np.array(list(zip(np.array(st_lats)[wind_mask], np.array(st_lons)[wind_mask]))),
+                        ws_values,
+                        LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+                    ),
+                    0, None,
+                )
+            wind_speed_grid_data = {
+                "lat_min": LAT_MIN, "lat_max": LAT_MAX,
+                "lon_min": LON_MIN, "lon_max": LON_MAX,
+                "nx": NX, "ny": NY,
+                "values": [round(v, 1) for v in ws_grid.flatten().tolist()],
+                "ws_min": round(float(ws_grid.min()), 1),
+                "ws_max": round(float(ws_grid.max()), 1),
+            }
+        else:
+            log.warning(f"Solo {int(wind_mask.sum())} stazioni valide per wind_speed (< 2) — wind_speed_grid non incluso")
+            wind_speed_grid_data = None
     else:
         log.warning(f"Solo {len(stations_with_data)} stazioni con dati validi (< 2) — temp_grid non incluso")
         humidity_grid_data = None
+        wind_speed_grid_data = None
 
     log.info("Calcolo latest.json...")
     latest = build_latest_json(
         stations, forecasts, observations,
         temp_grid_observed, temp_grid_forecast, humidity_grid_data,
+        wind_speed_grid_data,
     )
     latest_path = DOCS_DATA / "latest.json"
     latest_path.write_text(json.dumps(latest, indent=2, ensure_ascii=False))

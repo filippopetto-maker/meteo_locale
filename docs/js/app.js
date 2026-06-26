@@ -51,6 +51,15 @@
     { t: 0.75, r: 0x31, g: 0x7e, b: 0xc8 }, // #317ec8 — blu medio
     { t: 1.00, r: 0x08, g: 0x30, b: 0x6b }, // #08306b — blu scuro umido
   ];
+  const WIND_PALETTE = [
+    { t: 0.00, r: 0xc8, g: 0xeb, b: 0xfa }, // calma — azzurro quasi bianco
+    { t: 0.25, r: 0x74, g: 0xc6, b: 0xe8 }, // brezza leggera
+    { t: 0.50, r: 0x1a, g: 0x9b, b: 0xc8 }, // brezza moderata
+    { t: 0.75, r: 0x08, g: 0x52, b: 0x8a }, // vento sostenuto
+    { t: 1.00, r: 0x08, g: 0x30, b: 0x6b }, // vento forte
+  ];
+  const WIND_SPEED_MIN = 0;    // km/h — scala fissa
+  const WIND_SPEED_MAX = 60;   // km/h
 
   function lerp(a, b, f) { return a + (b - a) * f; }
 
@@ -105,6 +114,12 @@
     const hg = latest.humidity_grid;
     if (!hg || !hg.values || hg.values.length === 0) return null;
     return renderGridLayer(hg, HUM_SCALE_MIN, HUM_SCALE_MAX, HUM_PALETTE, 179);
+  }
+
+  function renderWindSpeed(latest) {
+    const wg = latest.wind_speed_grid;
+    if (!wg || !wg.values || wg.values.length === 0) return null;
+    return renderGridLayer(wg, WIND_SPEED_MIN, WIND_SPEED_MAX, WIND_PALETTE, 179);
   }
 
   let windUnit = 'kmh'; // 'kmh' | 'kts'
@@ -215,6 +230,86 @@
     }
   }
 
+  let arrowMarkers = [];
+
+  function clearArrowLayer(map) {
+    arrowMarkers.forEach(m => map.removeLayer(m));
+    arrowMarkers = [];
+  }
+
+  function arrowSpacingDeg(zoom) {
+    const spacings = { 7: 0.7, 8: 0.5, 9: 0.3, 10: 0.2, 11: 0.12, 12: 0.08, 13: 0.05 };
+    return spacings[Math.min(13, Math.max(7, zoom))] ?? 0.2;
+  }
+
+  function bilinearLookup(lat, lon, band) {
+    const hdr = band.header;
+    if (!hdr) return null;
+    const { nx, ny, la1, la2, lo1, lo2 } = hdr;
+    const data = band.data;
+
+    const col = (lon - lo1) / (lo2 - lo1) * (nx - 1);
+    const row = (la1 - lat) / (la1 - la2) * (ny - 1);
+    if (col < 0 || col > nx - 1 || row < 0 || row > ny - 1) return null;
+
+    const c0 = Math.floor(col), c1 = Math.min(c0 + 1, nx - 1);
+    const r0 = Math.floor(row), r1 = Math.min(r0 + 1, ny - 1);
+    const dc = col - c0, dr = row - r0;
+
+    return data[r0*nx+c0]*(1-dr)*(1-dc) +
+           data[r0*nx+c1]*(1-dr)*dc +
+           data[r1*nx+c0]*dr*(1-dc) +
+           data[r1*nx+c1]*dr*dc;
+  }
+
+  function renderArrowLayer(map, windGrid) {
+    clearArrowLayer(map);
+    if (!windGrid || !windGrid[0] || !windGrid[0].data.length) return;
+
+    const uData = windGrid[0];
+    const vData = windGrid[1];
+    const { nx, ny, la1, la2, lo1, lo2 } = uData.header;
+
+    const zoom    = map.getZoom();
+    const spacing = arrowSpacingDeg(zoom);
+    const bounds  = map.getBounds();
+
+    const latMin = Math.max(la2, bounds.getSouth());
+    const latMax = Math.min(la1, bounds.getNorth());
+    const lonMin = Math.max(lo1, bounds.getWest());
+    const lonMax = Math.min(lo2, bounds.getEast());
+
+    for (let lat = latMin; lat <= latMax; lat += spacing) {
+      for (let lon = lonMin; lon <= lonMax; lon += spacing) {
+        const u = bilinearLookup(lat, lon, uData);
+        const v = bilinearLookup(lat, lon, vData);
+        if (u === null || v === null) continue;
+
+        const speed = Math.sqrt(u*u + v*v) * 3.6;
+        let dir = Math.atan2(-u, -v) * 180 / Math.PI;
+        if (dir < 0) dir += 360;
+
+        const size    = zoom >= 11 ? 24 : zoom >= 9 ? 18 : 14;
+        const opacity = speed < 2 ? 0.3 : 0.85;
+
+        const icon = L.divIcon({
+          className: '',
+          html: `<svg width="${size}" height="${size}" viewBox="0 0 24 24"
+                      style="transform:rotate(${dir}deg);opacity:${opacity}"
+                      xmlns="http://www.w3.org/2000/svg">
+                   <polygon points="12,2 17,20 12,16 7,20" fill="white" stroke="rgba(0,0,0,0.5)" stroke-width="1"/>
+                 </svg>`,
+          iconSize:   [size, size],
+          iconAnchor: [size/2, size/2],
+        });
+
+        const m = L.marker([lat, lon], { icon, interactive: false });
+        m.addTo(map);
+        arrowMarkers.push(m);
+      }
+    }
+  }
+
   async function init() {
     const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
 
@@ -251,6 +346,7 @@
         `<br>` +
         `<span class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</span>` +
         `<div class="layer-toggle">` +
+        `<button id="btn-wind">💨 Vento</button>` +
         `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
         `<button id="btn-hum">💧 Umidità</button>` +
         `</div>` +
@@ -269,12 +365,18 @@
       document.getElementById('map').appendChild(legend);
 
       function updateLegend(layer, vMin, vMax, unit) {
-        document.getElementById('legend-title').textContent =
-          layer === 'temperature' ? `Temperatura (${unit})` : `Umidità (${unit})`;
-        document.getElementById('legend-bar').style.background =
-          layer === 'temperature'
-            ? 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)'
-            : 'linear-gradient(to right, #d96f27, #fee080, #b0e090, #317ec8, #08306b)';
+        const titles = {
+          temperature: `Temperatura (${unit})`,
+          humidity:    `Umidità (${unit})`,
+          wind:        `Velocità vento (${unit})`,
+        };
+        const gradients = {
+          temperature: 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)',
+          humidity:    'linear-gradient(to right, #d96f27, #fee080, #b0e090, #317ec8, #08306b)',
+          wind:        'linear-gradient(to right, #c8ebfa, #74c6e8, #1a9bc8, #08528a, #08306b)',
+        };
+        document.getElementById('legend-title').textContent = titles[layer] ?? layer;
+        document.getElementById('legend-bar').style.background = gradients[layer] ?? '';
         const labelsEl = document.getElementById('legend-labels');
         labelsEl.innerHTML = '';
         const ticks = [vMin, (vMin + vMax) / 2, vMax];
@@ -282,7 +384,8 @@
           const pos = ((v - vMin) / (vMax - vMin)) * 100;
           const span = document.createElement('span');
           span.className = 'legend-tick';
-          span.textContent = Math.round(v) + unit;
+          const decimals = layer === 'temperature' ? 1 : 0;
+          span.textContent = v.toFixed(decimals) + unit;
           span.style.left = pos + '%';
           labelsEl.appendChild(span);
         });
@@ -291,21 +394,31 @@
       function switchLayer(layer) {
         activeLayer = layer;
         if (heatOverlay) map.removeLayer(heatOverlay);
+
+        document.getElementById('btn-wind').classList.toggle('active', layer === 'wind');
+        document.getElementById('btn-temp').classList.toggle('active', layer === 'temperature');
+        document.getElementById('btn-hum').classList.toggle('active',  layer === 'humidity');
         document.getElementById('time-toggle').style.display = layer === 'temperature' ? 'flex' : 'none';
+
         if (layer === 'temperature') {
           heatOverlay = renderTemperature(latest, activeTime);
-          document.getElementById('btn-temp').classList.add('active');
-          document.getElementById('btn-hum').classList.remove('active');
           updateLegend('temperature', globalTMin, globalTMax, '°C');
-        } else {
+        } else if (layer === 'humidity') {
           heatOverlay = renderHumidity(latest);
-          document.getElementById('btn-temp').classList.remove('active');
-          document.getElementById('btn-hum').classList.add('active');
-          if (latest.humidity_grid) {
+          if (latest.humidity_grid)
             updateLegend('humidity', latest.humidity_grid.h_min, latest.humidity_grid.h_max, '%');
-          }
+        } else if (layer === 'wind') {
+          heatOverlay = renderWindSpeed(latest);
+          updateLegend('wind', WIND_SPEED_MIN, WIND_SPEED_MAX, ' km/h');
         }
+
         if (heatOverlay) heatOverlay.addTo(map);
+
+        if (layer === 'wind') {
+          renderArrowLayer(map, windGrid);
+        } else {
+          clearArrowLayer(map);
+        }
       }
 
       function switchTime(time) {
@@ -322,6 +435,7 @@
         if (activeLayer === 'temperature') switchLayer('temperature');
       }
 
+      document.getElementById('btn-wind').addEventListener('click', () => switchLayer('wind'));
       document.getElementById('btn-temp').addEventListener('click', () => switchLayer('temperature'));
       document.getElementById('btn-hum').addEventListener('click', () => switchLayer('humidity'));
       document.getElementById('btn-now').addEventListener('click', () => switchTime('observed'));
@@ -339,6 +453,12 @@
       if (windGrid) {
         windLayer = renderWind(map, windGrid);
       }
+
+      map.on('zoomend', () => {
+        if (activeLayer === 'wind') {
+          renderArrowLayer(map, windGrid);
+        }
+      });
 
       // IDW al punto cliccato
       map.on('click', async function (e) {
