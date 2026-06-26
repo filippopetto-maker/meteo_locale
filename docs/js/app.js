@@ -238,8 +238,60 @@
   }
 
   function arrowSpacingDeg(zoom) {
-    const spacings = { 7: 0.7, 8: 0.5, 9: 0.3, 10: 0.2, 11: 0.12, 12: 0.08, 13: 0.05 };
-    return spacings[Math.min(13, Math.max(7, zoom))] ?? 0.2;
+    const spacings = { 7: 0.8, 8: 0.6, 9: 0.35, 10: 0.25, 11: 0.15, 12: 0.09, 13: 0.06 };
+    return spacings[Math.min(13, Math.max(7, zoom))] ?? 0.25;
+  }
+
+  function speedToColor(speedKmh) {
+    const [r, g, b] = valueToColor(speedKmh, WIND_SPEED_MIN, WIND_SPEED_MAX, WIND_PALETTE);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function windBarbSVG(speedKmh, dirDeg, size) {
+    const s = size;
+    const halfS = s / 2;
+
+    if (speedKmh < 3) {
+      return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"
+                  xmlns="http://www.w3.org/2000/svg">
+                <circle cx="${halfS}" cy="${halfS}" r="${s * 0.18}"
+                        fill="none" stroke="white" stroke-width="1.5"/>
+              </svg>`;
+    }
+
+    let remaining = Math.round(speedKmh / 5) * 5;
+    const flags   = Math.floor(remaining / 50); remaining -= flags * 50;
+    const full    = Math.floor(remaining / 10); remaining -= full * 10;
+    const half    = Math.floor(remaining / 5);
+
+    const shaft    = `M ${halfS} ${s * 0.1} L ${halfS} ${s * 0.85}`;
+    const step     = s * 0.12;
+    const barbLen  = s * 0.38;
+    const halfBL   = s * 0.22;
+    let barbs = '';
+    let y = s * 0.15;
+
+    for (let i = 0; i < flags; i++) {
+      barbs += `M ${halfS} ${y} L ${halfS + barbLen} ${y + step * 0.5} L ${halfS} ${y + step} Z `;
+      y += step;
+    }
+    for (let i = 0; i < full; i++) {
+      barbs += `M ${halfS} ${y} L ${halfS + barbLen} ${y - step * 0.3} `;
+      y += step;
+    }
+    if (half) {
+      barbs += `M ${halfS} ${y} L ${halfS + halfBL} ${y - step * 0.3} `;
+    }
+
+    const color = speedToColor(speedKmh);
+    return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"
+                style="transform:rotate(${dirDeg}deg);transform-origin:${halfS}px ${halfS}px"
+                xmlns="http://www.w3.org/2000/svg">
+              <path d="${shaft}" stroke="${color}" stroke-width="2" fill="none"
+                    stroke-linecap="round"/>
+              <path d="${barbs}" stroke="${color}" stroke-width="1.8" fill="${color}"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
   }
 
   function bilinearLookup(lat, lon, band) {
@@ -285,20 +337,16 @@
         const v = bilinearLookup(lat, lon, vData);
         if (u === null || v === null) continue;
 
-        const speed = Math.sqrt(u*u + v*v) * 3.6;
+        const speedMs  = Math.sqrt(u*u + v*v);
+        const speedKmh = speedMs * 3.6;
         let dir = Math.atan2(-u, -v) * 180 / Math.PI;
         if (dir < 0) dir += 360;
 
-        const size    = zoom >= 11 ? 24 : zoom >= 9 ? 18 : 14;
-        const opacity = speed < 2 ? 0.3 : 0.85;
+        const size = zoom >= 11 ? 32 : zoom >= 9 ? 24 : 18;
 
         const icon = L.divIcon({
           className: '',
-          html: `<svg width="${size}" height="${size}" viewBox="0 0 24 24"
-                      style="transform:rotate(${dir}deg);opacity:${opacity}"
-                      xmlns="http://www.w3.org/2000/svg">
-                   <polygon points="12,2 17,20 12,16 7,20" fill="white" stroke="rgba(0,0,0,0.5)" stroke-width="1"/>
-                 </svg>`,
+          html:       windBarbSVG(speedKmh, dir, size),
           iconSize:   [size, size],
           iconAnchor: [size/2, size/2],
         });
@@ -403,22 +451,23 @@
         if (layer === 'temperature') {
           heatOverlay = renderTemperature(latest, activeTime);
           updateLegend('temperature', globalTMin, globalTMax, '°C');
+          if (windLayer) windLayer.addTo(map);
+          clearArrowLayer(map);
         } else if (layer === 'humidity') {
           heatOverlay = renderHumidity(latest);
           if (latest.humidity_grid)
             updateLegend('humidity', latest.humidity_grid.h_min, latest.humidity_grid.h_max, '%');
+          if (windLayer) windLayer.addTo(map);
+          clearArrowLayer(map);
         } else if (layer === 'wind') {
           heatOverlay = renderWindSpeed(latest);
           updateLegend('wind', WIND_SPEED_MIN, WIND_SPEED_MAX, ' km/h');
+          if (windLayer) map.removeLayer(windLayer);
+          const arrowCheck = document.getElementById('wind-check');
+          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid);
         }
 
         if (heatOverlay) heatOverlay.addTo(map);
-
-        if (layer === 'wind') {
-          renderArrowLayer(map, windGrid);
-        } else {
-          clearArrowLayer(map);
-        }
       }
 
       function switchTime(time) {
@@ -456,7 +505,8 @@
 
       map.on('zoomend', () => {
         if (activeLayer === 'wind') {
-          renderArrowLayer(map, windGrid);
+          const arrowCheck = document.getElementById('wind-check');
+          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid);
         }
       });
 
@@ -523,11 +573,11 @@
       });
 
       document.getElementById('wind-check').addEventListener('change', e => {
-        if (!windLayer) return;
+        if (activeLayer !== 'wind') return;
         if (e.target.checked) {
-          windLayer.addTo(map);
+          renderArrowLayer(map, windGrid);
         } else {
-          map.removeLayer(windLayer);
+          clearArrowLayer(map);
         }
       });
 
