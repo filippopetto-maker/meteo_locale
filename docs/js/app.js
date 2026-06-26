@@ -52,14 +52,15 @@
     { t: 1.00, r: 0x08, g: 0x30, b: 0x6b }, // #08306b — blu scuro umido
   ];
   const WIND_PALETTE = [
-    { t: 0.00, r: 0xc8, g: 0xeb, b: 0xfa }, // calma — azzurro quasi bianco
-    { t: 0.25, r: 0x74, g: 0xc6, b: 0xe8 }, // brezza leggera
-    { t: 0.50, r: 0x1a, g: 0x9b, b: 0xc8 }, // brezza moderata
-    { t: 0.75, r: 0x08, g: 0x52, b: 0x8a }, // vento sostenuto
-    { t: 1.00, r: 0x08, g: 0x30, b: 0x6b }, // vento forte
+    { t: 0.00, r: 0x00, g: 0x33, b: 0x99 }, // blu scuro — calma
+    { t: 0.20, r: 0x00, g: 0x99, b: 0xff }, // azzurro — brezza
+    { t: 0.40, r: 0x00, g: 0xcc, b: 0x66 }, // verde — moderato
+    { t: 0.60, r: 0xff, g: 0xdd, b: 0x00 }, // giallo — sostenuto
+    { t: 0.80, r: 0xff, g: 0x66, b: 0x00 }, // arancio — forte
+    { t: 1.00, r: 0xcc, g: 0x00, b: 0x00 }, // rosso — molto forte
   ];
-  const WIND_SPEED_MIN = 0;    // km/h — scala fissa
-  const WIND_SPEED_MAX = 60;   // km/h
+  const WIND_SPEED_MIN = 0;
+  const WIND_SPEED_MAX = 100;
 
   function lerp(a, b, f) { return a + (b - a) * f; }
 
@@ -421,7 +422,7 @@
         const gradients = {
           temperature: 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)',
           humidity:    'linear-gradient(to right, #d96f27, #fee080, #b0e090, #317ec8, #08306b)',
-          wind:        'linear-gradient(to right, #c8ebfa, #74c6e8, #1a9bc8, #08528a, #08306b)',
+          wind:        'linear-gradient(to right, #003399, #0099ff, #00cc66, #ffdd00, #ff6600, #cc0000)',
         };
         document.getElementById('legend-title').textContent = titles[layer] ?? layer;
         document.getElementById('legend-bar').style.background = gradients[layer] ?? '';
@@ -462,9 +463,15 @@
         } else if (layer === 'wind') {
           heatOverlay = renderWindSpeed(latest);
           updateLegend('wind', WIND_SPEED_MIN, WIND_SPEED_MAX, ' km/h');
-          if (windLayer) map.removeLayer(windLayer);
           const arrowCheck = document.getElementById('wind-check');
-          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid);
+          const arrowsActive = arrowCheck && arrowCheck.checked;
+          if (arrowsActive) {
+            if (windLayer) map.removeLayer(windLayer);
+            renderArrowLayer(map, windGrid);
+          } else {
+            if (windLayer) windLayer.addTo(map);
+            clearArrowLayer(map);
+          }
         }
 
         if (heatOverlay) heatOverlay.addTo(map);
@@ -575,9 +582,11 @@
       document.getElementById('wind-check').addEventListener('change', e => {
         if (activeLayer !== 'wind') return;
         if (e.target.checked) {
+          if (windLayer) map.removeLayer(windLayer);
           renderArrowLayer(map, windGrid);
         } else {
           clearArrowLayer(map);
+          if (windLayer) windLayer.addTo(map);
         }
       });
 
