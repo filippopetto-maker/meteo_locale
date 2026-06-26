@@ -239,16 +239,11 @@
   }
 
   function arrowSpacingDeg(zoom) {
-    const spacings = { 7: 0.8, 8: 0.6, 9: 0.35, 10: 0.25, 11: 0.15, 12: 0.09, 13: 0.06 };
-    return spacings[Math.min(13, Math.max(7, zoom))] ?? 0.25;
+    const spacings = { 7: 1.0, 8: 0.75, 9: 0.45, 10: 0.32, 11: 0.20, 12: 0.12, 13: 0.08 };
+    return spacings[Math.min(13, Math.max(7, zoom))] ?? 0.32;
   }
 
-  function speedToColor(speedKmh, wsMin, wsMax) {
-    const [r, g, b] = valueToColor(speedKmh, wsMin, wsMax, WIND_PALETTE);
-    return `rgb(${r},${g},${b})`;
-  }
-
-  function windBarbSVG(speedKmh, dirDeg, size, wsMin, wsMax) {
+  function windBarbSVG(speedKmh, dirDeg, size) {
     const s = size;
     const halfS = s / 2;
 
@@ -257,10 +252,10 @@
     const full    = Math.floor(remaining / 10); remaining -= full * 10;
     const half    = Math.floor(remaining / 5);
 
-    const shaft    = `M ${halfS} ${s * 0.1} L ${halfS} ${s * 0.85}`;
-    const step     = s * 0.12;
-    const barbLen  = s * 0.38;
-    const halfBL   = s * 0.22;
+    const shaft   = `M ${halfS} ${s * 0.1} L ${halfS} ${s * 0.85}`;
+    const step    = s * 0.12;
+    const barbLen = s * 0.38;
+    const halfBL  = s * 0.22;
     let barbs = '';
     let y = s * 0.15;
 
@@ -276,13 +271,12 @@
       barbs += `M ${halfS} ${y} L ${halfS + halfBL} ${y - step * 0.3} `;
     }
 
-    const color = speedToColor(speedKmh, wsMin, wsMax);
     return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"
                 style="transform:rotate(${dirDeg}deg);transform-origin:${halfS}px ${halfS}px"
                 xmlns="http://www.w3.org/2000/svg">
-              <path d="${shaft}" stroke="${color}" stroke-width="2" fill="none"
+              <path d="${shaft}" stroke="white" stroke-width="2" fill="none"
                     stroke-linecap="round"/>
-              <path d="${barbs}" stroke="${color}" stroke-width="1.8" fill="${color}"
+              <path d="${barbs}" stroke="white" stroke-width="1.8" fill="white"
                     stroke-linecap="round" stroke-linejoin="round"/>
             </svg>`;
   }
@@ -307,12 +301,9 @@
            data[r1*nx+c1]*dr*dc;
   }
 
-  function renderArrowLayer(map, windGrid, latest) {
+  function renderArrowLayer(map, windGrid) {
     clearArrowLayer(map);
     if (!windGrid || !windGrid[0] || !windGrid[0].data.length) return;
-    const wg    = latest?.wind_speed_grid;
-    const wsMin = wg ? wg.ws_min : WIND_SPEED_MIN;
-    const wsMax = wg ? wg.ws_max : WIND_SPEED_MAX;
 
     const uData = windGrid[0];
     const vData = windGrid[1];
@@ -338,11 +329,11 @@
         let dir = Math.atan2(-u, -v) * 180 / Math.PI;
         if (dir < 0) dir += 360;
 
-        const size = zoom >= 11 ? 32 : zoom >= 9 ? 24 : 18;
+        const size = zoom >= 11 ? 48 : zoom >= 9 ? 36 : 26;
 
         const icon = L.divIcon({
           className: '',
-          html:       windBarbSVG(speedKmh, dir, size, wsMin, wsMax),
+          html:       windBarbSVG(speedKmh, dir, size),
           iconSize:   [size, size],
           iconAnchor: [size/2, size/2],
         });
@@ -528,7 +519,7 @@
       map.on('zoomend', () => {
         if (activeLayer === 'wind') {
           const arrowCheck = document.getElementById('arrow-check');
-          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid, latest);
+          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid);
         }
       });
 
@@ -613,7 +604,7 @@
         if (e.target.checked) {
           if (windLayer) map.removeLayer(windLayer);
           hideStations(map, stationMarkers);
-          renderArrowLayer(map, windGrid, latest);
+          renderArrowLayer(map, windGrid);
         } else {
           clearArrowLayer(map);
           showStations(map, stationMarkers);
