@@ -59,8 +59,8 @@
     { t: 0.80, r: 0xff, g: 0x66, b: 0x00 }, // arancio — forte
     { t: 1.00, r: 0xcc, g: 0x00, b: 0x00 }, // rosso — molto forte
   ];
-  const WIND_SPEED_MIN = 0;
-  const WIND_SPEED_MAX = 100;
+  const WIND_SPEED_MIN = 0;   // fallback se wind_speed_grid non disponibile
+  const WIND_SPEED_MAX = 50;
 
   function lerp(a, b, f) { return a + (b - a) * f; }
 
@@ -120,7 +120,7 @@
   function renderWindSpeed(latest) {
     const wg = latest.wind_speed_grid;
     if (!wg || !wg.values || wg.values.length === 0) return null;
-    return renderGridLayer(wg, WIND_SPEED_MIN, WIND_SPEED_MAX, WIND_PALETTE, 179);
+    return renderGridLayer(wg, wg.ws_min, wg.ws_max, WIND_PALETTE, 179);
   }
 
   let windUnit = 'kmh'; // 'kmh' | 'kts'
@@ -243,12 +243,12 @@
     return spacings[Math.min(13, Math.max(7, zoom))] ?? 0.25;
   }
 
-  function speedToColor(speedKmh) {
-    const [r, g, b] = valueToColor(speedKmh, WIND_SPEED_MIN, WIND_SPEED_MAX, WIND_PALETTE);
+  function speedToColor(speedKmh, wsMin, wsMax) {
+    const [r, g, b] = valueToColor(speedKmh, wsMin, wsMax, WIND_PALETTE);
     return `rgb(${r},${g},${b})`;
   }
 
-  function windBarbSVG(speedKmh, dirDeg, size) {
+  function windBarbSVG(speedKmh, dirDeg, size, wsMin, wsMax) {
     const s = size;
     const halfS = s / 2;
 
@@ -276,7 +276,7 @@
       barbs += `M ${halfS} ${y} L ${halfS + halfBL} ${y - step * 0.3} `;
     }
 
-    const color = speedToColor(speedKmh);
+    const color = speedToColor(speedKmh, wsMin, wsMax);
     return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"
                 style="transform:rotate(${dirDeg}deg);transform-origin:${halfS}px ${halfS}px"
                 xmlns="http://www.w3.org/2000/svg">
@@ -307,9 +307,12 @@
            data[r1*nx+c1]*dr*dc;
   }
 
-  function renderArrowLayer(map, windGrid) {
+  function renderArrowLayer(map, windGrid, latest) {
     clearArrowLayer(map);
     if (!windGrid || !windGrid[0] || !windGrid[0].data.length) return;
+    const wg    = latest?.wind_speed_grid;
+    const wsMin = wg ? wg.ws_min : WIND_SPEED_MIN;
+    const wsMax = wg ? wg.ws_max : WIND_SPEED_MAX;
 
     const uData = windGrid[0];
     const vData = windGrid[1];
@@ -339,7 +342,7 @@
 
         const icon = L.divIcon({
           className: '',
-          html:       windBarbSVG(speedKmh, dir, size),
+          html:       windBarbSVG(speedKmh, dir, size, wsMin, wsMax),
           iconSize:   [size, size],
           iconAnchor: [size/2, size/2],
         });
@@ -457,7 +460,10 @@
           if (windToggle)  windToggle.style.display  = 'none';
           if (arrowToggle) arrowToggle.style.display = '';
           heatOverlay = renderWindSpeed(latest);
-          updateLegend('wind', WIND_SPEED_MIN, WIND_SPEED_MAX, '');
+          const wg    = latest.wind_speed_grid;
+          const wsMin = wg ? wg.ws_min : WIND_SPEED_MIN;
+          const wsMax = wg ? wg.ws_max : WIND_SPEED_MAX;
+          updateLegend('wind', wsMin, wsMax, '');
           updateWindLegendTitle();
           // Frecce off di default → reset checkbox e mostra particelle
           if (arrowCheck) arrowCheck.checked = false;
@@ -522,7 +528,7 @@
       map.on('zoomend', () => {
         if (activeLayer === 'wind') {
           const arrowCheck = document.getElementById('arrow-check');
-          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid);
+          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid, latest);
         }
       });
 
@@ -607,7 +613,7 @@
         if (e.target.checked) {
           if (windLayer) map.removeLayer(windLayer);
           hideStations(map, stationMarkers);
-          renderArrowLayer(map, windGrid);
+          renderArrowLayer(map, windGrid, latest);
         } else {
           clearArrowLayer(map);
           showStations(map, stationMarkers);
