@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-19T03:39:52Z",
+  "generated_at": "2026-07-19T03:59:34Z",
   "stations": [
     {
       "id": 25,
@@ -24935,11 +24935,6 @@
         }
       ],
       "observed": [
-        {
-          "t": "2026-07-12T03:50:00+00:00",
-          "temp": 21,
-          "hum": 100
-        },
         {
           "t": "2026-07-12T04:02:10.214861+00:00",
           "temp": 24.75,
@@ -86445,8 +86440,8 @@
         },
         {
           "t": "2026-07-19T04:00:00+00:00",
-          "temp": 19.43,
-          "hum": 69
+          "temp": 19.6,
+          "hum": 66
         }
       ],
       "observed": [
@@ -89241,8 +89236,8 @@
         },
         {
           "t": "2026-07-19T04:00:00+00:00",
-          "temp": 22.6,
-          "hum": 81
+          "temp": 22.67,
+          "hum": 78
         }
       ],
       "observed": [
@@ -92252,8 +92247,8 @@
         },
         {
           "t": "2026-07-19T04:00:00+00:00",
-          "temp": 22.83,
-          "hum": 68
+          "temp": 23.21,
+          "hum": 61
         }
       ],
       "observed": [
@@ -95263,8 +95258,8 @@
         },
         {
           "t": "2026-07-19T04:00:00+00:00",
-          "temp": 22.93,
-          "hum": 68
+          "temp": 23.26,
+          "hum": 61
         }
       ],
       "observed": [
@@ -97499,10 +97494,10 @@
     {
       "id": 3,
       "name": "Roma Sud (Casal Palocco)",
-      "mae": 2.239,
-      "n_pairs": 767,
-      "mae_hum": 9.413,
-      "n_pairs_hum": 767
+      "mae": 2.241,
+      "n_pairs": 766,
+      "mae_hum": 9.415,
+      "n_pairs_hum": 766
     },
     {
       "id": 33,
@@ -97659,36 +97654,36 @@
     {
       "id": 57,
       "name": "Sigillo",
-      "mae": 3.553,
+      "mae": 3.552,
       "n_pairs": 389,
-      "mae_hum": 11.954,
+      "mae_hum": 11.946,
       "n_pairs_hum": 389
     },
     {
       "id": 58,
       "name": "Tarquinia",
-      "mae": 3.14,
+      "mae": 3.139,
       "n_pairs": 432,
-      "mae_hum": 7.616,
+      "mae_hum": 7.609,
       "n_pairs_hum": 432
     },
     {
       "id": 59,
       "name": "Tor Bella Monaca",
-      "mae": 3.004,
+      "mae": 3.003,
       "n_pairs": 432,
-      "mae_hum": 9.241,
+      "mae_hum": 9.225,
       "n_pairs_hum": 432
     },
     {
       "id": 60,
       "name": "Tor Vergata Est",
-      "mae": 2.941,
+      "mae": 2.94,
       "n_pairs": 432,
-      "mae_hum": 9.255,
+      "mae_hum": 9.238,
       "n_pairs_hum": 432
     }
   ],
   "mae_global": 2.841,
-  "mae_global_hum": 10.357
+  "mae_global_hum": 10.355
 }
