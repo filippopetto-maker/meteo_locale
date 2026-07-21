@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-21T03:39:49Z",
+  "generated_at": "2026-07-21T03:48:28Z",
   "stations": [
     {
       "id": 25,
@@ -85775,8 +85775,8 @@
         },
         {
           "t": "2026-07-21T04:00:00+00:00",
-          "temp": 19.09,
-          "hum": 94
+          "temp": 19.14,
+          "hum": 88
         }
       ],
       "observed": [
@@ -88406,8 +88406,8 @@
         },
         {
           "t": "2026-07-21T04:00:00+00:00",
-          "temp": 23.1,
-          "hum": 85
+          "temp": 22.99,
+          "hum": 84
         }
       ],
       "observed": [
@@ -91397,8 +91397,8 @@
         },
         {
           "t": "2026-07-21T04:00:00+00:00",
-          "temp": 23.01,
-          "hum": 79
+          "temp": 23.09,
+          "hum": 84
         }
       ],
       "observed": [
@@ -94388,8 +94388,8 @@
         },
         {
           "t": "2026-07-21T04:00:00+00:00",
-          "temp": 23.01,
-          "hum": 79
+          "temp": 23.1,
+          "hum": 84
         }
       ],
       "observed": [
@@ -96784,26 +96784,26 @@
       "name": "Tarquinia",
       "mae": 3.053,
       "n_pairs": 424,
-      "mae_hum": 8.368,
+      "mae_hum": 8.366,
       "n_pairs_hum": 424
     },
     {
       "id": 59,
       "name": "Tor Bella Monaca",
-      "mae": 2.984,
+      "mae": 2.983,
       "n_pairs": 424,
-      "mae_hum": 9.613,
+      "mae_hum": 9.625,
       "n_pairs_hum": 424
     },
     {
       "id": 60,
       "name": "Tor Vergata Est",
-      "mae": 2.917,
+      "mae": 2.916,
       "n_pairs": 424,
-      "mae_hum": 9.594,
+      "mae_hum": 9.606,
       "n_pairs_hum": 424
     }
   ],
   "mae_global": 2.827,
-  "mae_global_hum": 10.236
+  "mae_global_hum": 10.237
 }
