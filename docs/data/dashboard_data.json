@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-24T03:42:55Z",
+  "generated_at": "2026-07-24T03:49:49Z",
   "stations": [
     {
       "id": 25,
@@ -92228,8 +92228,8 @@
         },
         {
           "t": "2026-07-24T04:00:00+00:00",
-          "temp": 22.64,
-          "hum": 90
+          "temp": 22.8,
+          "hum": 88
         }
       ],
       "observed": [
@@ -94605,10 +94605,10 @@
       "name": "Tor Vergata Est",
       "mae": 2.88,
       "n_pairs": 417,
-      "mae_hum": 10.149,
+      "mae_hum": 10.144,
       "n_pairs_hum": 417
     }
   ],
   "mae_global": 2.756,
-  "mae_global_hum": 9.907
+  "mae_global_hum": 9.906
 }
