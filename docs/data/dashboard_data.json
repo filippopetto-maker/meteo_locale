@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-24T11:39:33Z",
+  "generated_at": "2026-07-24T11:59:27Z",
   "stations": [
     {
       "id": 25,
@@ -24260,11 +24260,6 @@
         }
       ],
       "observed": [
-        {
-          "t": "2026-07-17T11:50:00+00:00",
-          "temp": 33,
-          "hum": 59.35
-        },
         {
           "t": "2026-07-17T12:02:06.344505+00:00",
           "temp": 33.4,
@@ -94129,10 +94124,10 @@
     {
       "id": 3,
       "name": "Roma Sud (Casal Palocco)",
-      "mae": 2.022,
-      "n_pairs": 731,
-      "mae_hum": 9.277,
-      "n_pairs_hum": 731
+      "mae": 2.023,
+      "n_pairs": 730,
+      "mae_hum": 9.284,
+      "n_pairs_hum": 730
     },
     {
       "id": 33,
@@ -94320,5 +94315,5 @@
     }
   ],
   "mae_global": 2.744,
-  "mae_global_hum": 10.067
+  "mae_global_hum": 10.068
 }
