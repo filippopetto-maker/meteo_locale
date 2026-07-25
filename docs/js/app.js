@@ -80,7 +80,7 @@
     ];
   }
 
-  function renderGridLayer(gridData, vMin, vMax, palette, alpha = 153) {
+  function renderGridLayer(gridData, vMin, vMax, palette, alpha = 127) {
     const { nx, ny, lat_min, lat_max, lon_min, lon_max, values } = gridData;
     const canvas = document.createElement('canvas');
     canvas.width = nx; canvas.height = ny;
@@ -108,19 +108,19 @@
   function renderTemperature(latest, time) {
     const tg = time === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
     if (!tg || !tg.values || tg.values.length === 0) return null;
-    return renderGridLayer(tg, globalTMin, globalTMax, TEMP_PALETTE);
+    return renderGridLayer(tg, globalTMin, globalTMax, TEMP_PALETTE, 127);
   }
 
   function renderHumidity(latest) {
     const hg = latest.humidity_grid;
     if (!hg || !hg.values || hg.values.length === 0) return null;
-    return renderGridLayer(hg, HUM_SCALE_MIN, HUM_SCALE_MAX, HUM_PALETTE, 179);
+    return renderGridLayer(hg, HUM_SCALE_MIN, HUM_SCALE_MAX, HUM_PALETTE, 149);
   }
 
   function renderWindSpeed(latest) {
     const wg = latest.wind_speed_grid;
     if (!wg || !wg.values || wg.values.length === 0) return null;
-    return renderGridLayer(wg, wg.ws_min, wg.ws_max, WIND_PALETTE, 179);
+    return renderGridLayer(wg, wg.ws_min, wg.ws_max, WIND_PALETTE, 149);
   }
 
   let windUnit = 'kmh'; // 'kmh' | 'kts'
