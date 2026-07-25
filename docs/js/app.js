@@ -124,6 +124,8 @@
   }
 
   let windUnit = 'kmh'; // 'kmh' | 'kts'
+  let currentWsMin = WIND_SPEED_MIN;
+  let currentWsMax = WIND_SPEED_MAX;
 
   function formatWind(kmh) {
     if (windUnit === 'kts') return (kmh * 0.539957).toFixed(1) + ' kts';
@@ -457,10 +459,9 @@
           if (arrowToggle) arrowToggle.style.display = '';
           heatOverlay = renderWindSpeed(latest);
           const wg    = latest.wind_speed_grid;
-          const wsMin = wg ? wg.ws_min : WIND_SPEED_MIN;
-          const wsMax = wg ? wg.ws_max : WIND_SPEED_MAX;
-          updateLegend('wind', wsMin, wsMax, '');
-          updateWindLegendTitle();
+          currentWsMin = wg ? wg.ws_min : WIND_SPEED_MIN;
+          currentWsMax = wg ? wg.ws_max : WIND_SPEED_MAX;
+          updateWindLegend();
           // Frecce off di default → reset checkbox e mostra particelle
           if (arrowCheck) arrowCheck.checked = false;
           clearArrowLayer(map);
@@ -583,18 +584,19 @@
         if (!popupClosed) popup.setContent(buildContent(localita));
       });
 
-      function updateWindLegendTitle() {
+      function updateWindLegend() {
         if (activeLayer !== 'wind') return;
         const isKts = document.querySelector('input[name="wind-unit"][value="kts"]')?.checked;
-        document.getElementById('legend-title').textContent =
-          isKts ? 'Velocità vento (nodi)' : 'Velocità vento (km/h)';
+        const factor = isKts ? 0.539957 : 1;
+        const unit = isKts ? ' kts' : ' km/h';
+        updateLegend('wind', currentWsMin * factor, currentWsMax * factor, unit);
       }
 
       document.querySelectorAll('input[name="wind-unit"]').forEach(radio => {
         radio.addEventListener('change', e => {
           windUnit = e.target.value;
           updateStationPopups(stationMarkers, stations);
-          updateWindLegendTitle();
+          updateWindLegend();
         });
       });
 
