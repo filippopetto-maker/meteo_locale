@@ -6,119 +6,251 @@
   <title>Meteo Roma</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
+    :root {
+      --bg-panel: rgba(18, 22, 32, 0.94);
+      --border-panel: rgba(255, 255, 255, 0.08);
+      --text-primary: #e7ecf5;
+      --text-secondary: #a7afc0;
+      --text-muted: #8892a4;
+      --accent: #2f6fe0;
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { height: 100%; width: 100%; overflow: hidden; font-family: sans-serif; }
-    #map { height: 100vh; width: 100vw; }
+    html, body {
+      height: 100%; width: 100%; overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0e1119;
+    }
+    #map { height: 100vh; width: 100vw; background: #0e1119; }
 
-    #info-panel {
-      position: absolute;
-      bottom: 24px;
-      left: 12px;
-      z-index: 1000;
-      background: rgba(255, 255, 255, 0.92);
-      border-radius: 8px;
-      padding: 10px 14px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-      font-size: 13px;
-      line-height: 1.5;
-    }
-    #info-panel label { font-size: 13px; }
-    #info-panel input[type="radio"] { width: 13px; height: 13px; }
-    #wind-toggle, #arrow-toggle {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      cursor: pointer;
-    }
-    #wind-toggle input, #arrow-toggle input { cursor: pointer; }
-    .wind-unit-toggle {
-      display: flex;
-      gap: 8px;
-      margin-top: 5px;
-      font-size: 12px;
-    }
-    .wind-unit-toggle label { cursor: pointer; font-size: 12px; }
-
-    /* Pannello info — top-left (iniettato da JS) */
-    .info-panel {
+    /* ─── Pannello di controllo unico — top-left (iniettato da JS) ─── */
+    #control-panel {
       position: fixed;
       top: 10px;
       left: 10px;
       z-index: 1000;
-      background: rgba(0, 0, 0, 0.6);
-      color: white;
-      padding: 8px 12px;
-      border-radius: 6px;
-      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: var(--bg-panel);
+      border: 0.5px solid var(--border-panel);
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: var(--text-primary);
       font-size: 13px;
-      line-height: 1.6;
-      pointer-events: auto;
+      line-height: 1.5;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      max-width: calc(100vw - 20px);
+      max-height: calc(100vh - 20px);
+      overflow-y: auto;
     }
-    .info-title { font-weight: bold; font-size: 14px; }
-    .info-update { font-size: 11px; opacity: 0.8; }
 
-    /* Toggle layer */
-    .layer-toggle { margin-top: 8px; display: flex; gap: 6px; }
+    .panel-head { display: flex; flex-direction: column; }
+    .info-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+    .info-update { font-size: 11px; color: var(--text-secondary); }
+
+    .panel-divider { height: 1px; background: var(--border-panel); }
+
+    /* ─── Segmented control (layer + Adesso/+1h) ─── */
+    .layer-toggle {
+      display: flex;
+      gap: 2px;
+      padding: 2px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+    }
     .layer-toggle button {
-      background: rgba(255, 255, 255, 0.15);
-      color: white;
+      flex: 1;
+      background: transparent;
+      color: var(--text-secondary);
       border: none;
-      padding: 4px 10px;
-      border-radius: 4px;
+      padding: 5px 9px;
+      border-radius: 6px;
       cursor: pointer;
       font-size: 12px;
+      font-family: inherit;
+      white-space: nowrap;
+      transition: background .15s ease, color .15s ease;
     }
-    .layer-toggle button.active { background: rgba(255, 255, 255, 0.4); font-weight: bold; }
+    .layer-toggle button:hover:not(.active) {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-primary);
+    }
+    .layer-toggle button.active {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
 
-    /* Legenda — bottom-right (iniettata da JS, gradiente impostato da JS) */
+    /* ─── Switch iOS-like (Mostra vento / Frecce direzionali) ─── */
+    .ctrl-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .ctrl-row:hover { color: var(--text-primary); }
+    .ctrl-row input[type="checkbox"] {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .switch {
+      position: relative;
+      flex: 0 0 auto;
+      width: 32px;
+      height: 18px;
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.14);
+      transition: background .18s ease;
+    }
+    .switch::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform .18s ease;
+    }
+    .ctrl-row input:checked ~ .switch { background: var(--accent); }
+    .ctrl-row input:checked ~ .switch::after { transform: translateX(14px); }
+    .ctrl-row input:focus-visible ~ .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ─── Pillole radio (km/h — nodi) ─── */
+    .pill-group {
+      display: flex;
+      gap: 2px;
+      padding: 2px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+      align-self: flex-start;
+    }
+    .pill { position: relative; cursor: pointer; }
+    .pill input[type="radio"] {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .pill span {
+      display: block;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      transition: background .15s ease, color .15s ease;
+    }
+    .pill:hover input:not(:checked) + span { color: var(--text-primary); }
+    .pill input:checked + span {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+    .pill input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ─── Link dashboard ─── */
+    .dashboard-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 12px;
+    }
+    .dashboard-link:hover { color: var(--text-primary); }
+    .dashboard-link .chevron { color: var(--text-muted); }
+
+    /* ─── Legenda — bottom-right (gradiente e valori calcolati da JS) ─── */
     .temp-legend {
       position: fixed;
       bottom: 30px;
       right: 10px;
       z-index: 1000;
-      background: rgba(0, 0, 0, 0.6);
-      color: white;
+      background: var(--bg-panel);
+      border: 0.5px solid var(--border-panel);
+      border-radius: 10px;
+      color: var(--text-primary);
       padding: 8px 12px;
-      border-radius: 6px;
-      font-family: sans-serif;
+      font-family: inherit;
       font-size: 12px;
       width: 160px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
     }
-    .legend-title { font-weight: bold; margin-bottom: 4px; }
-    .legend-bar { height: 12px; border-radius: 3px; margin-bottom: 3px; }
+    .legend-title { font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; }
+    .legend-bar { height: 6px; border-radius: 3px; margin-bottom: 3px; }
     .legend-labels { position: relative; height: 1.2em; margin-top: 4px; }
     .legend-tick {
       position: absolute;
       transform: translateX(-50%);
       font-size: 11px;
+      color: var(--text-muted);
       white-space: nowrap;
     }
     .legend-tick:first-child { transform: translateX(0); }
     .legend-tick:last-child  { transform: translateX(-100%); }
+
+    /* ─── Popup Leaflet in tema scuro ─── */
+    .meteo-popup .leaflet-popup-content-wrapper {
+      background: var(--bg-panel);
+      color: var(--text-primary);
+      border: 0.5px solid var(--border-panel);
+      border-radius: 10px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    }
+    .meteo-popup .leaflet-popup-content {
+      margin: 10px 12px;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .meteo-popup .leaflet-popup-content > b:first-child {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .meteo-popup .leaflet-popup-tip {
+      background: var(--bg-panel);
+      border: 0.5px solid var(--border-panel);
+      box-shadow: none;
+    }
+    .meteo-popup .leaflet-popup-close-button { color: var(--text-muted); }
+    .meteo-popup .leaflet-popup-close-button:hover { color: var(--text-primary); }
+
+    /* ─── Controlli Leaflet in tema scuro ─── */
+    .leaflet-bar a, .leaflet-bar a:hover {
+      background: var(--bg-panel);
+      color: var(--text-primary);
+      border-bottom: 0.5px solid var(--border-panel);
+    }
+    .leaflet-bar a:hover { background: #1c2130; }
+    .leaflet-control-attribution {
+      background: rgba(18, 22, 32, 0.8) !important;
+      color: var(--text-muted) !important;
+      font-size: 10px;
+    }
+    .leaflet-control-attribution a { color: var(--text-secondary) !important; }
+
+    @media (max-width: 480px) {
+      #control-panel {
+        right: 10px;
+        gap: 6px;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+      .layer-toggle button { padding: 5px 6px; font-size: 11px; }
+      .temp-legend { width: 140px; bottom: 20px; }
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
-
-  <div id="info-panel">
-    <label id="wind-toggle">
-      <input type="checkbox" id="wind-check" checked>
-      Mostra vento
-    </label>
-    <label id="arrow-toggle" style="display:none">
-      <input type="checkbox" id="arrow-check">
-      Mostra frecce direzionali
-    </label>
-    <div class="wind-unit-toggle">
-      <label><input type="radio" name="wind-unit" value="kmh" checked> km/h</label>
-      <label><input type="radio" name="wind-unit" value="kts"> nodi</label>
-    </div>
-    <div style="margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 6px;">
-      <a href="dashboard.html" style="color:#74c0fc; font-size:12px; text-decoration:none;">
-        📊 Dashboard →
-      </a>
-    </div>
-  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet-velocity@2.1.1/dist/leaflet-velocity.min.js"></script>

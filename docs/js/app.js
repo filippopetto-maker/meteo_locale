@@ -179,7 +179,7 @@
         fillColor:   '#9ca3af',
         fillOpacity: 0.9,
       }).addTo(map);
-      marker.bindPopup('', { maxWidth: 220 });
+      marker.bindPopup('', { maxWidth: 220, className: 'meteo-popup' });
       return marker;
     });
     updateStationPopups(markers, stations);
@@ -362,9 +362,10 @@
   async function init() {
     const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      maxZoom: 18,
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19,
     }).addTo(map);
 
     let windLayer = null;
@@ -385,15 +386,17 @@
       globalTMin = Math.min(tgObs?.t_min ?? Infinity,  tgFc?.t_min ?? Infinity);
       globalTMax = Math.max(tgObs?.t_max ?? -Infinity, tgFc?.t_max ?? -Infinity);
 
-      // Pannello info — top-left con toggle layer
-      const infoPanel = L.DomUtil.create('div', 'info-panel');
+      // Pannello di controllo unico — top-left
+      const infoPanel = L.DomUtil.create('div');
+      infoPanel.id = 'control-panel';
       const firstFc = (latest.stations || []).find(s => s.forecast?.valid_for);
       const validOre = firstFc ? formatTime(firstFc.forecast.valid_for) : '';
       infoPanel.innerHTML =
-        `<span class="info-title">🌦️ Meteo Locale — Roma</span><br>` +
-        `<span class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</span>` +
-        `<br>` +
-        `<span class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</span>` +
+        `<div class="panel-head">` +
+        `<div class="info-title">🌦️ Meteo Locale — Roma</div>` +
+        `<div class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</div>` +
+        `<div class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</div>` +
+        `</div>` +
         `<div class="layer-toggle">` +
         `<button id="btn-wind">💨 Vento</button>` +
         `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
@@ -402,8 +405,26 @@
         `<div class="layer-toggle" id="time-toggle">` +
         `<button id="btn-now" class="active">Adesso</button>` +
         `<button id="btn-plus1">+1h</button>` +
-        `</div>`;
-      document.getElementById('map').appendChild(infoPanel);
+        `</div>` +
+        `<label class="ctrl-row" id="wind-toggle">` +
+        `<input type="checkbox" id="wind-check" checked>` +
+        `<span class="switch"></span>` +
+        `<span>Mostra vento</span>` +
+        `</label>` +
+        `<label class="ctrl-row" id="arrow-toggle" style="display:none">` +
+        `<input type="checkbox" id="arrow-check">` +
+        `<span class="switch"></span>` +
+        `<span>Frecce direzionali</span>` +
+        `</label>` +
+        `<div class="pill-group">` +
+        `<label class="pill"><input type="radio" name="wind-unit" value="kmh" checked><span>km/h</span></label>` +
+        `<label class="pill"><input type="radio" name="wind-unit" value="kts"><span>nodi</span></label>` +
+        `</div>` +
+        `<div class="panel-divider"></div>` +
+        `<a class="dashboard-link" href="dashboard.html">` +
+        `<span>📊 Dashboard</span><span class="chevron">›</span>` +
+        `</a>`;
+      document.body.appendChild(infoPanel);
 
       // Legenda — bottom-right (aggiornata da updateLegend)
       const legend = L.DomUtil.create('div', 'temp-legend');
@@ -414,10 +435,11 @@
       document.getElementById('map').appendChild(legend);
 
       function updateLegend(layer, vMin, vMax, unit) {
+        const unitLabel = unit.trim();
         const titles = {
-          temperature: `Temperatura (${unit})`,
-          humidity:    `Umidità (${unit})`,
-          wind:        `Velocità vento (${unit})`,
+          temperature: `Temperatura (${unitLabel})`,
+          humidity:    `Umidità (${unitLabel})`,
+          wind:        `Velocità vento (${unitLabel})`,
         };
         const gradients = {
           temperature: 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)',
