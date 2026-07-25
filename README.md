@@ -2,7 +2,7 @@
 
 Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
-**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità + particelle vento). GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **32 stazioni attive** su tutto il Lazio (6 Roma metro + 26 espansione Lazio) con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h). **Dashboard Chart.js live** (`dashboard.html`) con forecast vs observed 7 giorni per stazione, MAE per stazione, switch Temperatura/Umidità.
+**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità/vento + particelle/frecce). **Restyling estetico dark theme completato (luglio 2026)**: basemap CartoDB Dark Matter, pannello controlli unificato con segmented control e switch stile iOS, popup e legenda ristilizzati mantenendo invariata la logica di calcolo dati. GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **32 stazioni attive** su tutto il Lazio (6 Roma metro + 26 espansione Lazio) con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h). **Dashboard Chart.js live** (`dashboard.html`) con forecast vs observed 7 giorni per stazione, MAE per stazione, switch Temperatura/Umidità.
 
 ---
 
@@ -15,15 +15,16 @@ Sistema di previsione meteo su scala comunale che cala lo stato meteorologico re
 5. [Fonti dati](#-fonti-dati)
 6. [Feature orografiche](#-feature-orografiche)
 7. [Stato attuale](#-stato-attuale)
-8. [Risultati del modello](#-risultati-del-modello)
-9. [Struttura del progetto](#-struttura-del-progetto)
-10. [Database — schema](#-database--schema)
-11. [Setup e installazione](#-setup-e-installazione)
-12. [I moduli](#-i-moduli)
-13. [Roadmap](#-roadmap)
-14. [Diario degli errori risolti](#-diario-degli-errori-risolti)
-15. [Differenziali competitivi](#-differenziali-competitivi)
-16. [Come riprendere il lavoro](#-come-riprendere-il-lavoro)
+8. [Restyling mappa — luglio 2026](#-restyling-mappa--luglio-2026)
+9. [Risultati del modello](#-risultati-del-modello)
+10. [Struttura del progetto](#-struttura-del-progetto)
+11. [Database — schema](#-database--schema)
+12. [Setup e installazione](#-setup-e-installazione)
+13. [I moduli](#-i-moduli)
+14. [Roadmap](#-roadmap)
+15. [Diario degli errori risolti](#-diario-degli-errori-risolti)
+16. [Differenziali competitivi](#-differenziali-competitivi)
+17. [Come riprendere il lavoro](#-come-riprendere-il-lavoro)
 
 ---
 
@@ -324,6 +325,27 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
    - Stazioni 56–60 (e 61 se attiva): escono dal cold start, modello impara i gradienti orografici reali
    - Feature aggiuntive già in pipeline: `precipitation`, `cloudcover`, `shortwave_radiation` (ERA5 + NWP)
    - Lag e rolling su `precipitation` e `shortwave_radiation` da aggiungere in `features.py` prima del retraining
+
+---
+
+## 🎨 Restyling mappa — luglio 2026
+
+Restyling puramente estetico/CSS della mappa live, senza alcuna modifica alla logica di calcolo, ai dati, o alla pipeline di inferenza/export.
+
+**Modifiche applicate:**
+- Basemap sostituita da OpenStreetMap chiaro a **CartoDB Dark Matter** (`{s}.basemaps.cartocdn.com/dark_all`), gratuito, nessuna chiave richiesta
+- **Pannello controlli unificato** (`#control-panel`): fusi i due pannelli separati precedenti (top-left layer/tempo + bottom-left vento/unità/dashboard) in un solo contenitore con sezione condizionale in base al layer attivo
+- **Segmented control a pillole** per Vento/Temperatura/Umidità e per Adesso/+1h, sostituendo i bottoni piatti precedenti
+- **Checkbox/radio nativi → switch e pillole stilizzate**: "Mostra vento", "Frecce direzionali" (switch stile iOS), km/h↔nodi (pillole) — gli input reali restano nel DOM (nascosti via CSS), nessuna modifica alla logica degli event listener esistenti
+- **Legenda**: contenitore ristilizzato (card scura, bordo sottile, radius 10px, tipografia più leggera) — gradiente, calcolo tick e valori numerici invariati, per non compromettere la precisione del dato mostrato
+- **Popup stazioni Leaflet**: wrapper, tip e pulsante di chiusura ristilizzati in tema scuro (default bianco di Leaflet completamente sostituito)
+- **Opacità heatmap ridotta del 17%** su tutti e tre i layer (temperatura, umidità, vento) per lasciare più leggibile la basemap sottostante: alpha temperatura 153→127, alpha umidità/vento 179→149 (valori canvas 0-255)
+
+**Deviazione consapevole dal brief iniziale:** il comportamento funzionale dei controlli condizionali (quali toggle sono visibili su quale layer) è stato mantenuto identico a prima del restyling, non riorganizzato come inizialmente ipotizzato — per non introdurre regressioni non richieste.
+
+**Non toccato in questo restyling (noto, rimandato):**
+- Pannello ora vive in `<body>` invece che dentro `#map` (fix necessario per evitare conflitti di click con il popup IDW della mappa)
+- Bug preesistente non risolto: riferimento a un elemento `#updated-at` mai esistito nel markup, in un blocco `catch` — da investigare separatamente
 
 ---
 
@@ -789,10 +811,49 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 1. [x] `wind_speed_grid` in `latest.json` — `export_static.py`: ERA5 background + IDW correzioni stazioni, scala adattiva `ws_min`/`ws_max`
 2. [x] **Carta del vento** — sezione dedicata con heatmap velocità (ERA5 background + IDW correzioni, scala adattiva), frecce barbed sinottiche zoom-adaptive (stanghette per intensità, punta direzionale), toggle particelle/frecce, legenda km/h ↔ nodi (`wind_speed_grid` in `latest.json`, `app.js`)
 
-### 🔜 Fase 4b — Dashboard e API (PROSSIMA)
+### ✅ Fase 4b — Dashboard e API (COMPLETATA)
 
 3. [ ] Dashboard GitHub Pages con Chart.js (dati storici per stazione, export `dashboard_data.json`)
 4. [ ] API REST FastAPI (opzionale — query dinamiche storico, confronto date)
+
+### 🟦 Fase 4c — Radar temporali live (stile Windy, storico 1h)
+
+**Obiettivo:** sezione dedicata sulla mappa con overlay radar precipitazioni in tempo reale, slider temporale su ~1h di storico + nowcast breve, animazione automatica stile Windy.
+
+**Fonte dati:** RainViewer API (gratuita, no key richiesta)
+- Endpoint: `https://api.rainviewer.com/public/weather-maps.json`
+- Risposta contiene `radar.past` (frame storici, ~2h, ogni 10 min) e `radar.nowcast` (~30 min avanti)
+- Ogni frame è un path tile da comporre in URL standard: `https://tilecache.rainviewer.com{frame.path}/256/{z}/{x}/{y}/{color}/1_1.png`
+- Nessun costo, nessuna chiamata da GitHub Actions: è client-side puro, il browser scarica i tile direttamente dal provider — zero impatto su Supabase/inference/export esistenti
+
+**Implementazione (frontend, nessuna modifica a `db.py`/`inference.py`/`export_static.py`):**
+1. Nuovo file `docs/js/radar.js` (separato da `app.js` per non appesantirlo):
+   - `fetchRadarFrames()`: GET a `weather-maps.json`, parsing di `past` + `nowcast`
+   - Layer Leaflet: un `L.tileLayer` per frame, sostituito sulla mappa in base al frame selezionato (pattern identico al layer heatmap esistente, non a leaflet-velocity che è vettoriale)
+2. UI: sezione "Radar" nel menu layer esistente (accanto a Vento/Temp/Umidità), con:
+   - slider temporale sotto la mappa (frame past + nowcast, timestamp leggibile)
+   - play/pause per animazione loop automatica (`setInterval`, ~500ms/frame, stile Windy)
+   - opacity fissa ragionevole (es. 0.6) per non coprire lo sfondo mappa
+3. Refresh: richiamare `fetchRadarFrames()` ogni 10 min (nuovo frame disponibile lato RainViewer) per tenere la sezione aggiornata senza dover ricaricare la pagina
+
+**Limiti da comunicare in UI (onestà del prodotto, come già fatto per altre feature):**
+- Risoluzione radar aggregata ~1-2 km, non è output del modello proprio — è un dato di osservazione esterno, non previsione MOS-corretta
+- Copertura Italia buona ma non garantita quanto un radar nazionale dedicato
+
+**Alternative scartate:** radar Protezione Civile Nazionale (no API pubblica stabile, stesso problema di affidabilità già visto con OpenAmbiente offline), embed iframe Windy (non è una sezione propria del prodotto)
+
+- [ ] `docs/js/radar.js` — fetch frame + layer management
+- [ ] UI slider/play-pause nella sezione mappa
+- [ ] Refresh automatico ogni 10 min
+- [ ] Nota limiti in UI/tooltip
+
+### 🟦 Fase 4d — Pipeline previsionale 48h (Open-Meteo Forecast API)
+
+**Priorità:** dopo Fase 4c (Radar RainViewer).
+
+**Obiettivo:** estendere l'orizzonte di previsione da +1h a +48h, con toggle Adesso/+1h/.../+48h nel pannello controlli, alimentato da Open-Meteo Forecast API invece dell'attuale grid a singolo step.
+
+*(Placeholder — dettagli tecnici da definire in un brief dedicato quando si arriva a questa fase.)*
 
 ---
 
@@ -833,6 +894,8 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 | Stazioni Tivoli/Filettino/Cassino sempre "osservata: n/d" | Due funzioni `fetch_netatmo()` esistevano in due file diversi (`mainMETEO.py` e `fetch_netatmo_block.py`); solo `mainMETEO.py` è collegata a `ingestion.yml`, l'altra non è mai stata eseguita in produzione nonostante avesse `LAZIO_BBOXES` e la fix `min_cluster` già pronte | Fix applicate sul file giusto (`mainMETEO.py`); `fetch_netatmo_block.py` rinominato `_unused_fetch_netatmo_block.py` per evitare confusione futura |
 | `getpublicdata` Netatmo azzera cluster su zone dense (EUR, Trastevere) con bbox esteso a tutto il Lazio | L'API sembra avere un tetto di risultati per chiamata: bbox più ampio non aggiunge stazioni nelle zone dense, le diluisce a favore di copertura geografica più ampia | 5 sotto-bbox (`LAZIO_BBOXES`, margine 0.15° di sovrapposizione) con fetch separato + merge deduplicato su `_id` Netatmo, invece di un singolo bbox per tutto il Lazio |
 | IDW usava previsioni LGBM invece di osservazioni Netatmo | Bug logico in export_static.py | Corretto: IDW ora usa dati Netatmo reali per stazioni 33–38 |
+| Legenda vento mostrava km/h anche in modalità nodi | `updateLegend()` chiamata con wsMin/wsMax sempre in km/h; il toggle unità aggiornava solo il titolo, non i tick | Nuova `updateWindLegend()` che ricalcola vMin/vMax con fattore di conversione (0.539957) prima di chiamare `updateLegend()` |
+| Titolo legenda vento con doppio spazio (`Velocità vento ( km/h)`) | Unità formattata con spazio iniziale nel fix precedente | `unit.trim()` applicato solo alla stringa del titolo |
 
 **23/06/2026 — Aggiornamenti UI:**
 - Toggle unità vento km/h ↔ nodi in `app.js` + `index.html` (radio button sotto checkbox vento)
@@ -899,9 +962,9 @@ python3 db.py   # verifica connessione
 
 **Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
 
-**Prossimo task immediato:** Fix legenda nodi — quando si seleziona "nodi" la scala del gradiente (`ws_min`/`ws_max` in `latest.json`) deve essere convertita da km/h a nodi anche per i colori della heatmap, non solo per le etichette tick. Attualmente i colori rimangono calibrati in km/h anche con la radio "nodi" attiva.
+**Prossimo task immediato:** Fase 4c — Radar RainViewer (RainViewer API, `docs/js/radar.js`, slider temporale + play/pause, refresh 10 min). A seguire: Fase 4d — pipeline previsionale 48h.
 
-**Task successivo (Fase 4b):** Pipeline Open-Meteo Forecast API per le 48h successive — `temp_grid_forecast` e `wind_speed_grid_forecast` in `latest.json`, toggle Adesso/+1h/+2h/+6h/+12h/+24h/+48h nella mappa. Dashboard GitHub Pages (Chart.js) con serie storiche per stazione.
+~~Fix legenda nodi~~ — **RISOLTO** (vedi Diario degli errori risolti): la scala del gradiente ora converte correttamente `ws_min`/`ws_max` da km/h a nodi anche per i colori della heatmap tramite `updateWindLegend()`.
 
 **Miglioramenti futuri mappa:**
 - Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
