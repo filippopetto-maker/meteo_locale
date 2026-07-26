@@ -471,13 +471,6 @@ def main() -> None:
 
     log.info("Export completato.")
 
-    log.info("Calcolo dashboard_data.json...")
-    dashboard_series = fetch_dashboard_series(station_ids, days=7)
-    dashboard = build_dashboard_json(stations, dashboard_series)
-    dashboard_path = DOCS_DATA / "dashboard_data.json"
-    dashboard_path.write_text(json.dumps(dashboard, indent=2, ensure_ascii=False))
-    log.info(f"  Scritto {dashboard_path}")
-
 
 def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
     """Recupera serie storiche forecast+observed per ogni stazione (ultimi `days` giorni)."""
