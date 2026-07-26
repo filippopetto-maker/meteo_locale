@@ -297,8 +297,8 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
 - [x] `fetch_dashboard_series()` — query Supabase forecast (dedup `valid_for` per `forecast_at` più recente) + observed QC-ok; ogni punto ha `{"t", "temp", "hum"}`
 - [x] `build_dashboard_json()` — coppie forecast/observed entro ±30 min per MAE temperatura e umidità separati
 - [x] `scripts/export_static.py --dashboard-only` — genera solo `dashboard_data.json` senza griglie ERA5/IDW
-- [x] Job `export-dashboard` in `export.yml` — triggerato 2×/giorno (08:00 e 20:00 UTC) da cron-job.org via `workflow_dispatch`
-- [x] `git pull --rebase origin main` prima del push in entrambi i job — fix conflict da run parallele sullo stesso branch
+- [x] Workflow dedicato `export-dashboard.yml` — triggerato 2×/giorno (08:00 e 20:00 UTC) da cron-job.org via `workflow_dispatch`
+- [x] `git pull --rebase origin main` + retry×3 prima del push in entrambi i workflow — fix conflict da run parallele sullo stesso branch
 
 ### 🔄 Blocco 6 — Pipeline live Phase 2c (PROSSIMA)
 
@@ -454,9 +454,10 @@ meteo_locale/
 │
 ├── .github/
 │   └── workflows/
-│       ├── inference.yml        # GitHub Actions — cron 30 min ✅ ATTIVO
-│       ├── ingestion.yml        # GitHub Actions — cron 30 min ✅ ATTIVO
-│       └── export.yml           # Job export (30 min) + job export-dashboard (08:00/20:00 UTC) ✅ ATTIVO
+│       ├── inference.yml            # previsioni, trigger esterno (cron-job.org) ✅ ATTIVO
+│       ├── ingestion.yml            # osservazioni live, trigger esterno (cron-job.org) ✅ ATTIVO
+│       ├── export.yml               # export griglie mappa, trigger esterno ✅ ATTIVO
+│       └── export-dashboard.yml     # export dashboard_data.json, trigger esterno 8:00/20:00 ✅ ATTIVO
 │
 ├── db.py                        # Data Access Layer (connessione Supabase) ✅
 ├── qc.py                        # Quality Control 4 livelli ✅
@@ -464,6 +465,7 @@ meteo_locale/
 ├── historical.py                # ERA5 + METAR → parquet training ✅
 ├── forecast.py                  # Training LightGBM ✅
 ├── mainMETEO.py                 # Raccolta osservazioni live (METAR + Netatmo) ✅
+├── sst.py                       # Sea Surface Temperature (Open-Meteo Marine API), blend costiero asimmetrico 25 km ✅
 │
 ├── model/
 │   ├── correttore.py            # RF correttore residui ✅
@@ -481,6 +483,9 @@ meteo_locale/
 │
 ├── output/
 │   └── dashboard.py             # Streamlit dashboard read-only ✅
+│
+├── scripts/
+│   └── export_static.py         # export griglie + dashboard (flag --dashboard-only) ✅
 │
 └── docs/                        # GitHub Pages (sito statico)
     ├── index.html               # Mappa Leaflet full-screen ✅
@@ -724,10 +729,10 @@ Fetch Sea Surface Temperature da Open-Meteo Marine API (`marine-api.open-meteo.c
 
 ### `scripts/export_static.py` — Export JSON per GitHub Pages ✅
 
-Eseguito ogni 30 min da `export.yml`. Pipeline:
+Eseguito ogni ora da `export.yml`; il ramo `--dashboard-only` è eseguito separatamente 2×/giorno (8:00, 20:00) da `export-dashboard.yml`. Pipeline principale:
 
 1. Legge stazioni attive, forecast recenti e osservazioni da Supabase
-2. Fetch ERA5 batch: 63 punti griglia coarse + 6 stazioni = 69 punti, 2 variabili (`temperature_2m`, `relativehumidity_2m`) in un unico request
+2. Fetch ERA5 batch: griglia coarse 17×27 + stazioni attive, 3 variabili (`temperature_2m`, `relativehumidity_2m`, `windspeed_10m`) in un unico request
 3. Calcola correzioni stazione: `T_modello_i − T_ERA5_i`
 4. ERA5 coarse → bilinear → griglia fine 100×100
 5. IDW correzioni 100×100
@@ -747,7 +752,7 @@ python3 scripts/export_static.py
 ```bash
 python3 scripts/export_static.py --dashboard-only
 ```
-Genera solo `docs/data/dashboard_data.json` (serie storiche 7 giorni + MAE temperatura e umidità) senza le griglie ERA5/IDW. Usato dal job `export-dashboard` per aggiornarsi 2×/giorno.
+Genera solo `docs/data/dashboard_data.json` (serie storiche 7 giorni + MAE temperatura e umidità) senza le griglie ERA5/IDW. Usato dal workflow dedicato `export-dashboard.yml` per aggiornarsi 2×/giorno (8:00, 20:00).
 
 ### `docs/dashboard.html` — Dashboard Chart.js ✅
 
@@ -758,7 +763,7 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 - **Chart Previsto vs Osservato** (Chart.js line, asse X `time` via `chartjs-adapter-date-fns`): serie 7 giorni per la stazione selezionata; blu = previsto, arancio = osservato; filtra automaticamente i punti null (umidità spesso assente nelle osservazioni storiche)
 - **Chart MAE per stazione** (Chart.js bar orizzontale): verde se MAE < 1.0°C (temperatura) o < 5.0% (umidità), rosso altrimenti; stazioni senza coppie → barra trasparente "(n/d)"; questo chart non cambia al cambio stazione
 
-**Dati:** `docs/data/dashboard_data.json` — aggiornato 2×/giorno (08:00 e 20:00 UTC) dal job `export-dashboard` in `export.yml`.
+**Dati:** `docs/data/dashboard_data.json` — aggiornato 2×/giorno (08:00 e 20:00 UTC) dal workflow dedicato `export-dashboard.yml`.
 
 ---
 
@@ -797,8 +802,8 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 ### ✅ Fase 3 — Output avanzato (COMPLETATA — giugno 2026)
 
 1. [x] `grid.py` — IDW vettorizzato numpy, `fetch_era5_batch` (batch multi-variabile Open-Meteo), `bilinear_to_fine` (scipy RegularGridInterpolator)
-2. [x] `scripts/export_static.py` — ERA5 background 7×9 (69 punti, 2 variabili in un unico request) + IDW correzioni microclima → `docs/data/latest.json` + `docs/data/wind_grid.json`
-3. [x] `.github/workflows/export.yml` — commit automatico JSON su GitHub Pages, triggerato da cron-job.org a :05/:35
+2. [x] `scripts/export_static.py` — ERA5 background 17×27 (griglia coarse + stazioni attive, 3 variabili in un unico request) + IDW correzioni microclima → `docs/data/latest.json` + `docs/data/wind_grid.json`
+3. [x] `.github/workflows/export.yml` — commit automatico JSON su GitHub Pages, trigger esterno via cron-job.org (`workflow_dispatch`, nessuno `schedule:` interno)
 4. [x] `docs/index.html` + `docs/js/app.js` — mappa Leaflet.js full-screen, heatmap IDW temperatura (ERA5 + correzioni), heatmap umidità (ERA5 + correzioni), toggle layer, particelle vento leaflet-velocity, popup stazioni, click pointer con `lookupGrid` bilineare (valori coerenti con heatmap), legenda, pannello info timestamp
 5. [x] GitHub Pages live: `https://filippopetto-maker.github.io/meteo_locale/`
 6. [ ] API REST FastAPI — rimandato, sostituito da static JSON su GH Pages
@@ -813,7 +818,7 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 
 ### ✅ Fase 4b — Dashboard e API (COMPLETATA)
 
-3. [ ] Dashboard GitHub Pages con Chart.js (dati storici per stazione, export `dashboard_data.json`)
+3. [x] **Dashboard GitHub Pages (Chart.js)** — `dashboard_data.json` (serie forecast/observed 7gg, MAE globale e per stazione) + `dashboard.html`. Calcolato da `export_static.py --dashboard-only`, workflow dedicato `export-dashboard.yml`, trigger 8:00/20:00. Sostituisce la dashboard Streamlit — nessuna dipendenza da Streamlit Cloud.
 4. [ ] API REST FastAPI (opzionale — query dinamiche storico, confronto date)
 
 ### 🟦 Fase 4c — Radar temporali live (stile Windy, storico 1h)
@@ -896,6 +901,9 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 | IDW usava previsioni LGBM invece di osservazioni Netatmo | Bug logico in export_static.py | Corretto: IDW ora usa dati Netatmo reali per stazioni 33–38 |
 | Legenda vento mostrava km/h anche in modalità nodi | `updateLegend()` chiamata con wsMin/wsMax sempre in km/h; il toggle unità aggiornava solo il titolo, non i tick | Nuova `updateWindLegend()` che ricalcola vMin/vMax con fattore di conversione (0.539957) prima di chiamare `updateLegend()` |
 | Titolo legenda vento con doppio spazio (`Velocità vento ( km/h)`) | Unità formattata con spazio iniziale nel fix precedente | `unit.trim()` applicato solo alla stringa del titolo |
+| `export` job: `! [rejected] main -> main (stale info)` ~7-8x/giorno | `git push --force-with-lease` senza `pull --rebase` prima, race con altri push su main | `git pull --rebase origin main` + retry×3 prima del push |
+| `dashboard_data.json` ricalcolato 2 volte per ciclo (dentro `export` e dentro `export-dashboard`) | Blocco dashboard lasciato per errore anche dentro `main()` di `export_static.py`, oltre che nel ramo `--dashboard-only` | Rimosso da `main()`, resta solo nel ramo `--dashboard-only` |
+| GitHub Actions `schedule:` interno non affidabile (run saltati/ritardati) | Scheduler nativo GitHub degrada su repo a bassa attività | Trigger esclusivamente esterno via cron-job.org (workflow_dispatch), nessuno `schedule:` nei workflow file |
 
 **23/06/2026 — Aggiornamenti UI:**
 - Toggle unità vento km/h ↔ nodi in `app.js` + `index.html` (radio button sotto checkbox vento)
@@ -942,10 +950,11 @@ python3 db.py   # verifica connessione
 
 **Riferimento GitHub:** `https://github.com/filippopetto-maker/meteo_locale`
 
-**Stato corrente (giugno 2026):** Phase 1, 2a, 2b, 3 in produzione. Phase 2c parziale (bias correction attiva). Tre GitHub Actions attivi, tutti triggerati da cron-job.org:
-- `inference.yml` — previsioni ogni 30 min (LightGBM + RF + ARSIAL bias), trigger :00/:30
-- `ingestion.yml` — osservazioni METAR + Netatmo ogni 30 min, trigger :00/:30
-- `export.yml` — due job: `export` (JSON statici ogni 30 min, trigger :05/:35) + `export-dashboard` (`dashboard_data.json` 2×/giorno, 08:00/20:00 UTC via cron-job.org `workflow_dispatch`)
+**Stato corrente (luglio 2026):** Phase 1, 2a, 2b, 3 in produzione. Phase 2c parziale (bias correction attiva). GitHub Actions attivi, tutti triggerati esternamente via cron-job.org (nessuno `schedule:` interno ai workflow — inaffidabile su repo a bassa attività):
+- `inference.yml` — previsioni, ogni 30 min
+- `ingestion.yml` — osservazioni METAR + Netatmo, ogni 30 min
+- `export.yml` — export griglia statica (`latest.json`, `wind_grid.json`), ogni ora
+- `export-dashboard.yml` — export `dashboard_data.json`, 2×/giorno (8:00, 20:00)
 
 **Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
 
