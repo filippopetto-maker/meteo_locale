@@ -196,7 +196,7 @@ Esecuzione automatica: GitHub Actions (cron ogni 30 min, ubuntu-latest, €0)
 ### Target — osservazioni live (Phase 2a + 2b, attive)
 
 - **METAR live** — IEM ASOS, ultime 2h, stazione Roma Sud (LIRF). Inserite in `observations` ogni 30 min.
-- **Netatmo Public API** — rete di stazioni personali pubbliche. 340+ stazioni nel bbox Roma, aggregazione mediana per cluster 5 km, QC a 4 livelli. 6/6 stazioni coperte ogni 30 min. OAuth2 con refresh_token.
+- **Netatmo Public API** — rete di stazioni personali pubbliche. 340+ stazioni nel bbox Roma, aggregazione mediana per cluster 5 km, QC a 4 livelli. 32/32 stazioni coperte ogni 30 min. OAuth2 con refresh_token.
 
 ### Target — da integrare (Phase 2c)
 
@@ -266,11 +266,11 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
 
 - [x] Registrazione dev.netatmo.com → `client_id`, `client_secret`, `refresh_token`
 - [x] `fetch_netatmo()` operativa in `mainMETEO.py`: token OAuth2, `getpublicdata` bbox Roma, parsing temperatura/umidità/vento, aggregazione mediana cluster 5 km, QC integrato, insert `observations`
-- [x] 340+ stazioni Netatmo pubbliche nel bbox Roma — 6/6 stazioni progetto coperte ogni 30 min
+- [x] 340+ stazioni Netatmo pubbliche nel bbox Roma — 32/32 stazioni progetto coperte ogni 30 min
 - [x] `db.py`: `raw_source` ora incluso nell'insert `observations`
 - [x] `db.py`: upsert `observations` con `ignore_duplicates=True` — fix errore 409 su METAR timestamp fisso
 - [x] Schema `stations` arricchito: `microclima`, `dist_sea_km`, `dist_center_km`, `bearing_sea`
-- [x] Rete espansa 4 → **6 stazioni attive** Roma metro: Ostia Lido, EUR, Trastevere, Tivoli, Castelli Romani
+- [x] Rete espansa 4 → 6 (Roma metro: Ostia Lido, EUR, Trastevere, Tivoli, Castelli Romani) → **32 stazioni attive** (espansione Lazio, Blocco 5b)
 - [x] `qc.py` `STATION_TYPES` aggiornato con nuovi ID (25–29)
 - [x] Secrets `NETATMO_CLIENT_ID`, `NETATMO_CLIENT_SECRET`, `NETATMO_REFRESH_TOKEN` configurati in GitHub Actions
 
@@ -310,7 +310,7 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
        che espone le previsioni Supabase in JSON pulito per la mappa e per usi esterni
 2. [ ] **Mappa interattiva Windy-style** — visualizzazione parametri meteo su Roma
        Stack: MapLibre GL JS + Canvas WebGL + GitHub Pages (zero costi)
-       - Campo colorato continuo: interpolazione IDW tra le 6 stazioni su griglia 200×200
+       - Campo colorato continuo: interpolazione IDW tra le 32 stazioni su griglia 200×200
          per temperatura, umidità, pioggia (bbox Roma: 41.6–42.1°N / 12.1–12.9°E)
        - Particelle vento animate: leaflet-velocity con componenti U/V dalla previsione
        - Marker stazioni: pallini con tooltip su T, umidità, vento in tempo reale
@@ -361,7 +361,7 @@ Restyling puramente estetico/CSS della mappa live, senza alcuna modifica alla lo
 | Righe di validazione | ~67.000 (20%) |
 | Colonne feature | 76 |
 | Stazioni (training) | 4 (Roma Nord, Centro, Sud, Ostia — schema originale) |
-| Stazioni (operative) | 6 (schema espanso Phase 2b) |
+| Stazioni (operative) | 32 (schema espanso Lazio, Phase 2c/3) |
 | ICAO sorgenti | LIRA (Ciampino), LIRF (Fiumicino) |
 
 *Nota: il modello è stato addestrato sulle 4 stazioni originali. Per le 5 nuove stazioni (id 25–29) opera per estrapolazione sui gradienti orografici appresi. Il retraining con i dati Netatmo accumulati è pianificato per Phase 3.*
@@ -427,15 +427,15 @@ La griglia IDW in quota (es. area Simbruini/Ernici) appare meno accurata perché
 ### Il ciclo virtuoso
 
 Ogni run di `mainMETEO.py` accumula osservazioni Netatmo reali in `observations`
-per tutte e 6 le zone. Queste diventano i **target futuri del modello**:
+per tutte le 32 zone. Queste diventano i **target futuri del modello**:
 
 ```
 Oggi:        ERA5 (input) + METAR 4 stazioni (target storico)
              → previsioni buone per costiera/urban_canyon, approssimate per quota
 
-Ogni 30 min: Netatmo accumula ground truth per 6 zone
+Ogni 30 min: Netatmo accumula ground truth per 32 zone
              ↓
-~6 mesi:     ERA5 (input) + Netatmo 6 stazioni (target live)
+~6 mesi:     ERA5 (input) + Netatmo 32 stazioni (target live)
              → retraining → il modello impara le correzioni reali per quota,
                Trastevere specifica, Castelli Romani specifica
 ```
@@ -692,7 +692,7 @@ Secondo stadio: impara gli errori sistematici di LightGBM per microzona.
 - Scarica l'analisi ERA5 corrente da Open-Meteo
 - Applica feature engineering (stessi 5 strati del training)
 - Carica LightGBM + RF correttori da file
-- Scrive previsioni T+1h su Supabase (`forecasts`) per tutte le stazioni attive (6)
+- Scrive previsioni T+1h su Supabase (`forecasts`) per tutte le stazioni attive (32)
 - Supporta `--dry-run` per test senza scrittura DB
 - Eseguito automaticamente ogni 30 min da GitHub Actions
 
@@ -701,7 +701,7 @@ Secondo stadio: impara gli errori sistematici di LightGBM per microzona.
 Popola la tabella `observations` con dati reali da stazioni fisiche. Ogni run (30 min):
 
 1. **METAR** — IEM ASOS, ultime 2h per LIRA/LIRF, stazione Roma Sud (id=3). Upsert idempotente.
-2. **Netatmo** — `fetch_netatmo()`: token OAuth2 refresh → `getpublicdata` bbox Roma → parsing → mediana cluster 5 km → QC → insert per 6 stazioni.
+2. **Netatmo** — `fetch_netatmo()`: token OAuth2 refresh → `getpublicdata` bbox Roma → parsing → mediana cluster 5 km → QC → insert per 32 stazioni.
 
 QC a 4 livelli via `qc.run_qc()` — storico ultime 3h da Supabase, neighbors = cluster Netatmo della stazione.
 Supporta `--dry-run`. Stub pronto per Phase 2c: `fetch_protezione_civile_lazio()`.
@@ -714,12 +714,12 @@ Dashboard read-only. Mostra previsioni correnti, storico temperature, metriche m
 
 Due funzioni principali:
 
-- `compute_idw_grid(points, values, ...)` — IDW vettorizzato con numpy broadcasting. Nessun loop Python, istantaneo su 100×100 con 6 stazioni.
+- `compute_idw_grid(points, values, ...)` — IDW vettorizzato con numpy broadcasting. Nessun loop Python, istantaneo su 100×100 con 32 stazioni.
 - `fetch_era5_batch(lats, lons, target_hour_utc, variables)` — singolo HTTP request batch a Open-Meteo per N punti e M variabili (`temperature_2m`, `relativehumidity_2m`). Ritorna `dict[str, list[float]]`.
 - `bilinear_to_fine(coarse, coarse_lats, coarse_lons, fine_lats, fine_lons)` — interpola griglia sparsa ERA5 7×9 a griglia fine 100×100 con `scipy.interpolate.RegularGridInterpolator`.
 - `wind_to_uv(speed_ms, direction_deg)` — decomposizione in componenti U/V con convenzione meteo (direction = "da dove arriva").
 
-**Principio architetturale:** la mappa non mostra IDW puro su valori assoluti ma `T_ERA5(x,y) + IDW_correzioni(x,y)`. ERA5 fornisce il campo fisicamente realistico (lapse rate, SST marina, gradiente costa/interno); le 6 stazioni aggiungono la correzione microclima appresa dal modello. Stesso approccio per umidità.
+**Principio architetturale:** la mappa non mostra IDW puro su valori assoluti ma `T_ERA5(x,y) + IDW_correzioni(x,y)`. ERA5 fornisce il campo fisicamente realistico (lapse rate, SST marina, gradiente costa/interno); le 32 stazioni aggiungono la correzione microclima appresa dal modello. Stesso approccio per umidità.
 
 Nuove funzioni aggiunte (giugno 2026): `build_sea_polygon()` — chiude `LATIUM_COAST` in un poligono mare/terra; `is_sea_mask()` — point-in-polygon vettorizzato via `matplotlib.path.Path`; `compute_coast_distance_grid()` — distanza punto-**segmento** (non solo vertice) dalla costa, evita artefatti circolari attorno ai promontori; `compute_sea_blend_weight()` — peso blend SST asimmetrico lato mare (smoothstep su fascia 25 km, `w=0` su tutta la terraferma incluse stazioni costiere).
 
@@ -791,7 +791,7 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 1. [x] Netatmo OAuth2: registrazione dev.netatmo.com → client_id/secret/refresh_token
 2. [x] `fetch_netatmo()`: 340+ stazioni pubbliche Roma, mediana cluster 5 km, QC, insert ogni 30 min
 3. [x] Schema `stations`: +4 colonne orografiche (`microclima`, `dist_sea_km`, `dist_center_km`, `bearing_sea`)
-4. [x] Rete espansa 4 → 6 stazioni attive: Ostia Lido, EUR, Trastevere, Tivoli, Castelli Romani
+4. [x] Rete espansa 4 → 6 (Ostia Lido, EUR, Trastevere, Tivoli, Castelli Romani) → **32 stazioni attive** (espansione Lazio, Phase 2c/3)
 5. [x] `db.py`: `raw_source` nell'insert + upsert observations con `ignore_duplicates`
 6. [x] `qc.py`: `STATION_TYPES` aggiornato con nuovi ID
 
@@ -923,7 +923,7 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 
 - **Statistical downscaling ERA5 → stazioni reali** — approccio corretto e sostenibile vs NWP pesante; impara le correzioni che il modello globale sbaglia
 - **Rete Netatmo densa** — 340+ stazioni pubbliche nel bbox Roma aggregano il segnale urbano reale ogni 30 min, con QC spaziale integrato su cluster di 5 km
-- **Architettura multi-stazione** — 6 stazioni con profili orografici contrastanti (costiera, urbano, quota, pianura) abilitano l'apprendimento dei gradienti territoriali
+- **Architettura multi-stazione** — 32 stazioni con profili orografici contrastanti (costiera, urbano, quota, pianura) abilitano l'apprendimento dei gradienti territoriali
 - **Carta del vento dedicata** — heatmap velocità ERA5-corretta + frecce barbed sinottiche zoom-adaptive con intensità codificata dalle stanghette; toggle automatico particelle/frecce
 - **Feature orografiche esplicite** — delta quota vs cella ERA5, onshore alignment, isola di calore, one-hot microclima: il territorio codificato come predittori
 - **Modello a due stadi** — LightGBM cattura il segnale principale; RF correttore elimina gli errori sistematici residui per microzona
