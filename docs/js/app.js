@@ -380,6 +380,28 @@
     // indipendenti dal widget visivo, non toccati da questa rimozione. Legacy invariato.
     if (isPWA) map.zoomControl.remove();
 
+    // Solo PWA: Leaflet misura #map una sola volta, a L.map(...), e congela il risultato in
+    // this._size. Su iOS standalone il viewport reale può assestarsi dopo il primo paint —
+    // se la misura iniziale cade prima di quel momento, la mappa resta convinta di avere
+    // meno spazio di quanto ne abbia davvero, e tutto ciò che è ancorato al bottom del
+    // documento (rail/legenda/timeline) finisce scorrelato dall'altezza vera dello schermo.
+    if (isPWA) {
+      // Doppio rAF: aspetta due frame di layout completati, più affidabile di un setTimeout
+      // a durata indovinata per "il viewport si è assestato".
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        map.invalidateSize();
+      }));
+
+      // Fix strutturale, non solo una tantum: visualViewport è l'API pensata apposta per
+      // "il viewport visibile è cambiato dopo il load" — copre sia il quirk iniziale sia
+      // rotazioni schermo future. Fallback su resize se non disponibile.
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => map.invalidateSize());
+      } else {
+        window.addEventListener('resize', () => map.invalidateSize());
+      }
+    }
+
     try {
       const [latestRes, windRes] = await Promise.all([
         fetch('data/latest.json'),

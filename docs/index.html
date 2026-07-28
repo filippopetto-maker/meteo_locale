@@ -435,7 +435,14 @@
     }
 
     /* ─── Fix #1 (bug fisici iPhone): 100vh su iOS standalone può essere più alto dello
-           spazio realmente visibile → fascia nera in fondo. dvh = altezza dinamica reale. ─── */
+           spazio realmente visibile → fascia nera in fondo. dvh = altezza dinamica reale.
+           html/body risolvono height:100% contro lo stesso "large viewport" instabile —
+           corretto anche qui (non solo su #map), altrimenti body { overflow:hidden } può
+           ritagliare #map alla misura sbagliata anche se #map stesso è già in dvh. ─── */
+    html.is-pwa, .is-pwa body {
+      height: 100vh; /* fallback per browser senza supporto dvh */
+      height: 100dvh;
+    }
     .is-pwa #map {
       height: 100vh; /* fallback per browser senza supporto dvh */
       height: 100dvh;
