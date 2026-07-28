@@ -32,7 +32,8 @@
     /* ─── Pannello di controllo unico — top-left (iniettato da JS) ─── */
     #control-panel {
       position: fixed;
-      top: 10px;
+      top: 10px; /* fallback per browser senza supporto env() */
+      top: calc(10px + env(safe-area-inset-top, 0px)); /* evita sovrapposizione con Dynamic Island/status bar in modalità PWA standalone */
       left: 10px;
       z-index: 1000;
       display: flex;
@@ -176,7 +177,8 @@
     /* ─── Legenda — bottom-right (gradiente e valori calcolati da JS) ─── */
     .temp-legend {
       position: fixed;
-      bottom: 30px;
+      bottom: 30px; /* fallback per browser senza supporto env() */
+      bottom: calc(30px + env(safe-area-inset-bottom, 0px)); /* evita sovrapposizione con la home indicator di iOS */
       right: 10px;
       z-index: 1000;
       background: var(--bg-panel);
@@ -191,7 +193,10 @@
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
     }
-    .temp-legend.legend-radar-mode { bottom: 118px; }
+    .temp-legend.legend-radar-mode {
+      bottom: 118px; /* fallback per browser senza supporto env() */
+      bottom: calc(118px + env(safe-area-inset-bottom, 0px));
+    }
     .legend-title { font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; }
     .legend-bar { height: 6px; border-radius: 3px; margin-bottom: 3px; }
     .legend-labels { position: relative; height: 1.2em; margin-top: 4px; }
@@ -248,7 +253,8 @@
     .radar-timeline {
       position: fixed;
       left: 50%;
-      bottom: 16px;
+      bottom: 16px; /* fallback per browser senza supporto env() */
+      bottom: calc(16px + env(safe-area-inset-bottom, 0px)); /* evita sovrapposizione con la home indicator di iOS */
       transform: translateX(-50%);
       z-index: 1000;
       width: min(640px, calc(100vw - 20px));
@@ -331,9 +337,20 @@
         font-size: 12px;
       }
       .layer-toggle button { padding: 5px 6px; font-size: 11px; }
-      .temp-legend { width: 140px; bottom: 20px; }
-      .temp-legend.legend-radar-mode { bottom: 100px; }
-      .radar-timeline { padding: 8px 10px; bottom: 10px; }
+      .temp-legend {
+        width: 140px;
+        bottom: 20px; /* fallback per browser senza supporto env() */
+        bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+      }
+      .temp-legend.legend-radar-mode {
+        bottom: 100px; /* fallback per browser senza supporto env() */
+        bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+      }
+      .radar-timeline {
+        padding: 8px 10px;
+        bottom: 10px; /* fallback per browser senza supporto env() */
+        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+      }
     }
   </style>
 </head>
