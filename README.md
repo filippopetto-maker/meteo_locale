@@ -1,4 +1,4 @@
-# 🌦️ Meteo Locale — Sistema di Previsioni Meteo Iper-Locali per Roma
+# 🌦️ Meteo Locale — Sistema di Previsioni Meteo Iper-Locali per Roma e il Lazio
 
 Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
