@@ -401,7 +401,9 @@
         `<button id="btn-wind">💨 Vento</button>` +
         `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
         `<button id="btn-hum">💧 Umidità</button>` +
+        `<button id="btn-radar">🌧️ Radar</button>` +
         `</div>` +
+        `<div class="info-update" id="radar-updated" style="display:none"></div>` +
         `<div class="layer-toggle" id="time-toggle">` +
         `<button id="btn-now" class="active">Adesso</button>` +
         `<button id="btn-plus1">+1h</button>` +
@@ -416,7 +418,7 @@
         `<span class="switch"></span>` +
         `<span>Frecce direzionali</span>` +
         `</label>` +
-        `<div class="pill-group">` +
+        `<div class="pill-group" id="wind-unit-group">` +
         `<label class="pill"><input type="radio" name="wind-unit" value="kmh" checked><span>km/h</span></label>` +
         `<label class="pill"><input type="radio" name="wind-unit" value="kts"><span>nodi</span></label>` +
         `</div>` +
@@ -434,22 +436,35 @@
         `<div id="legend-labels" class="legend-labels"></div>`;
       document.getElementById('map').appendChild(legend);
 
-      function updateLegend(layer, vMin, vMax, unit) {
+      function updateLegend(layer, vMin, vMax, unit, customTicks) {
         const unitLabel = unit.trim();
         const titles = {
           temperature: `Temperatura (${unitLabel})`,
           humidity:    `Umidità (${unitLabel})`,
           wind:        `Velocità vento (${unitLabel})`,
+          radar:       `Intensità precipitazione (${unitLabel})`,
         };
         const gradients = {
           temperature: 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)',
           humidity:    'linear-gradient(to right, #d96f27, #fee080, #b0e090, #317ec8, #08306b)',
           wind:        'linear-gradient(to right, #003399, #0099ff, #00cc66, #ffdd00, #ff6600, #cc0000)',
+          radar:       'linear-gradient(to right, #6ec6e0 0%, #4caf50 25%, #ffd54f 50%, #ff7043 75%, #b71c1c 100%)',
         };
         document.getElementById('legend-title').textContent = titles[layer] ?? layer;
         document.getElementById('legend-bar').style.background = gradients[layer] ?? '';
         const labelsEl = document.getElementById('legend-labels');
         labelsEl.innerHTML = '';
+        if (customTicks) {
+          customTicks.forEach((text, i) => {
+            const pos = customTicks.length > 1 ? (i / (customTicks.length - 1)) * 100 : 0;
+            const span = document.createElement('span');
+            span.className = 'legend-tick';
+            span.textContent = text;
+            span.style.left = pos + '%';
+            labelsEl.appendChild(span);
+          });
+          return;
+        }
         const ticks = [vMin, (vMin + vMax) / 2, vMax];
         ticks.forEach(v => {
           const pos = ((v - vMin) / (vMax - vMin)) * 100;
@@ -465,18 +480,39 @@
       function switchLayer(layer) {
         activeLayer = layer;
         if (heatOverlay) map.removeLayer(heatOverlay);
+        heatOverlay = null;
 
         document.getElementById('btn-wind').classList.toggle('active', layer === 'wind');
         document.getElementById('btn-temp').classList.toggle('active', layer === 'temperature');
         document.getElementById('btn-hum').classList.toggle('active',  layer === 'humidity');
+        document.getElementById('btn-radar').classList.toggle('active', layer === 'radar');
         document.getElementById('time-toggle').style.display = layer === 'temperature' ? 'flex' : 'none';
 
-        const windToggle  = document.getElementById('wind-toggle');
-        const arrowToggle = document.getElementById('arrow-toggle');
-        const windCheck   = document.getElementById('wind-check');
-        const arrowCheck  = document.getElementById('arrow-check');
+        const windToggle    = document.getElementById('wind-toggle');
+        const arrowToggle   = document.getElementById('arrow-toggle');
+        const windCheck     = document.getElementById('wind-check');
+        const arrowCheck    = document.getElementById('arrow-check');
+        const windUnitGroup = document.getElementById('wind-unit-group');
+        const radarUpdated  = document.getElementById('radar-updated');
 
-        if (layer === 'wind') {
+        if (windUnitGroup) windUnitGroup.style.display = '';
+        if (radarUpdated) radarUpdated.style.display = layer === 'radar' ? '' : 'none';
+        document.querySelector('.temp-legend')?.classList.toggle('legend-radar-mode', layer === 'radar');
+
+        if (layer !== 'radar' && window.RadarLayer && window.RadarLayer.isActive()) {
+          window.RadarLayer.deactivate();
+        }
+
+        if (layer === 'radar') {
+          if (windToggle)    windToggle.style.display    = 'none';
+          if (arrowToggle)   arrowToggle.style.display   = 'none';
+          if (windUnitGroup) windUnitGroup.style.display = 'none';
+          clearArrowLayer(map);
+          showStations(map, stationMarkers);
+          if (windLayer) map.removeLayer(windLayer);
+          updateLegend('radar', null, null, 'mm/h', ['debole', 'moderata', 'intensa']);
+          if (window.RadarLayer) window.RadarLayer.activate();
+        } else if (layer === 'wind') {
           if (windToggle)  windToggle.style.display  = 'none';
           if (arrowToggle) arrowToggle.style.display = '';
           heatOverlay = renderWindSpeed(latest);
@@ -528,8 +564,20 @@
       document.getElementById('btn-wind').addEventListener('click', () => switchLayer('wind'));
       document.getElementById('btn-temp').addEventListener('click', () => switchLayer('temperature'));
       document.getElementById('btn-hum').addEventListener('click', () => switchLayer('humidity'));
+      document.getElementById('btn-radar').addEventListener('click', () => switchLayer('radar'));
       document.getElementById('btn-now').addEventListener('click', () => switchTime('observed'));
       document.getElementById('btn-plus1').addEventListener('click', () => switchTime('forecast'));
+
+      if (window.RadarLayer) {
+        window.RadarLayer.init(map);
+        window.RadarLayer.onUpdate((epochSec) => {
+          const el = document.getElementById('radar-updated');
+          if (!el) return;
+          el.textContent = epochSec != null
+            ? `🕐 Radar aggiornato: ${formatTime(new Date(epochSec * 1000).toISOString())}`
+            : '🕐 Radar non disponibile';
+        });
+      }
 
       const stations = latest.stations || [];
       stationMarkers = renderStations(map, stations);
