@@ -560,10 +560,14 @@
       padding-top: 2px; color: var(--text-2); font-size: 12.5px;
     }
 
-    /* ─── Legenda — barra sottile senza card, solo min/max ─── */
+    /* ─── Legenda — barra sottile senza card, solo min/max ───
+           bottom: rail è bottom:44px + altezza box ~60px (.rail-item 52px + padding 4px×2)
+           → bordo superiore del rail a ~104px. 108px lasciava solo 4px di margine, troppo
+           poco su device reale (confermato: "rail sopra legenda" su tutti i layer) — portato
+           a 128px, ~24px di respiro reale sopra il rail. ─── */
     .is-pwa .temp-legend {
       display: flex; flex-direction: column; gap: 4px;
-      position: fixed; left: 16px; right: 16px; bottom: 108px; width: auto;
+      position: fixed; left: 16px; right: 16px; bottom: 128px; width: auto;
       background: none; border: none; border-radius: 0; box-shadow: none;
       backdrop-filter: none; -webkit-backdrop-filter: none; padding: 0;
       text-shadow: 0 1px 5px rgba(0, 0, 0, .9);

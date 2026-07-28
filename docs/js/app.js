@@ -359,6 +359,26 @@
     markers.forEach(m => m.addTo(map));
   }
 
+  // Solo PWA (vedi chiamata in init()): al boot in standalone iOS, window.innerHeight può
+  // continuare ad assestarsi per un tempo non prevedibile — invece di indovinare quanti
+  // frame aspettare, si ripete invalidateSize() finché l'altezza smette di cambiare (o si
+  // esauriscono i tentativi). window.visualViewport resta il meccanismo per le rotazioni
+  // successive: qui si copre solo la finestra di boot, dove quell'evento non arriva mai.
+  function stabilizeMapSize(map, attempts = 8, delay = 150) {
+    let lastHeight = null;
+    let count = 0;
+    const check = () => {
+      const currentHeight = window.innerHeight;
+      map.invalidateSize();
+      if (currentHeight !== lastHeight && count < attempts) {
+        lastHeight = currentHeight;
+        count++;
+        setTimeout(check, delay);
+      }
+    };
+    check();
+  }
+
   async function init() {
     const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
 
@@ -386,15 +406,17 @@
     // meno spazio di quanto ne abbia davvero, e tutto ciò che è ancorato al bottom del
     // documento (rail/legenda/timeline) finisce scorrelato dall'altezza vera dello schermo.
     if (isPWA) {
-      // Doppio rAF: aspetta due frame di layout completati, più affidabile di un setTimeout
-      // a durata indovinata per "il viewport si è assestato".
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        map.invalidateSize();
-      }));
+      // Round 3: confermato su device che window.visualViewport non emette mai un evento
+      // 'resize' per l'assestamento iniziale (non è un resize agli occhi di quell'API), e un
+      // doppio rAF non basta perché l'assestamento reale non ha una durata fissa in frame.
+      // Al posto di "aspetta N frame", si ripete invalidateSize() finché window.innerHeight
+      // non smette di cambiare (o si esauriscono i tentativi) — segue il valore vero invece
+      // di indovinare quando è pronto.
+      stabilizeMapSize(map);
 
       // Fix strutturale, non solo una tantum: visualViewport è l'API pensata apposta per
-      // "il viewport visibile è cambiato dopo il load" — copre sia il quirk iniziale sia
-      // rotazioni schermo future. Fallback su resize se non disponibile.
+      // "il viewport visibile è cambiato dopo il load" — copre le rotazioni schermo future
+      // (confermato funzionante su device). Fallback su resize se non disponibile.
       if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', () => map.invalidateSize());
       } else {
@@ -611,7 +633,16 @@
         if (activeLayer !== 'radar') { legendEl.style.bottom = ''; return; }
         const timelineEl = document.getElementById('radar-timeline');
         const visible = timelineEl && getComputedStyle(timelineEl).display !== 'none';
-        const timelineH = visible ? timelineEl.getBoundingClientRect().height : 0;
+        if (!visible) {
+          // Al primo switch su Radar la timeline non esiste ancora (creata lazy dentro
+          // RadarLayer.activate(), asincrono) o non è ancora visibile: misurarla ora darebbe
+          // 0 e posizionerebbe la legenda troppo in basso, dentro lo spazio che la timeline
+          // occuperà a breve — meglio lasciare il fallback CSS (.legend-radar-mode, 220px,
+          // già abbondante) finché non c'è una misura vera da usare.
+          legendEl.style.bottom = '';
+          return;
+        }
+        const timelineH = timelineEl.getBoundingClientRect().height;
         legendEl.style.bottom = `${RADAR_TIMELINE_BOTTOM + timelineH + RADAR_LEGEND_GAP}px`;
       }
 
