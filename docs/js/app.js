@@ -394,8 +394,11 @@
       infoPanel.innerHTML =
         `<div class="panel-head">` +
         `<div class="info-title">🌦️ Meteo Locale — Roma</div>` +
+        `<div id="info-mos">` +
         `<div class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</div>` +
         `<div class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</div>` +
+        `</div>` +
+        `<div class="info-update" id="info-radar" style="display:none"></div>` +
         `</div>` +
         `<div class="layer-toggle">` +
         `<button id="btn-wind">💨 Vento</button>` +
@@ -403,7 +406,6 @@
         `<button id="btn-hum">💧 Umidità</button>` +
         `<button id="btn-radar">🌧️ Radar</button>` +
         `</div>` +
-        `<div class="info-update" id="radar-updated" style="display:none"></div>` +
         `<div class="layer-toggle" id="time-toggle">` +
         `<button id="btn-now" class="active">Adesso</button>` +
         `<button id="btn-plus1">+1h</button>` +
@@ -493,10 +495,12 @@
         const windCheck     = document.getElementById('wind-check');
         const arrowCheck    = document.getElementById('arrow-check');
         const windUnitGroup = document.getElementById('wind-unit-group');
-        const radarUpdated  = document.getElementById('radar-updated');
+        const infoMos       = document.getElementById('info-mos');
+        const infoRadar     = document.getElementById('info-radar');
 
         if (windUnitGroup) windUnitGroup.style.display = '';
-        if (radarUpdated) radarUpdated.style.display = layer === 'radar' ? '' : 'none';
+        if (infoMos)   infoMos.style.display   = layer === 'radar' ? 'none' : '';
+        if (infoRadar) infoRadar.style.display = layer === 'radar' ? '' : 'none';
         document.querySelector('.temp-legend')?.classList.toggle('legend-radar-mode', layer === 'radar');
 
         if (layer !== 'radar' && window.RadarLayer && window.RadarLayer.isActive()) {
@@ -571,7 +575,7 @@
       if (window.RadarLayer) {
         window.RadarLayer.init(map);
         window.RadarLayer.onUpdate((epochSec) => {
-          const el = document.getElementById('radar-updated');
+          const el = document.getElementById('info-radar');
           if (!el) return;
           el.textContent = epochSec != null
             ? `🕐 Radar aggiornato: ${formatTime(new Date(epochSec * 1000).toISOString())}`
