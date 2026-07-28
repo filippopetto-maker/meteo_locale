@@ -698,6 +698,10 @@
       console.error('Errore caricamento dati:', err);
       document.getElementById('updated-at').textContent = 'Errore caricamento dati';
     }
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
   }
 
   function lookupGrid(lat, lng, grid) {

@@ -349,6 +349,32 @@ Restyling puramente estetico/CSS della mappa live, senza alcuna modifica alla lo
 
 ---
 
+## 📱 PWA installabile su iPhone — luglio 2026
+
+Modifica puramente additiva, nessun impatto su chi apre il sito da browser senza installarlo. Target: iPhone iOS precedente alla 26 (17/18), dove l'apertura in standalone da Home Screen non è automatica e va dichiarata esplicitamente via meta tag.
+
+**File aggiunti:**
+- `docs/manifest.json` — `start_url`/`scope` relativi (`./`) per il sottopercorso GitHub Pages `/meteo_locale/`; `display: "standalone"`; icone 192/512
+- `docs/icons/` — `icon-192.png`, `icon-512.png`, `apple-touch-icon.png` (180×180, no alpha)
+- `docs/sw.js` — service worker **nella root di `docs/`** (non in sottocartelle, altrimenti lo scope si restringe e non intercetta le richieste della pagina)
+
+**Meta tag aggiunti in `docs/index.html`** (`<head>`, nessun'altra modifica): `apple-mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style`, `apple-mobile-web-app-title`, `apple-touch-icon`, `theme-color`, `viewport-fit=cover` aggiunto al viewport esistente.
+
+**Registrazione SW:** poche righe in coda a `init()` in `docs/js/app.js`, path relativo `./sw.js`, `.catch()` silenzioso — se la registrazione fallisce il sito funziona identico a prima.
+
+**Strategia cache (cuore del service worker):**
+- **Cache-first** — asset statici (`index.html`, `dashboard.html`, `app.js`, `radar.js`, manifest, icone)
+- **Network-first con fallback su cache** — `data/latest.json`, `data/wind_grid.json`, `data/dashboard_data.json`: si tenta sempre la rete per primo, la cache serve solo da fallback offline. Servirli da cache come prima scelta mostrerebbe previsioni vecchie spacciate per attuali — inaccettabile per un prodotto meteo
+- **Nessuna intercettazione** — tile RainViewer, `weather-maps.json`, basemap CartoDB: dominio esterno, esclusi esplicitamente (`url.origin !== self.location.origin`). Ogni frame radar ha un URL con timestamp diverso: cacharli farebbe crescere la cache senza limite, rischio eviction su iOS dove le quote storage sono più strette
+
+**⚠️ Cache-busting:** `CACHE_VERSION` in cima a `docs/sw.js` va **incrementata ad ogni deploy che tocca HTML/CSS/JS**, altrimenti le modifiche non compaiono sui dispositivi già installati (restano serviti gli asset vecchi da cache-first). Sono previste iterazioni estetiche frequenti — attenzione a non dimenticarlo. Automazione valutata e scartata per ora: richiederebbe toccare i workflow GitHub Actions, fuori dal vincolo additivo di questa fase.
+
+**Limite noto (non risolto, di natura simile alla pausa Supabase dopo inattività prolungata):** iOS può svuotare la cache di una PWA rimasta inutilizzata a lungo. Impatto minimo qui — la strategia network-first sui dati significa che al riavvio si scaricano comunque dati freschi; nel peggiore dei casi si perde solo il fallback offline.
+
+**Fuori scopo (deciso, non da implementare):** push notification (inaffidabili su iOS, non richieste da questo caso d'uso), background sync (non disponibile su iOS), app nativa/App Store (richiede account developer a pagamento), prompt di installazione automatico (non esiste su iOS — gesto manuale Safari → Condividi → Aggiungi a Home).
+
+---
+
 ## 🎯 Risultati del modello
 
 ### Dataset di training
