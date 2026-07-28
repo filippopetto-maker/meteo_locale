@@ -308,14 +308,14 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
 
 1. [ ] **API REST FastAPI** — endpoint `/forecast/latest` e `/forecast/history`
        che espone le previsioni Supabase in JSON pulito per la mappa e per usi esterni
-2. [ ] **Mappa interattiva Windy-style** — visualizzazione parametri meteo su Roma
+2. [ ] **Mappa interattiva** — visualizzazione parametri meteo su Roma
        Stack: MapLibre GL JS + Canvas WebGL + GitHub Pages (zero costi)
        - Campo colorato continuo: interpolazione IDW tra le 32 stazioni su griglia 200×200
          per temperatura, umidità, pioggia (bbox Roma: 41.6–42.1°N / 12.1–12.9°E)
        - Particelle vento animate: leaflet-velocity con componenti U/V dalla previsione
        - Marker stazioni: pallini con tooltip su T, umidità, vento in tempo reale
        - Switcher parametri: Temperatura · Umidità · Vento · Pioggia
-       - Tile base: CartoDB Dark (stile simile a Windy)
+       - Tile base: CartoDB Dark 
        Ordine costruzione: FastAPI → prototipo HTML standalone → particelle → GitHub Pages
 3. [ ] CAPE da ERA5 → target thunderstorm
 4. [ ] Target pioggia puntuale (mm)
