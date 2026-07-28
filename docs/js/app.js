@@ -375,6 +375,11 @@
     // così resta leggibile anche dal catch, per lo splash e i messaggi d'errore.
     const isPWA = document.documentElement.classList.contains('is-pwa');
 
+    // Solo PWA: il controllo +/- nativo di Leaflet si sovrappone al brand lockup e non fa
+    // parte del design. Pinch-to-zoom/scroll-wheel restano attivi: sono handler della mappa
+    // indipendenti dal widget visivo, non toccati da questa rimozione. Legacy invariato.
+    if (isPWA) map.zoomControl.remove();
+
     try {
       const [latestRes, windRes] = await Promise.all([
         fetch('data/latest.json'),
@@ -439,8 +444,8 @@
           `<div class="brand-text">` +
           `<div class="brand-word">Metek</div>` +
           `<div id="info-mos">` +
-          `<div id="brand-meta">Aggiornato: ${formatTime(latest.generated_at)}` +
-          `${validOre ? ` · <span id="valid-for-label">Previsioni per le ore ${validOre}</span>` : '<span id="valid-for-label"></span>'}` +
+          `<div id="brand-meta">${formatTime(latest.generated_at)}` +
+          `<span id="valid-for-label">${validOre ? ` · previsioni ${validOre}` : ''}</span>` +
           `</div>` +
           `</div>` +
           `<div id="info-radar" style="display:none"></div>` +
@@ -570,6 +575,24 @@
         document.getElementById('prefs-btn')?.classList.toggle('active', prefsOpen);
       }
 
+      // Solo PWA: sul layer Radar la timeline occupa spazio variabile in fondo (testo che
+      // va a capo, stato "non disponibile" più basso della timeline normale, ecc.) — invece
+      // di un bottom fisso indovinato via CSS, misuriamo l'altezza reale a runtime e
+      // spostiamo la legenda sopra di essa + un margine. Richiamata da switchLayer(),
+      // dall'update di RadarLayer (quando i frame arrivano/falliscono) e al resize.
+      const RADAR_TIMELINE_BOTTOM = 112; // deve combaciare con .is-pwa .radar-timeline { bottom }
+      const RADAR_LEGEND_GAP = 8;
+      function updateRadarLegendOffset() {
+        if (!isPWA) return;
+        const legendEl = document.querySelector('.temp-legend');
+        if (!legendEl) return;
+        if (activeLayer !== 'radar') { legendEl.style.bottom = ''; return; }
+        const timelineEl = document.getElementById('radar-timeline');
+        const visible = timelineEl && getComputedStyle(timelineEl).display !== 'none';
+        const timelineH = visible ? timelineEl.getBoundingClientRect().height : 0;
+        legendEl.style.bottom = `${RADAR_TIMELINE_BOTTOM + timelineH + RADAR_LEGEND_GAP}px`;
+      }
+
       function switchLayer(layer) {
         activeLayer = layer;
         if (heatOverlay) map.removeLayer(heatOverlay);
@@ -593,6 +616,7 @@
         if (infoMos)   infoMos.style.display   = layer === 'radar' ? 'none' : '';
         if (infoRadar) infoRadar.style.display = layer === 'radar' ? '' : 'none';
         document.querySelector('.temp-legend')?.classList.toggle('legend-radar-mode', layer === 'radar');
+        updateRadarLegendOffset();
 
         if (layer !== 'radar' && window.RadarLayer && window.RadarLayer.isActive()) {
           window.RadarLayer.deactivate();
@@ -665,7 +689,10 @@
           const firstFc  = (latest.stations || []).find(s => s.forecast?.valid_for);
           const firstFc1 = (latest.stations || []).find(s => s.forecast1?.valid_for);
           const src = time === 'observed' ? firstFc : firstFc1;
-          label.textContent = src ? `Previsioni per le ore ${formatTime(src.forecast?.valid_for || src.forecast1?.valid_for)}` : '';
+          const validOreNow = src ? formatTime(src.forecast?.valid_for || src.forecast1?.valid_for) : '';
+          // Stessi valori (src, orario), solo il TESTO differisce: formato breve in PWA
+          // (evita la collisione con la pillola tempo, vedi CSS), invariato in legacy.
+          label.textContent = !src ? '' : (isPWA ? ` · previsioni ${validOreNow}` : `Previsioni per le ore ${validOreNow}`);
         }
         if (activeLayer === 'temperature') switchLayer('temperature');
       }
@@ -688,11 +715,19 @@
         window.RadarLayer.init(map);
         window.RadarLayer.onUpdate((epochSec) => {
           const el = document.getElementById('info-radar');
-          if (!el) return;
-          el.textContent = epochSec != null
-            ? `🕐 Radar aggiornato: ${formatTime(new Date(epochSec * 1000).toISOString())}`
-            : '🕐 Radar non disponibile';
+          if (el) {
+            el.textContent = epochSec != null
+              ? `🕐 Radar aggiornato: ${formatTime(new Date(epochSec * 1000).toISOString())}`
+              : '🕐 Radar non disponibile';
+          }
+          // A questo punto showUnavailable() ha già applicato lo stato finale della timeline
+          // (disponibile o "non disponibile", altezze diverse) — la misura è affidabile.
+          updateRadarLegendOffset();
         });
+      }
+
+      if (isPWA) {
+        window.addEventListener('resize', updateRadarLegendOffset);
       }
 
       const stations = latest.stations || [];
