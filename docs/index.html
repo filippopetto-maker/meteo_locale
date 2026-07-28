@@ -7,7 +7,7 @@
   <link rel="manifest" href="./manifest.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Meteo Locale">
+  <meta name="apple-mobile-web-app-title" content="Metek">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="theme-color" content="#0e1119">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -352,9 +352,280 @@
         bottom: calc(10px + env(safe-area-inset-bottom, 0px));
       }
     }
+
+    /* ════════════════════════════════════════════════════════════════════
+       Redesign "Metek" — attivo SOLO quando <html> ha classe .is-pwa
+       (PWA standalone installata da Home Screen, vedi script in <head>).
+       Tutto il CSS sopra questo blocco resta invariato e attivo di default
+       per qualunque visita da browser normale, a qualunque larghezza.
+       ════════════════════════════════════════════════════════════════════ */
+
+    /* ─── Splash — nascosto di default, visibile solo in .is-pwa ─── */
+    #splash { display: none; }
+    .is-pwa #splash {
+      display: flex;
+      position: fixed; inset: 0; z-index: 9999;
+      flex-direction: column; align-items: center; justify-content: center; gap: 30px;
+      background: radial-gradient(90% 70% at 50% 38%, #1e2138 0%, #141626 55%, #0e1119 100%);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #splash svg { display: block; width: 152px; height: 152px; }
+    .is-pwa #splash .iso {
+      fill: none; stroke-linecap: round; stroke-width: 7;
+      stroke-dasharray: 520; stroke-dashoffset: 520;
+      animation: splash-draw 1.25s cubic-bezier(.22, .61, .36, 1) forwards;
+    }
+    .is-pwa #splash .iso:nth-child(2) { animation-delay: .08s; }
+    .is-pwa #splash .iso:nth-child(3) { animation-delay: .16s; }
+    .is-pwa #splash .iso:nth-child(4) { animation-delay: .24s; }
+    .is-pwa #splash .iso:nth-child(5) { animation-delay: .32s; }
+    .is-pwa #splash .hot { animation: splash-pulse 1.6s ease-in-out .5s infinite; }
+    .is-pwa #splash .word {
+      font-weight: 500; font-size: 30px; line-height: 1; letter-spacing: .01em; color: #e9e9ed;
+      opacity: 0; transform: translateY(8px);
+      animation: splash-word .5s ease-out .95s forwards;
+    }
+    .is-pwa #splash .track {
+      position: absolute; bottom: 78px; left: 50%; transform: translateX(-50%);
+      width: 96px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, .1);
+      overflow: hidden;
+    }
+    .is-pwa #splash .bar {
+      height: 100%; width: 0; background: #9184d9;
+      animation: splash-bar 1.7s ease-in-out forwards;
+    }
+    .is-pwa #splash.done { opacity: 0; pointer-events: none; transition: opacity .32s ease; }
+    @keyframes splash-draw { to { stroke-dashoffset: 0; } }
+    @keyframes splash-word { to { opacity: 1; transform: none; } }
+    @keyframes splash-bar { to { width: 100%; } }
+    @keyframes splash-pulse {
+      0%, 100% { opacity: .4; transform: scale(.9); }
+      50%      { opacity: 1;  transform: scale(1.06); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .is-pwa #splash .iso { animation: none; stroke-dashoffset: 0; }
+      .is-pwa #splash .word { animation: none; opacity: 1; transform: none; }
+      .is-pwa #splash .bar { animation: none; width: 100%; }
+      .is-pwa #splash .hot { animation: none; }
+    }
+
+    /* ─── Design tokens nuovi — solo dentro lo scope .is-pwa ─── */
+    .is-pwa {
+      --accent: #9184d9;
+      --accent-press: rgba(145, 132, 217, .28);
+      --accent-fill: rgba(145, 132, 217, .18);
+      --accent-on: #14121f;
+      --accent-100: #c6bff0;
+      --accent-300: #9184d9;
+      --accent-500: #7b76cc;
+      --accent-700: #5b63b4;
+      --accent-900: #3f4a86;
+      --warm: #f4a93f;
+      --bg: #0e1119;
+      --bg-ds: #161826;
+      --glass: rgba(20, 22, 34, .86);
+      --glass-strong: rgba(20, 22, 34, .93);
+      --glass-soft: rgba(22, 24, 38, .72);
+      --border: rgba(255, 255, 255, .12);
+      --border-soft: rgba(255, 255, 255, .09);
+      --text: #e9e9ed;
+      --text-2: rgba(233, 233, 237, .85);
+      --text-3: rgba(233, 233, 237, .55);
+      --text-off: rgba(233, 233, 237, .52);
+    }
+
+    /* ─── Brand lockup (top-left) ─── */
+    .is-pwa #brand-lockup {
+      display: flex; align-items: center; gap: 8px;
+      position: fixed;
+      top: 9px; /* fallback per browser senza supporto env() */
+      top: calc(env(safe-area-inset-top, 0px) + 9px);
+      left: 14px;
+      z-index: 1000;
+      text-shadow: 0 1px 6px rgba(0, 0, 0, .85);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #brand-lockup .brand-mark {
+      width: 26px; height: 26px; flex: 0 0 auto;
+      filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .6));
+    }
+    .is-pwa #brand-lockup .brand-word {
+      font-weight: 500; font-size: 13px; letter-spacing: -.01em; color: var(--text);
+    }
+    .is-pwa #brand-meta { font-weight: 400; font-size: 9.5px; color: var(--text-3); }
+
+    /* ─── Pillola tempo (top-right), sostituisce #time-toggle in PWA ─── */
+    .is-pwa #time-toggle {
+      display: flex; gap: 2px; padding: 3px; border-radius: 999px;
+      background: rgba(20, 22, 34, .8); border: .5px solid rgba(255, 255, 255, .1);
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      position: fixed;
+      top: 9px;
+      top: calc(env(safe-area-inset-top, 0px) + 9px);
+      right: 14px;
+      z-index: 1000;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #time-toggle button {
+      font-family: inherit; border: none; background: transparent; cursor: pointer;
+      padding: 6px 13px; border-radius: 999px; min-height: 32px;
+      font-weight: 600; font-size: 11.5px; color: var(--text-off);
+    }
+    .is-pwa #time-toggle button.active { background: var(--accent); color: var(--accent-on); }
+
+    /* ─── Rail layer (bottom-center) ─── */
+    .is-pwa #layer-rail {
+      display: flex; align-items: center; gap: 3px; padding: 4px; border-radius: 999px;
+      background: var(--glass); border: .5px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
+      position: fixed;
+      left: 50%; transform: translateX(-50%);
+      bottom: 44px;
+      z-index: 1000;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa .rail-item {
+      width: 68px; height: 52px; border-radius: 999px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      background: transparent; border: none; cursor: pointer; color: var(--text-off);
+      font-family: inherit;
+    }
+    .is-pwa .rail-item svg { width: 20px; height: 20px; }
+    .is-pwa .rail-item span { font-weight: 500; font-size: 9.5px; }
+    .is-pwa .rail-item.active { background: var(--accent-fill); color: var(--accent-100); }
+    .is-pwa .rail-item:active { background: var(--accent-press); }
+    .is-pwa #rail-divider { width: .5px; height: 30px; background: rgba(255, 255, 255, .14); margin: 0 1px; }
+    .is-pwa #prefs-btn {
+      width: 48px; height: 52px; border-radius: 999px;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; border: none; cursor: pointer; color: var(--text-off);
+    }
+    .is-pwa #prefs-btn svg { width: 21px; height: 21px; }
+    .is-pwa #prefs-btn.active { background: var(--accent-fill); color: var(--accent-100); }
+
+    /* ─── Popover preferenze — riusa .ctrl-row/.switch/.pill-group/.pill/.dashboard-link
+           (stessi id/markup del pannello legacy, solo skin diversa qui sotto) ─── */
+    .is-pwa #prefs-popover {
+      position: fixed; right: 14px; bottom: 112px; z-index: 1000;
+      width: 232px; padding: 12px 14px; border-radius: 18px;
+      background: var(--glass-strong); border: .5px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 18px 46px rgba(0, 0, 0, .6);
+      display: flex; flex-direction: column; gap: 2px;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #prefs-popover.hidden { display: none; }
+    .is-pwa #prefs-popover::after {
+      content: ''; position: absolute; right: 32px; bottom: -6px;
+      width: 12px; height: 12px; transform: rotate(45deg);
+      background: var(--glass-strong);
+      border-right: .5px solid var(--border); border-bottom: .5px solid var(--border);
+    }
+    .is-pwa #prefs-popover .ctrl-row {
+      display: flex; align-items: center; justify-content: space-between;
+      min-height: 30px; font-size: 12.5px; color: var(--text-2);
+    }
+    .is-pwa #prefs-popover .switch { width: 42px; height: 25px; border-radius: 13px; }
+    .is-pwa #prefs-popover .switch::after { top: 2.5px; left: 2.5px; width: 20px; height: 20px; }
+    .is-pwa #prefs-popover .ctrl-row input:checked ~ .switch::after { transform: translateX(15.5px); }
+    .is-pwa #prefs-popover .pill-group {
+      padding: 3px; gap: 3px; background: rgba(255, 255, 255, .06); border-radius: 9px;
+      align-self: flex-end;
+    }
+    .is-pwa #prefs-popover .pill span { padding: 5px 11px; border-radius: 6px; font-size: 11px; }
+    .is-pwa #prefs-popover .panel-divider { background: var(--border-soft); margin: 7px 0; }
+    .is-pwa #prefs-popover .dashboard-link {
+      padding-top: 2px; color: var(--text-2); font-size: 12.5px;
+    }
+
+    /* ─── Legenda — barra sottile senza card, solo min/max ─── */
+    .is-pwa .temp-legend {
+      display: flex; flex-direction: column; gap: 4px;
+      position: fixed; left: 16px; right: 16px; bottom: 108px; width: auto;
+      background: none; border: none; border-radius: 0; box-shadow: none;
+      backdrop-filter: none; -webkit-backdrop-filter: none; padding: 0;
+      text-shadow: 0 1px 5px rgba(0, 0, 0, .9);
+    }
+    .is-pwa .temp-legend.legend-radar-mode { bottom: 220px; }
+    .is-pwa #legend-title { display: none; }
+    .is-pwa #legend-bar { box-shadow: 0 1px 6px rgba(0, 0, 0, .6); margin-bottom: 0; }
+    .is-pwa #legend-labels { position: static; height: auto; margin-top: 0; }
+    .is-pwa .legend-tick {
+      font: 400 10px ui-monospace, "SF Mono", monospace; color: rgba(233, 233, 237, .7);
+    }
+
+    /* ─── Timeline radar ristilizzata (stessi id/logica di radar.js) ─── */
+    .is-pwa .radar-timeline {
+      left: 14px; right: 14px; bottom: 112px; transform: none; width: auto;
+      border-radius: 18px; padding: 11px 14px 9px;
+      background: rgba(20, 22, 34, .9); border: .5px solid rgba(255, 255, 255, .11);
+      backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+      box-shadow: 0 14px 40px rgba(0, 0, 0, .5);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa .radar-timeline-header {
+      display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;
+    }
+    .is-pwa .radar-timeline-header .hdr-title {
+      font-weight: 500; font-size: 11px; letter-spacing: .02em; color: rgba(233, 233, 237, .8);
+    }
+    .is-pwa .radar-timeline-header .hdr-credit {
+      font-weight: 400; font-size: 9.5px; color: rgba(233, 233, 237, .4);
+      cursor: help; text-decoration: underline dotted;
+    }
+    .is-pwa .radar-play-btn { width: 38px; height: 38px; }
+    .is-pwa .radar-slider { height: 5px; }
+    .is-pwa .radar-slider::-webkit-slider-thumb { width: 18px; height: 18px; }
+    .is-pwa .radar-slider::-moz-range-thumb { width: 18px; height: 18px; }
+    .is-pwa .radar-timeline-labels { font-size: 10px; color: rgba(233, 233, 237, .6); }
   </style>
+  <script>
+    // Redesign "Metek" (splash, brand lockup, rail, popover) attivo SOLO in PWA standalone
+    // installata da Home Screen — mai per visite browser normali (desktop, Safari non
+    // installato, iPad non installato). Eseguito qui, prima che <body> venga parsato, per
+    // evitare qualunque flash in entrambe le direzioni.
+    document.documentElement.classList.toggle('is-pwa',
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true);
+  </script>
 </head>
 <body>
+  <!-- Splash "Metek" — visibile solo in PWA standalone (.is-pwa su <html>, vedi <head>).
+       Porting da splash-reference.html dell'handoff di design. -->
+  <div id="splash">
+    <svg viewBox="0 0 180 180">
+      <path class="iso" d="M-6 150c26-40 60-30 88-46s34-46 68-52" stroke="#3f4a86"/>
+      <path class="iso" d="M-6 126c30-38 58-26 86-44s36-42 70-48" stroke="#5b63b4"/>
+      <path class="iso" d="M2 104c28-34 54-22 80-40s34-38 66-44" stroke="#7b76cc"/>
+      <path class="iso" d="M16 84c24-28 46-16 70-34s30-32 62-38" stroke="#9184d9"/>
+      <path class="iso" d="M34 68c20-22 38-10 58-28s26-24 56-30" stroke="#c6bff0"/>
+      <circle class="hot" cx="104" cy="52" r="16" fill="#f4a93f" style="transform-origin:104px 52px"/>
+    </svg>
+    <div class="word">Metek</div>
+    <div class="track"><div class="bar"></div></div>
+  </div>
+  <script>
+    // Espone window.hideSplash(), chiamata da app.js a fine caricamento dati (successo o
+    // errore). Durata minima 1.7s per non "sfarfallare". No-op immediato fuori da .is-pwa.
+    (function () {
+      if (!document.documentElement.classList.contains('is-pwa')) {
+        window.hideSplash = function () {};
+        return;
+      }
+      var splash = document.getElementById('splash');
+      var MIN_MS = 1700;
+      var t0 = performance.now();
+      window.hideSplash = function () {
+        var wait = Math.max(0, MIN_MS - (performance.now() - t0));
+        setTimeout(function () {
+          splash.classList.add('done');
+          setTimeout(function () { splash.remove(); }, 340);
+        }, wait);
+      };
+    })();
+  </script>
+
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

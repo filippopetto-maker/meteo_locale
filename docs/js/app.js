@@ -370,6 +370,11 @@
 
     let windLayer = null;
 
+    // Redesign "Metek" (splash, brand lockup, rail, popover) attivo SOLO in PWA standalone —
+    // vedi script di detection in <head> di index.html. Dichiarato qui (non dentro il try)
+    // così resta leggibile anche dal catch, per lo splash e i messaggi d'errore.
+    const isPWA = document.documentElement.classList.contains('is-pwa');
+
     try {
       const [latestRes, windRes] = await Promise.all([
         fetch('data/latest.json'),
@@ -386,30 +391,15 @@
       globalTMin = Math.min(tgObs?.t_min ?? Infinity,  tgFc?.t_min ?? Infinity);
       globalTMax = Math.max(tgObs?.t_max ?? -Infinity, tgFc?.t_max ?? -Infinity);
 
-      // Pannello di controllo unico — top-left
-      const infoPanel = L.DomUtil.create('div');
-      infoPanel.id = 'control-panel';
+      // Il ramo `else` sotto è il pannello legacy, invariato, per qualunque visita da browser
+      // normale; il ramo `if (isPWA)` costruisce brand lockup/rail/popover.
       const firstFc = (latest.stations || []).find(s => s.forecast?.valid_for);
       const validOre = firstFc ? formatTime(firstFc.forecast.valid_for) : '';
-      infoPanel.innerHTML =
-        `<div class="panel-head">` +
-        `<div class="info-title">🌦️ Meteo Locale — Roma</div>` +
-        `<div id="info-mos">` +
-        `<div class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</div>` +
-        `<div class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</div>` +
-        `</div>` +
-        `<div class="info-update" id="info-radar" style="display:none"></div>` +
-        `</div>` +
-        `<div class="layer-toggle">` +
-        `<button id="btn-wind">💨 Vento</button>` +
-        `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
-        `<button id="btn-hum">💧 Umidità</button>` +
-        `<button id="btn-radar">🌧️ Radar</button>` +
-        `</div>` +
-        `<div class="layer-toggle" id="time-toggle">` +
-        `<button id="btn-now" class="active">Adesso</button>` +
-        `<button id="btn-plus1">+1h</button>` +
-        `</div>` +
+
+      // Righe di preferenze (Mostra vento / Frecce direzionali / unità) — markup condiviso
+      // byte-per-byte, riusato sia nel pannello legacy sia nel popover PWA: stessi id, quindi
+      // switchLayer()/i listener di wind-check/arrow-check/unità restano invariati sotto.
+      const prefsRowsHtml =
         `<label class="ctrl-row" id="wind-toggle">` +
         `<input type="checkbox" id="wind-check" checked>` +
         `<span class="switch"></span>` +
@@ -423,12 +413,101 @@
         `<div class="pill-group" id="wind-unit-group">` +
         `<label class="pill"><input type="radio" name="wind-unit" value="kmh" checked><span>km/h</span></label>` +
         `<label class="pill"><input type="radio" name="wind-unit" value="kts"><span>nodi</span></label>` +
-        `</div>` +
-        `<div class="panel-divider"></div>` +
-        `<a class="dashboard-link" href="dashboard.html">` +
-        `<span>📊 Dashboard</span><span class="chevron">›</span>` +
-        `</a>`;
-      document.body.appendChild(infoPanel);
+        `</div>`;
+
+      if (isPWA) {
+        const railIconSvg = inner =>
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">${inner}</svg>`;
+        const ICON_WIND = railIconSvg('<path d="M3 8h11a3 3 0 100-6"></path><path d="M3 12h15a3.5 3.5 0 110 7"></path><path d="M3 16h7a2.5 2.5 0 110 5"></path>');
+        const ICON_TEMP = railIconSvg('<path d="M14 14.8V5a2 2 0 10-4 0v9.8a4 4 0 104 0z"></path>');
+        const ICON_DROP = railIconSvg('<path d="M12 3s6 6.4 6 10.4A6 6 0 016 13.4C6 9.4 12 3 12 3z"></path>');
+        const ICON_RADAR = railIconSvg('<path d="M5 14a4 4 0 011.4-7.7A5.5 5.5 0 0117 7.6 3.6 3.6 0 0119 14z"></path><path d="M8 18l-1 2.5M12 18l-1 2.5M16 18l-1 2.5"></path>');
+        const ICON_SLIDERS = railIconSvg('<path d="M4 7h9M17 7h3M4 17h3M11 17h9"></path><circle cx="15" cy="7" r="2.3"></circle><circle cx="9" cy="17" r="2.3"></circle>');
+
+        // ─── Brand lockup (top-left) — riusa #info-mos/#info-radar/#valid-for-label così
+        // switchLayer()/switchTime()/RadarLayer.onUpdate restano invariati ───
+        const brand = L.DomUtil.create('div');
+        brand.id = 'brand-lockup';
+        brand.innerHTML =
+          `<svg class="brand-mark" viewBox="0 0 180 180" xmlns="http://www.w3.org/2000/svg">` +
+          `<g fill="none" stroke-linecap="round">` +
+          `<path d="M-4 46c34 0 46 22 84 22s52-22 104-22" stroke="#4b5192" stroke-width="10"></path>` +
+          `<path d="M-4 82c34 0 46 22 84 22s52-22 104-22" stroke="#9184d9" stroke-width="11"></path>` +
+          `<path d="M-4 118c34 0 46 22 84 22s52-22 104-22" stroke="#c6bff0" stroke-width="10"></path>` +
+          `</g><circle cx="126" cy="96" r="9" fill="#f4a93f"></circle>` +
+          `</svg>` +
+          `<div class="brand-text">` +
+          `<div class="brand-word">Metek</div>` +
+          `<div id="info-mos">` +
+          `<div id="brand-meta">Aggiornato: ${formatTime(latest.generated_at)}` +
+          `${validOre ? ` · <span id="valid-for-label">Previsioni per le ore ${validOre}</span>` : '<span id="valid-for-label"></span>'}` +
+          `</div>` +
+          `</div>` +
+          `<div id="info-radar" style="display:none"></div>` +
+          `</div>`;
+        document.body.appendChild(brand);
+
+        // ─── Pillola tempo (top-right) — id "time-toggle" riusato dal pannello legacy ───
+        const timeToggle = L.DomUtil.create('div');
+        timeToggle.id = 'time-toggle';
+        timeToggle.innerHTML =
+          `<button id="btn-now" class="active">Adesso</button>` +
+          `<button id="btn-plus1">+1h</button>`;
+        document.body.appendChild(timeToggle);
+
+        // ─── Rail layer (bottom-center) ───
+        const rail = L.DomUtil.create('div');
+        rail.id = 'layer-rail';
+        rail.innerHTML =
+          `<button class="rail-item" id="btn-wind">${ICON_WIND}<span>Vento</span></button>` +
+          `<button class="rail-item active" id="btn-temp">${ICON_TEMP}<span>Temp.</span></button>` +
+          `<button class="rail-item" id="btn-hum">${ICON_DROP}<span>Umidità</span></button>` +
+          `<button class="rail-item" id="btn-radar">${ICON_RADAR}<span>Radar</span></button>` +
+          `<div id="rail-divider"></div>` +
+          `<button id="prefs-btn" title="Regolazioni">${ICON_SLIDERS}</button>`;
+        document.body.appendChild(rail);
+
+        // ─── Popover preferenze — chiuso di default ───
+        const popover = L.DomUtil.create('div');
+        popover.id = 'prefs-popover';
+        popover.classList.add('hidden');
+        popover.innerHTML =
+          prefsRowsHtml +
+          `<div class="panel-divider"></div>` +
+          `<a class="dashboard-link" href="dashboard.html">` +
+          `<span>Dashboard</span><span class="chevron">›</span>` +
+          `</a>`;
+        document.body.appendChild(popover);
+      } else {
+        // ─── Pannello di controllo unico — top-left (comportamento legacy, invariato) ───
+        const infoPanel = L.DomUtil.create('div');
+        infoPanel.id = 'control-panel';
+        infoPanel.innerHTML =
+          `<div class="panel-head">` +
+          `<div class="info-title">🌦️ Meteo Locale — Roma</div>` +
+          `<div id="info-mos">` +
+          `<div class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</div>` +
+          `<div class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</div>` +
+          `</div>` +
+          `<div class="info-update" id="info-radar" style="display:none"></div>` +
+          `</div>` +
+          `<div class="layer-toggle">` +
+          `<button id="btn-wind">💨 Vento</button>` +
+          `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
+          `<button id="btn-hum">💧 Umidità</button>` +
+          `<button id="btn-radar">🌧️ Radar</button>` +
+          `</div>` +
+          `<div class="layer-toggle" id="time-toggle">` +
+          `<button id="btn-now" class="active">Adesso</button>` +
+          `<button id="btn-plus1">+1h</button>` +
+          `</div>` +
+          prefsRowsHtml +
+          `<div class="panel-divider"></div>` +
+          `<a class="dashboard-link" href="dashboard.html">` +
+          `<span>📊 Dashboard</span><span class="chevron">›</span>` +
+          `</a>`;
+        document.body.appendChild(infoPanel);
+      }
 
       // Legenda — bottom-right (aggiornata da updateLegend)
       const legend = L.DomUtil.create('div', 'temp-legend');
@@ -467,16 +546,28 @@
           });
           return;
         }
-        const ticks = [vMin, (vMin + vMax) / 2, vMax];
-        ticks.forEach(v => {
+        // PWA: solo min/max, unità accodata solo al max. Browser normale: invariato (3 tick,
+        // unità su tutti) — stesso identico comportamento di oggi.
+        const ticks = isPWA ? [vMin, vMax] : [vMin, (vMin + vMax) / 2, vMax];
+        ticks.forEach((v, i) => {
           const pos = ((v - vMin) / (vMax - vMin)) * 100;
           const span = document.createElement('span');
           span.className = 'legend-tick';
           const decimals = layer === 'temperature' ? 1 : 0;
-          span.textContent = v.toFixed(decimals) + unit;
+          const showUnit = !isPWA || i === ticks.length - 1;
+          span.textContent = v.toFixed(decimals) + (showUnit ? unit : '');
           span.style.left = pos + '%';
           labelsEl.appendChild(span);
         });
+      }
+
+      // Stato popover preferenze — solo PWA, il pannello legacy non ha un concetto di
+      // apertura/chiusura (le righe sono sempre visibili inline come oggi).
+      let prefsOpen = false;
+      function renderPrefsVisibility() {
+        if (!isPWA) return;
+        document.getElementById('prefs-popover')?.classList.toggle('hidden', !prefsOpen);
+        document.getElementById('prefs-btn')?.classList.toggle('active', prefsOpen);
       }
 
       function switchLayer(layer) {
@@ -505,6 +596,20 @@
 
         if (layer !== 'radar' && window.RadarLayer && window.RadarLayer.isActive()) {
           window.RadarLayer.deactivate();
+        }
+
+        if (isPWA) {
+          // Radar: nessuna impostazione applicabile — tasto regolazioni e divider spariscono,
+          // popover si chiude se era aperto (richiesta esplicita del design). Su qualunque
+          // altro layer restano visibili.
+          const prefsBtnEl = document.getElementById('prefs-btn');
+          const railDividerEl = document.getElementById('rail-divider');
+          if (prefsBtnEl)    prefsBtnEl.style.display    = layer === 'radar' ? 'none' : '';
+          if (railDividerEl) railDividerEl.style.display = layer === 'radar' ? 'none' : '';
+          if (layer === 'radar' && prefsOpen) {
+            prefsOpen = false;
+            renderPrefsVisibility();
+          }
         }
 
         if (layer === 'radar') {
@@ -572,6 +677,13 @@
       document.getElementById('btn-now').addEventListener('click', () => switchTime('observed'));
       document.getElementById('btn-plus1').addEventListener('click', () => switchTime('forecast'));
 
+      if (isPWA) {
+        document.getElementById('prefs-btn')?.addEventListener('click', () => {
+          prefsOpen = !prefsOpen;
+          renderPrefsVisibility();
+        });
+      }
+
       if (window.RadarLayer) {
         window.RadarLayer.init(map);
         window.RadarLayer.onUpdate((epochSec) => {
@@ -592,6 +704,8 @@
         map.fitBounds(bounds, { padding: [50, 50] });
       }
 
+      if (isPWA) window.hideSplash?.();
+
       if (windGrid) {
         windLayer = renderWind(map, windGrid);
       }
@@ -605,6 +719,11 @@
 
       // IDW al punto cliccato
       map.on('click', async function (e) {
+        if (isPWA && prefsOpen) {
+          prefsOpen = false;
+          renderPrefsVisibility();
+        }
+
         const lat = e.latlng.lat;
         const lng = e.latlng.lng;
 
@@ -696,7 +815,15 @@
 
     } catch (err) {
       console.error('Errore caricamento dati:', err);
-      document.getElementById('updated-at').textContent = 'Errore caricamento dati';
+      if (isPWA) {
+        // Bug preesistente (#updated-at non esiste nel markup, citato nel README): fixato
+        // solo qui, nel ramo PWA. Il ramo legacy sotto resta byte-per-byte quello di oggi.
+        const brandMeta = document.getElementById('brand-meta');
+        if (brandMeta) brandMeta.textContent = 'Dati non disponibili';
+        window.hideSplash?.();
+      } else {
+        document.getElementById('updated-at').textContent = 'Errore caricamento dati';
+      }
     }
 
     if ('serviceWorker' in navigator) {

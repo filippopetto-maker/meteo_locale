@@ -1,6 +1,10 @@
 (function () {
   'use strict';
 
+  // Redesign "Metek" attivo SOLO in PWA standalone — stesso check di app.js, indipendente
+  // (nessuna dipendenza cross-file: radar.js gira anche da solo prima che app.js finisca).
+  const isPWA = document.documentElement.classList.contains('is-pwa');
+
   const META_URL   = 'https://api.rainviewer.com/public/weather-maps.json';
   const COLOR_SCHEME     = 2;     // "Universal Blue" — verificato su rainviewer.com/api/color-schemes.html
   const TILE_OPTIONS     = '1_1'; // smooth=1, snow=1
@@ -26,12 +30,24 @@
   let elTimeline, elPlayBtn, elSlider, elNowMarker,
       elLabelStart, elLabelNow, elLabelEnd, elUnavailable, elControls;
 
+  // Disclaimer del dato radar — in PWA il nowcast non esiste più (solo `past`), quindi la
+  // frase sul nowcast va tolta; nel pannello legacy il nowcast c'è ancora, disclaimer invariato.
+  const RADAR_DISCLAIMER = isPWA
+    ? `Dato di osservazione radar esterno (RainViewer), non previsione del modello MOS. Risoluzione aggregata ~1-2 km.`
+    : `Dato di osservazione radar esterno (RainViewer), non previsione del modello MOS. Risoluzione aggregata ~1-2 km. I frame oltre 'Adesso' sono nowcast estrapolato, non output del nostro modello.`;
+
   function buildDom() {
     elTimeline = document.createElement('div');
     elTimeline.id = 'radar-timeline';
     elTimeline.className = 'radar-timeline';
     elTimeline.style.display = 'none';
     elTimeline.innerHTML =
+      (isPWA
+        ? `<div class="radar-timeline-header">` +
+          `<span class="hdr-title">TIMELINE RADAR</span>` +
+          `<span class="hdr-credit radar-note" title="${RADAR_DISCLAIMER}">RainViewer · ultime 2h osservate</span>` +
+          `</div>`
+        : '') +
       `<div class="radar-timeline-row" id="radar-controls">` +
       `<button id="radar-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
       `<div class="radar-track-wrap">` +
@@ -45,10 +61,12 @@
       `<span id="radar-label-end"></span>` +
       `</div>` +
       `<div id="radar-unavailable" class="radar-unavailable" style="display:none">⚠️ Radar non disponibile</div>` +
-      `<div class="radar-credit">` +
-      `Radar: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>` +
-      ` · <span class="radar-note" title="Dato di osservazione radar esterno (RainViewer), non previsione del modello MOS. Risoluzione aggregata ~1-2 km. I frame oltre 'Adesso' sono nowcast estrapolato, non output del nostro modello.">ⓘ limiti del dato</span>` +
-      `</div>`;
+      (isPWA
+        ? ''
+        : `<div class="radar-credit">` +
+          `Radar: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>` +
+          ` · <span class="radar-note" title="${RADAR_DISCLAIMER}">ⓘ limiti del dato</span>` +
+          `</div>`);
     document.body.appendChild(elTimeline);
 
     elControls    = document.getElementById('radar-controls');
@@ -92,7 +110,9 @@
       const data = await res.json();
       const host     = data.host;
       const past     = (data.radar && data.radar.past)     || [];
-      const nowcast  = (data.radar && data.radar.nowcast)  || [];
+      // PWA: timeline finisce ad "Adesso", niente nowcast (cambio funzionale richiesto dal
+      // redesign). Browser normale: invariato, past + nowcast come oggi.
+      const nowcast  = isPWA ? [] : ((data.radar && data.radar.nowcast) || []);
 
       const newFrames = [
         ...past.map(f    => ({ time: f.time, path: f.path, kind: 'past',    url: buildUrl(host, f.path) })),
