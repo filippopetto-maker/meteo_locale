@@ -395,43 +395,6 @@
     // così resta leggibile anche dal catch, per lo splash e i messaggi d'errore.
     const isPWA = document.documentElement.classList.contains('is-pwa');
 
-    // ⚠️ DIAGNOSTICA TEMPORANEA (round 4) — rimuovere insieme all'overlay prima del commit
-    // finale. Verifica se env(safe-area-inset-*) risolve a 0 al primo paint e si corregge
-    // solo dopo un reflow (la rotazione ne è un esempio), se window.innerHeight resta
-    // "stabile ma sbagliato" per tutta la finestra di stabilizeMapSize() invece di cambiare,
-    // e se 100dvh su <html> si aggiorna insieme a innerHeight o resta indietro. Log subito
-    // poi ogni 150ms per ~2.1s (oltre la finestra di retry di 1.2s). Overlay a schermo
-    // (niente Safari Web Inspector via cavo disponibile) invece di console.log — resta
-    // visibile finché non lo tocchi, nessun auto-hide.
-    if (isPWA) {
-      (function debugSafeArea() {
-        const overlay = document.createElement('div');
-        overlay.id = 'debug-safe-area-overlay';
-        overlay.style.cssText =
-          'position:fixed; top:0; left:0; right:0; z-index:99999; ' +
-          'background:rgba(0,0,0,.85); color:#0f0; font:10px monospace; padding:6px; ' +
-          'max-height:40vh; overflow:auto; white-space:pre-wrap;';
-        document.body.appendChild(overlay);
-
-        const cs = getComputedStyle(document.documentElement);
-        let n = 0;
-        const log = () => {
-          const line =
-            `t=${n * 150}ms sat=${cs.getPropertyValue('--sat')} sab=${cs.getPropertyValue('--sab')} ` +
-            `innerHeight=${window.innerHeight} dvh_html=${document.documentElement.getBoundingClientRect().height}\n`;
-          overlay.textContent += line;
-          overlay.scrollTop = overlay.scrollHeight;
-          n++;
-          if (n <= 14) {
-            setTimeout(log, 150);
-          } else {
-            overlay.textContent += '--- FINE LOG ---';
-          }
-        };
-        log();
-      })();
-    }
-
     // Solo PWA: il controllo +/- nativo di Leaflet si sovrappone al brand lockup e non fa
     // parte del design. Pinch-to-zoom/scroll-wheel restano attivi: sono handler della mappa
     // indipendenti dal widget visivo, non toccati da questa rimozione. Legacy invariato.
@@ -602,6 +565,52 @@
         `<div id="legend-bar" class="legend-bar"></div>` +
         `<div id="legend-labels" class="legend-labels"></div>`;
       document.getElementById('map').appendChild(legend);
+
+      // ⚠️ DIAGNOSTICA TEMPORANEA (round 5) — rimuovere insieme all'overlay prima del commit
+      // finale. env()/innerHeight/dvh confermati stabili e corretti dal boot (round 4,
+      // ipotesi chiusa) — ora si misura l'OUTPUT (dove finiscono realmente #map/#layer-rail/
+      // .temp-legend) invece dell'input, per confrontare boot vs dopo-rotazione sugli stessi
+      // elementi. Un log automatico qui (primo momento in cui tutti e tre esistono nel DOM),
+      // più un pulsante per loggare di nuovo su richiesta (es. dopo aver ruotato lo schermo).
+      if (isPWA) {
+        (function debugElementRects() {
+          const overlay = document.createElement('div');
+          overlay.id = 'debug-rects-overlay';
+          overlay.style.cssText =
+            'position:fixed; top:0; left:0; right:0; z-index:99999; ' +
+            'background:rgba(0,0,0,.85); color:#0f0; font:10px monospace; padding:6px; ' +
+            'padding-top:36px; max-height:40vh; overflow:auto; white-space:pre-wrap;';
+          document.body.appendChild(overlay);
+
+          const btn = document.createElement('button');
+          btn.textContent = 'Log ora';
+          btn.style.cssText =
+            'position:fixed; top:4px; right:4px; z-index:100000; ' +
+            'background:#0f0; color:#000; font:11px monospace; font-weight:bold; ' +
+            'border:none; border-radius:4px; padding:4px 10px;';
+          document.body.appendChild(btn);
+
+          const t0 = performance.now();
+          function rectLines() {
+            const r = id => {
+              const el = id.startsWith('.') ? document.querySelector(id) : document.getElementById(id);
+              if (!el) return `${id}: non presente nel DOM\n`;
+              const b = el.getBoundingClientRect();
+              return `${id}: top=${Math.round(b.top)} bottom=${Math.round(b.bottom)} height=${Math.round(b.height)}\n`;
+            };
+            return r('map') + r('layer-rail') + r('.temp-legend');
+          }
+          function appendLog(header) {
+            overlay.textContent += header + rectLines();
+            overlay.scrollTop = overlay.scrollHeight;
+          }
+
+          appendLog(`--- BOOT (t=0ms) innerHeight=${window.innerHeight} ---\n`);
+          btn.addEventListener('click', () => {
+            appendLog(`--- LOG MANUALE (t=${Math.round(performance.now() - t0)}ms dal boot) innerHeight=${window.innerHeight} ---\n`);
+          });
+        })();
+      }
 
       function updateLegend(layer, vMin, vMax, unit, customTicks) {
         const unitLabel = unit.trim();
