@@ -614,8 +614,11 @@
             };
             return r('map') + r('layer-rail') + r('.temp-legend');
           }
+          function vvLine() {
+            return `vv: height=${Math.round(window.visualViewport?.height ?? -1)} width=${Math.round(window.visualViewport?.width ?? -1)} scale=${window.visualViewport?.scale ?? 'n/d'}\n`;
+          }
           function appendLog(header) {
-            overlay.textContent += header + rectLines();
+            overlay.textContent += header + rectLines() + vvLine();
             overlay.scrollTop = overlay.scrollHeight;
           }
 
