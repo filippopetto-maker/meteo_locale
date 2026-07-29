@@ -432,6 +432,11 @@
       --text-2: rgba(233, 233, 237, .85);
       --text-3: rgba(233, 233, 237, .55);
       --text-off: rgba(233, 233, 237, .52);
+      /* Diagnostica round 4: espone i valori env() come custom property leggibili da JS
+         (getComputedStyle), per verificare se risolvono a 0 al primo paint su iOS standalone
+         e si correggono solo dopo un reflow. Vedi log temporaneo in app.js. */
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
     }
 
     /* ─── Fix #1 (bug fisici iPhone): 100vh su iOS standalone può essere più alto dello

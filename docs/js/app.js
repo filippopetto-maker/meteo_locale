@@ -395,6 +395,27 @@
     // così resta leggibile anche dal catch, per lo splash e i messaggi d'errore.
     const isPWA = document.documentElement.classList.contains('is-pwa');
 
+    // ⚠️ DIAGNOSTICA TEMPORANEA (round 4) — rimuovere prima del commit finale.
+    // Verifica se env(safe-area-inset-*) risolve a 0 al primo paint e si corregge solo dopo
+    // un reflow (la rotazione ne è un esempio), e se window.innerHeight resta "stabile ma
+    // sbagliato" per tutta la finestra di stabilizeMapSize() invece di cambiare. Logga subito
+    // e poi ogni 150ms per ~2.1s (oltre la finestra di retry di 1.2s, per vedere se la
+    // correzione arriva più tardi).
+    if (isPWA) {
+      (function debugSafeArea() {
+        const cs = getComputedStyle(document.documentElement);
+        let n = 0;
+        const log = () => {
+          console.log(
+            `[debug-safe-area] t=${n * 150}ms sat=${cs.getPropertyValue('--sat')} sab=${cs.getPropertyValue('--sab')} innerHeight=${window.innerHeight}`
+          );
+          n++;
+          if (n <= 14) setTimeout(log, 150);
+        };
+        log();
+      })();
+    }
+
     // Solo PWA: il controllo +/- nativo di Leaflet si sovrappone al brand lockup e non fa
     // parte del design. Pinch-to-zoom/scroll-wheel restano attivi: sono handler della mappa
     // indipendenti dal widget visivo, non toccati da questa rimozione. Legacy invariato.
