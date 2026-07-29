@@ -395,22 +395,38 @@
     // così resta leggibile anche dal catch, per lo splash e i messaggi d'errore.
     const isPWA = document.documentElement.classList.contains('is-pwa');
 
-    // ⚠️ DIAGNOSTICA TEMPORANEA (round 4) — rimuovere prima del commit finale.
-    // Verifica se env(safe-area-inset-*) risolve a 0 al primo paint e si corregge solo dopo
-    // un reflow (la rotazione ne è un esempio), e se window.innerHeight resta "stabile ma
-    // sbagliato" per tutta la finestra di stabilizeMapSize() invece di cambiare. Logga subito
-    // e poi ogni 150ms per ~2.1s (oltre la finestra di retry di 1.2s, per vedere se la
-    // correzione arriva più tardi).
+    // ⚠️ DIAGNOSTICA TEMPORANEA (round 4) — rimuovere insieme all'overlay prima del commit
+    // finale. Verifica se env(safe-area-inset-*) risolve a 0 al primo paint e si corregge
+    // solo dopo un reflow (la rotazione ne è un esempio), se window.innerHeight resta
+    // "stabile ma sbagliato" per tutta la finestra di stabilizeMapSize() invece di cambiare,
+    // e se 100dvh su <html> si aggiorna insieme a innerHeight o resta indietro. Log subito
+    // poi ogni 150ms per ~2.1s (oltre la finestra di retry di 1.2s). Overlay a schermo
+    // (niente Safari Web Inspector via cavo disponibile) invece di console.log — resta
+    // visibile finché non lo tocchi, nessun auto-hide.
     if (isPWA) {
       (function debugSafeArea() {
+        const overlay = document.createElement('div');
+        overlay.id = 'debug-safe-area-overlay';
+        overlay.style.cssText =
+          'position:fixed; top:0; left:0; right:0; z-index:99999; ' +
+          'background:rgba(0,0,0,.85); color:#0f0; font:10px monospace; padding:6px; ' +
+          'max-height:40vh; overflow:auto; white-space:pre-wrap;';
+        document.body.appendChild(overlay);
+
         const cs = getComputedStyle(document.documentElement);
         let n = 0;
         const log = () => {
-          console.log(
-            `[debug-safe-area] t=${n * 150}ms sat=${cs.getPropertyValue('--sat')} sab=${cs.getPropertyValue('--sab')} innerHeight=${window.innerHeight}`
-          );
+          const line =
+            `t=${n * 150}ms sat=${cs.getPropertyValue('--sat')} sab=${cs.getPropertyValue('--sab')} ` +
+            `innerHeight=${window.innerHeight} dvh_html=${document.documentElement.getBoundingClientRect().height}\n`;
+          overlay.textContent += line;
+          overlay.scrollTop = overlay.scrollHeight;
           n++;
-          if (n <= 14) setTimeout(log, 150);
+          if (n <= 14) {
+            setTimeout(log, 150);
+          } else {
+            overlay.textContent += '--- FINE LOG ---';
+          }
         };
         log();
       })();
