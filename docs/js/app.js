@@ -401,8 +401,12 @@
     // schermo. Va prima di qualunque lettura/uso delle dimensioni (zoomControl, stabilizeMapSize)
     // così, se funziona, quelle letture partono già dal viewport corretto.
     if (isPWA) {
+      document.documentElement.style.overflow = 'auto';
       window.scrollTo(0, 1);
-      requestAnimationFrame(() => window.scrollTo(0, 0));
+      requestAnimationFrame(() => {
+        window.scrollTo(0, 0);
+        document.documentElement.style.overflow = 'hidden'; // ripristina lo stato originale
+      });
     }
 
     // Solo PWA: il controllo +/- nativo di Leaflet si sovrappone al brand lockup e non fa
