@@ -395,6 +395,16 @@
     // così resta leggibile anche dal catch, per lo splash e i messaggi d'errore.
     const isPWA = document.documentElement.classList.contains('is-pwa');
 
+    // Solo PWA: trucco storico per lo stesso bug WebKit di miscalcolo del viewport — un
+    // micro-scroll subito al boot imita l'evento di resize reale che la rotazione genera
+    // (e che risolve il problema), senza chiedere all'utente di ruotare fisicamente lo
+    // schermo. Va prima di qualunque lettura/uso delle dimensioni (zoomControl, stabilizeMapSize)
+    // così, se funziona, quelle letture partono già dal viewport corretto.
+    if (isPWA) {
+      window.scrollTo(0, 1);
+      requestAnimationFrame(() => window.scrollTo(0, 0));
+    }
+
     // Solo PWA: il controllo +/- nativo di Leaflet si sovrappone al brand lockup e non fa
     // parte del design. Pinch-to-zoom/scroll-wheel restano attivi: sono handler della mappa
     // indipendenti dal widget visivo, non toccati da questa rimozione. Legacy invariato.
