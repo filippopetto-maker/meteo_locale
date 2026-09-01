@@ -886,6 +886,47 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 
 *(Placeholder — dettagli tecnici da definire in un brief dedicato quando si arriva a questa fase.)*
 
+### 🧪 Esperimento — TimesFM-3 (zero-shot) vs MOS attuale — Roma Sud, T+1h e T+24h
+
+**Data:** 01/09/2026
+**Setup:** confronto isolato (script `benchmark_timesfm3_vs_mos*.py`, non in produzione) su Roma Sud (id=3), usando TimesFM-3 (Google, 330M par., licenza non-commerciale) zero-shot con la serie osservata reale come contesto e la temperatura ERA5 come covariata nota ("past-future covariate").
+
+**Risultati MAE (°C):**
+
+| Orizzonte | Split | LGBM solo | LGBM + RF | MOS scelto (baseline) | TimesFM-3 zero-shot |
+|:-------|:-------|:-------|:-------|:-------|:-------|
+| T+1h | full val (16.974 righe) | — | 0.8447 | 0.8447 | — |
+| T+1h | sottocampione 300 pt | — | — | 0.8823 | 1.1689 |
+| T+24h | full val (16.903 righe) | 1.6123 (train 1.3136) | 1.6331 (train 1.2446) | **1.6123 (LGBM solo)** | — |
+| T+24h | sottocampione 300 pt | — | — | 1.6420 | 2.0197 |
+
+Gap relativo TimesFM-3 vs MOS: **+32% a T+1h, +23% a T+24h** (si restringe con l'orizzonte, ma il MOS resta avanti in entrambi i casi).
+
+**Top-10 feature importance (gain) del modello T+24h addestrato ad-hoc:** temperature, wind_chill, temperature_lag_1, shortwave_radiation, doy_cos, doy_sin, hour_cos, pressure, wind_u, temperature_roll_mean_6. Best iteration: 147/1000 (contro 643/1000 del modello T+1h).
+
+**Cosa abbiamo imparato:**
+
+1. **Il MOS vince su entrambi gli orizzonti testati.** Nessun elemento per integrare TimesFM-3 in pipeline, ora o dopo dicembre. Parcheggiato, non scartato: da rivalutare solo se emergono use case specifici (es. come secondo parere in un ensemble, non come sostituto).
+2. **Il correttore RF non è universalmente utile — va validato per orizzonte, non applicato per default.** A T+1h migliora il val MAE; a T+24h lo *peggiora* (1.6123 → 1.6331) pur migliorando molto il train (1.3136 → 1.2446): overfitting sui residui, perché a 24h i residui del LightGBM sono meno strutturati (più vicini a rumore) che a 1h. **Azione:** nel retraining di dicembre, validare il correttore RF su ogni orizzonte prima di includerlo, non assumerlo automaticamente benefico.
+3. **Segnale strutturale importante per il redesign multi-horizon:** il modello T+24h, ottenuto semplicemente riapplicando il feature set pensato per T+1h a un target shiftato di 24h, si appoggia quasi interamente su persistenza (`temperature`, `temperature_lag_1`) e stagionalità (`doy_sin/cos`), non su un vero pattern predittivo a lungo raggio. Il modello "rinuncia prima" (147 alberi contro 643) perché il feature set non gli offre altro segnale da sfruttare oltre quello. Questo NON è un limite di LightGBM in sé, è un limite di riusare feature T+1h-centriche su orizzonti lunghi senza ridisegnarle.
+
+**Implicazioni per il redesign T+1h → T+24/48h (Fase 4):**
+
+- **Non retrainare lo stesso feature set a orizzonti diversi** (quello che abbiamo fatto qui, di proposito, solo per il benchmark). Serve un redesign delle feature, non solo un nuovo target shift.
+- **Lead-time come feature esplicita**: un solo modello multi-horizon che riceve l'orizzonte come input (invece di un modello per horizon) impara a modulare quanto pesare persistenza vs pattern stagionale vs input NWP in funzione di quanto lontano sta prevedendo — coerente con quanto già pianificato per dicembre.
+- **Sostituire ERA5 con Open-Meteo Historical Forecast API come input di training per gli orizzonti lunghi** (già in roadmap): questo esperimento ha usato ERA5 come covariata "nota" anche nel futuro, il che è realistico a T+1h ma è un'idealizzazione forte a T+24h — in produzione reale a 24h di distanza si userebbe una vera previsione NWP, non una rianalisi. Il gap TimesFM-3-vs-MOS misurato qui è quindi un limite superiore ottimistico per entrambi, non una stima del MAE reale raggiungibile a T+24h in produzione.
+- **Feature dedicate a orizzonti lunghi** (convettività, gradiente di pressione su finestre più ampie, feature derivate dalla traiettoria NWP invece che dal solo valore puntuale a T) invece di lag/rolling pensati per T+1h.
+- **Validare il correttore RF per-orizzonte** (punto 2 sopra) come parte standard del processo di retraining multi-horizon.
+
+**Riferimenti — dove trovare codice e artefatti di questo esperimento:**
+
+- **Script di benchmark T+1h** (branch `claude/timesfm3-mos-benchmark-fkq48z`, repo `meteo_locale`): `benchmark_timesfm3_vs_mos.py`, gira dentro `meteo_locale/` (usa direttamente `data/training_10y_h1.parquet` e `model/` di produzione, solo in lettura)
+- **Esperimento T+24h (script + dataset + modello) — cartella isolata, FUORI dal repo git**, mai committata: `~/Desktop/timesfm_h24_experiment/` (locale, solo sulla macchina di sviluppo). Include anche lo script di confronto T+24h (equivalente locale di `benchmark_timesfm3_vs_mos.py` ma non versionato)
+  - Contiene copie di `historical.py`, `features.py`, `db.py`, `forecast.py`, `correttore.py` + `.env`, usate per generare un modello LightGBM+RF ad-hoc per T+24h (non esiste in produzione, che copre solo T+1h)
+  - Dataset generato: `data/roma_sud_h24.parquet` (Roma Sud, 2015–2024, 84.514 righe utilizzabili)
+  - Modello generato: `model_experimental_h24/lgbm_temperature.txt` + `rf_correttore_temperature.pkl`
+  - Questi artefatti (cartella, script, dataset, modello) sono riproducibili dal codice e non sono conservati: se servono di nuovo, si rigenerano con gli stessi comandi.
+
 ---
 
 ## 🐛 Diario degli errori risolti
