@@ -6,6 +6,8 @@ Sistema di previsione meteo su scala comunale che cala lo stato meteorologico re
 
 ---
 
+---
+
 ## 📑 Indice
 
 1. [Visione del progetto](#-visione-del-progetto)
@@ -14,16 +16,17 @@ Sistema di previsione meteo su scala comunale che cala lo stato meteorologico re
 4. [Stack tecnologico](#-stack-tecnologico)
 5. [Fonti dati](#-fonti-dati)
 6. [Feature orografiche](#-feature-orografiche)
-7. [Stato attuale e Roadmap](#-stato-attuale-e-roadmap)
-8. [Restyling mappa — luglio 2026](#-restyling-mappa--luglio-2026)
-9. [Risultati del modello](#-risultati-del-modello)
-10. [Struttura del progetto](#-struttura-del-progetto)
-11. [Database — schema](#-database--schema)
-12. [Setup e installazione](#-setup-e-installazione)
-13. [I moduli](#-i-moduli)
-14. [Diario degli errori risolti](#-diario-degli-errori-risolti)
-15. [Differenziali competitivi](#-differenziali-competitivi)
-16. [Come riprendere il lavoro](#-come-riprendere-il-lavoro)
+7. [Stato attuale](#-stato-attuale)
+8. [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47)
+9. [Sviluppo a lungo termine](#-sviluppo-a-lungo-termine)
+10. [Come riprendere il lavoro](#-come-riprendere-il-lavoro)
+11. [Risultati del modello](#-risultati-del-modello)
+12. [Struttura del progetto](#-struttura-del-progetto)
+13. [Database — schema](#-database--schema)
+14. [Setup e installazione](#-setup-e-installazione)
+15. [I moduli](#-i-moduli)
+16. [Differenziali competitivi](#-differenziali-competitivi)
+17. [Diario degli errori risolti](#-diario-degli-errori-risolti)
 
 ---
 
@@ -220,11 +223,12 @@ Sono il vantaggio competitivo principale: traducono i meccanismi fisici del terr
 
 `urban_canyon` · `esposta_sole` · `quota` · `alta_quota` · `costiera` · `colline_interne` · `verde_parco` · `standard`
 
+
 ---
 
-## 🗺️ Stato attuale e Roadmap
+## 📊 Stato attuale
 
-Un unico elenco cronologico per fase: cosa è completato, cosa è in corso, cosa manca. Le fasi completate elencano le componenti principali (non ogni singolo dettaglio implementativo — quelli sono in *I moduli* e in *Database — schema*).
+Esecuzione a breve termine, fase per fase: cosa è completato, cosa è in corso, cosa manca. Le fasi completate elencano le componenti principali (non ogni singolo dettaglio implementativo — quelli sono in *I moduli* e in *Database — schema*). Il piano strategico di lungo periodo è nella sezione **Roadmap estesa — Fasi 4–7** che segue.
 
 ### ✅ Fase 1 — Modello sullo storico (COMPLETATA — giugno 2025)
 
@@ -266,23 +270,151 @@ Un unico elenco cronologico per fase: cosa è completato, cosa è in corso, cosa
 3. [x] `.github/workflows/export.yml` — commit automatico JSON su GitHub Pages, trigger esterno via cron-job.org (`workflow_dispatch`, nessuno `schedule:` interno)
 4. [x] `docs/index.html` + `docs/js/app.js` — mappa Leaflet.js full-screen, heatmap IDW temperatura e umidità (ERA5 + correzioni), toggle layer, particelle vento leaflet-velocity, popup stazioni, click pointer con `lookupGrid` bilineare (valori coerenti con heatmap), legenda, pannello info timestamp
 5. [x] GitHub Pages live: `https://filippopetto-maker.github.io/meteo_locale/`
-6. [ ] **Dicembre 2026 — retraining completo** con Netatmo accumulato (32 stazioni, ~6 mesi di storico) + ARSIAL daily come validazione/cross-check sui bias stagionali. Le stazioni 56–60 (e 61 se attiva) escono dal cold start; le feature `precipitation`/`cloudcover`/`shortwave_radiation` sono già in pipeline, mancano ancora i lag/rolling da aggiungere in `features.py` prima del retraining. Implicazioni per il redesign multi-horizon → vedi l'esperimento TimesFM-3 in Fase 4d
-7. [ ] API REST FastAPI — rimandato, sostituito da static JSON su GH Pages
-8. [ ] CAPE da ERA5 → target thunderstorm — post-retraining dicembre 2026
-9. [ ] Target pioggia puntuale (mm) — post-retraining dicembre 2026
-10. [ ] LCZ Copernicus per isola di calore — post-retraining dicembre 2026
+6. [x] **Carta del vento** — heatmap velocità (ERA5 background + IDW correzioni, scala adattiva `ws_min`/`ws_max`), frecce barbed sinottiche zoom-adaptive (stanghette per intensità, punta direzionale), toggle particelle/frecce, legenda km/h ↔ nodi (`wind_speed_grid` in `latest.json`, `app.js`)
+7. [x] **Dashboard GitHub Pages (Chart.js)** — `docs/dashboard.html` + `dashboard_data.json` (serie forecast/observed 7gg, MAE globale e per stazione). Generata da `export_static.py --dashboard-only`, workflow dedicato `export-dashboard.yml` (trigger 8:00/20:00). Sostituisce la dashboard Streamlit. Dettagli tecnici → sezione *I moduli*, `docs/dashboard.html`
+8. [ ] API REST FastAPI — rimandato, sostituito da static JSON su GH Pages; resta opzionale in futuro per query dinamiche (storico per stazione, confronto date; ipotesi deploy su Render)
 
-### ✅ Fase 4a — Layer Vento interattivo (COMPLETATA — giugno 2026)
+Il piano di lungo periodo (previsioni 48h, retraining di dicembre 2026, generalizzazione multi-località, convettività) è nella sezione **Roadmap estesa — Fasi 4–7** che segue.
 
-1. [x] `wind_speed_grid` in `latest.json` — `export_static.py`: ERA5 background + IDW correzioni stazioni, scala adattiva `ws_min`/`ws_max`
-2. [x] **Carta del vento** — sezione dedicata con heatmap velocità (ERA5 background + IDW correzioni, scala adattiva), frecce barbed sinottiche zoom-adaptive (stanghette per intensità, punta direzionale), toggle particelle/frecce, legenda km/h ↔ nodi (`wind_speed_grid` in `latest.json`, `app.js`)
+---
 
-### ✅ Fase 4b — Dashboard e API (COMPLETATA)
+## 🧱 Roadmap estesa — Fasi 4–7
 
-1. [x] **Dashboard GitHub Pages (Chart.js)** — `docs/dashboard.html` + `dashboard_data.json` (serie forecast/observed 7gg, MAE globale e per stazione). Generata da `export_static.py --dashboard-only`, workflow dedicato `export-dashboard.yml` (trigger 8:00/20:00). Sostituisce la dashboard Streamlit — nessuna dipendenza da Streamlit Cloud. Dettagli tecnici → sezione *I moduli*, `docs/dashboard.html`
-2. [ ] API REST FastAPI (opzionale — query dinamiche storico, confronto date; ipotesi deploy su Render)
+Tre obiettivi strategici di lungo periodo, non indipendenti: l'ordine in cui si affrontano cambia il costo totale. Il principio organizzatore è che il retraining di dicembre 2026 è l'operazione più costosa del progetto e va fatta una volta sola con tutte le novità dentro. Tutto ciò che precede dicembre prepara quel retraining; tutto ciò che segue lo sfrutta.
 
-### 🟦 Fase 4c — Radar temporali live (stile Windy, storico 1h)
+**I tre obiettivi:**
+
+1. Standardizzazione — da prodotto Roma-specifico a scatola eseguibile per qualsiasi località inserendo solo la posizione.
+2. Previsioni orarie fino a 48h — previsioni ora-per-ora sul punto scelto, visualizzate su sito.
+3. Convettività — CAPE, soleggiamento, indici convettivi (sempre modulati dall'orografia) → pioggia, perturbazioni, temporali forti.
+
+**Vincolo trasversale** (vale per tutte le fasi): girare senza grandi server esterni. LightGBM/RF restano file da pochi MB; l'inference resta dentro GitHub Actions free tier. L'unico punto da monitorare è la dimensione della nuova tabella di training (vedi Fase 4a).
+
+**Principio metodologico fondante (da non dimenticare mai):** il MOS impara correzioni specifiche delle stazioni su cui è addestrato: il modello non "sa" il meteo, sa quanto ERA5 sbaglia a Trastevere, a Tivoli, a Ostia. Non si sposta il modello — si sposta la fabbrica che produce il modello. Il prodotto generalizzabile non è `lgbm_temperature.txt`, è la pipeline.
+
+Corollario operativo immediato: da ora ogni nuovo pezzo di codice nasce già config-driven (niente nuovi valori Roma hardcoded). Così la generalizzazione (Fase 6) diventa una migrazione del codice vecchio, non una riscrittura del nuovo.
+
+### 🟦 Fase 4a — Infrastruttura 48h (subito → autunno 2026), senza riaddestrare
+
+Il problema dell'input (cuore di tutto l'obiettivo 48h). Oggi il modello è addestrato su ERA5 (rianalisi) e in inference riceve ERA5, disponibile solo per passato/presente. Per prevedere a +48h l'input deve diventare un modello previsionale NWP (Open-Meteo Forecast API: ICON, GFS, ECMWF — gratuiti, stesse variabili, orari fino a 16 giorni). Ma un MOS addestrato su rianalisi e fatto girare su previsioni soffre di input distribution mismatch: la rianalisi è "perfetta" rispetto a una previsione a +36h, quindi in produzione il modello vede errori di input mai visti in training.
+
+La soluzione corretta (MOS classico): addestrare sulle previsioni archiviate, non sulla rianalisi. Open-Meteo offre una Historical Forecast API che archivia i run previsionali passati (dal ~2022). Nuova tabella di training: input = cosa il modello NWP prevedeva per quell'ora con quel lead time; target = cosa è realmente successo alla stazione. Così il modello impara a correggere sia il microclima sia gli errori sistematici del modello previsionale al crescere del lead — esattamente ciò che fanno i MOS operativi dei servizi nazionali.
+
+Il lead time come dimensione. Due strategie: un modello per lead (48 modelli, pesante) oppure un modello unico con `lead_time` come feature. → Scelta: modello unico con feature `lead_time`. LightGBM gestisce bene l'interazione lead × altre feature e rispetta il vincolo "niente grandi server".
+
+Il problema dei lag. A +30h non ci sono osservazioni: i lag vanno calcolati sulla catena previsionale stessa (il lag-3h della previsione a +30h è il valore previsto a +27h), non sulle osservazioni. Refactor concettuale di `features.py`: stessa funzione in due modalità — "storica" (lag su osservato) e "previsionale" (lag su catena NWP). Punto critico anti-leakage: anche il training deve usare i lag previsionali, altrimenti si addestra su informazioni non disponibili in produzione.
+
+Validazione. La metrica diventa una curva: MAE in funzione del lead (+1h, +6h, +12h, +24h, +48h). Degradazione monotona attesa. L'obiettivo non è MAE 0.87°C a +48h (impossibile) ma battere il modello NWP grezzo a ogni lead. Estendere `forecast_vs_observed` per tracciare il lead.
+
+**Piano operativo Fase 4a:**
+
+1. [ ] Pipeline Open-Meteo Forecast API → modello esistente → `forecast_48h` in DB + JSON statico (= versione 0, accetta il mismatch rianalisi/previsione, documentato come provvisorio)
+2. [ ] Verificare su Open-Meteo Historical Forecast API quali variabili e che profondità d'archivio sono disponibili per Roma — dato che condiziona lo schema della nuova tabella di training
+3. [ ] Costruire la nuova tabella di training dall'archivio previsionale (input previsto + lead_time + lag previsionali)
+4. [ ] Stimare la dimensione della nuova tabella (archivio × 48 lead × stazioni ≫ 331k righe attuali) e verificare che il training resti fattibile in locale sul Mac
+
+### 🧪 Esperimento — TimesFM-3 (zero-shot) vs MOS attuale — Roma Sud, T+1h e T+24h
+
+**Data:** 01/09/2026
+**Setup:** confronto isolato (script `benchmark_timesfm3_vs_mos*.py`, non in produzione) su Roma Sud (id=3), usando TimesFM-3 (Google, 330M par., licenza non-commerciale) zero-shot con la serie osservata reale come contesto e la temperatura ERA5 come covariata nota ("past-future covariate").
+
+**Risultati MAE (°C):**
+
+| Orizzonte | Split | LGBM solo | LGBM + RF | MOS scelto (baseline) | TimesFM-3 zero-shot |
+|:-------|:-------|:-------|:-------|:-------|:-------|
+| T+1h | full val (16.974 righe) | — | 0.8447 | 0.8447 | — |
+| T+1h | sottocampione 300 pt | — | — | 0.8823 | 1.1689 |
+| T+24h | full val (16.903 righe) | 1.6123 (train 1.3136) | 1.6331 (train 1.2446) | **1.6123 (LGBM solo)** | — |
+| T+24h | sottocampione 300 pt | — | — | 1.6420 | 2.0197 |
+
+Gap relativo TimesFM-3 vs MOS: **+32% a T+1h, +23% a T+24h** (si restringe con l'orizzonte, ma il MOS resta avanti in entrambi i casi).
+
+**Top-10 feature importance (gain) del modello T+24h addestrato ad-hoc:** temperature, wind_chill, temperature_lag_1, shortwave_radiation, doy_cos, doy_sin, hour_cos, pressure, wind_u, temperature_roll_mean_6. Best iteration: 147/1000 (contro 643/1000 del modello T+1h).
+
+**Cosa abbiamo imparato:**
+
+1. **Il MOS vince su entrambi gli orizzonti testati.** Nessun elemento per integrare TimesFM-3 in pipeline, ora o dopo dicembre. Parcheggiato, non scartato: da rivalutare solo se emergono use case specifici (es. come secondo parere in un ensemble, non come sostituto).
+2. **Il correttore RF non è universalmente utile — va validato per orizzonte, non applicato per default.** A T+1h migliora il val MAE; a T+24h lo *peggiora* (1.6123 → 1.6331) pur migliorando molto il train (1.3136 → 1.2446): overfitting sui residui, perché a 24h i residui del LightGBM sono meno strutturati (più vicini a rumore) che a 1h.
+3. **Segnale strutturale importante per il redesign multi-horizon:** il modello T+24h, ottenuto semplicemente riapplicando il feature set pensato per T+1h a un target shiftato di 24h, si appoggia quasi interamente su persistenza (`temperature`, `temperature_lag_1`) e stagionalità (`doy_sin/cos`), non su un vero pattern predittivo a lungo raggio. Il modello "rinuncia prima" (147 alberi contro 643) perché il feature set non gli offre altro segnale da sfruttare oltre quello. Questo NON è un limite di LightGBM in sé, è un limite di riusare feature T+1h-centriche su orizzonti lunghi senza ridisegnarle.
+
+**Implicazioni:** i punti chiave di questo esperimento — feature `lead_time` esplicita, input dall'archivio previsionale invece che da ERA5 per gli orizzonti lunghi, feature dedicate a orizzonti lunghi, validazione del correttore RF per-orizzonte prima del retraining — sono già incorporati nel piano operativo della Fase 4a sopra e nel retraining di Fase 5 sotto, non ripetuti qui.
+
+**Riferimenti — dove trovare codice e artefatti di questo esperimento:**
+
+- **Script di benchmark T+1h** (branch `claude/timesfm3-mos-benchmark-fkq48z`, repo `meteo_locale`): `benchmark_timesfm3_vs_mos.py`, gira dentro `meteo_locale/` (usa direttamente `data/training_10y_h1.parquet` e `model/` di produzione, solo in lettura)
+- **Esperimento T+24h (script + dataset + modello) — cartella isolata, FUORI dal repo git**, mai committata: `~/Desktop/timesfm_h24_experiment/` (locale, solo sulla macchina di sviluppo). Include anche lo script di confronto T+24h (equivalente locale di `benchmark_timesfm3_vs_mos.py` ma non versionato)
+  - Contiene copie di `historical.py`, `features.py`, `db.py`, `forecast.py`, `correttore.py` + `.env`, usate per generare un modello LightGBM+RF ad-hoc per T+24h (non esiste in produzione, che copre solo T+1h)
+  - Dataset generato: `data/roma_sud_h24.parquet` (Roma Sud, 2015–2024, 84.514 righe utilizzabili)
+  - Modello generato: `model_experimental_h24/lgbm_temperature.txt` + `rf_correttore_temperature.pkl`
+  - Questi artefatti (cartella, script, dataset, modello) sono riproducibili dal codice e non sono conservati: se servono di nuovo, si rigenerano con gli stessi comandi.
+
+### 🟦 Fase 4b — Dashboard GitHub Pages (parallela)
+
+Assorbe il task Chart.js già pianificato in Fase 3 ed estende la dashboard con il meteogramma orario 48h per stazione. Zero infrastruttura nuova: `export_static.py` produce `forecast_48h.json`, la pagina GitHub Pages lo rende con Chart.js. Coerente col vincolo costo-zero.
+
+**Stato:** la dashboard Chart.js di base è già stata completata a giugno 2026 (`dashboard_data.json`, `dashboard.html`, auto-update via `export-dashboard.yml` — vedi Fase 3 in *Stato attuale*). Resta da fare solo il meteogramma 48h, che dipende dalla pipeline previsionale della Fase 4a.
+
+1. [x] `dashboard_data.json` (forecast_vs_observed, MAE per stazione, ultime osservazioni) — completato in Fase 3
+2. [ ] `forecast_48h.json` per stazione (meteogramma) — dipende dalla Fase 4a
+3. [x] `dashboard.html` con Chart.js: tabelle, "Previsto vs Osservato" — completato in Fase 3; resta da aggiungere il meteogramma 48h
+4. [x] Auto-update via workflow dedicato (`export-dashboard.yml`) — completato in Fase 3
+
+### 🟪 Fase 5 — Retraining "grande" (Dicembre 2026)
+
+Un unico retraining che incorpora simultaneamente tutto ciò che è maturato. Definire ora lo schema della nuova tabella così che l'accumulo estivo-autunnale sia già nella forma giusta. Nota stagionale: l'estate è la stagione convettiva — i temporali di luglio–settembre 2026 sono dati preziosi da non perdere, motivo in più per fissare lo schema in anticipo.
+
+1. [ ] Scaricare nuovi CSV ARSIAL 2026, rieseguire `arsial_bias_correction.py`
+2. [ ] Input da archivio previsionale (Historical Forecast API) invece che ERA5 puro
+3. [ ] Feature `lead_time` integrata
+4. [ ] Target Netatmo orario accumulato (giugno–dicembre 2026) per tutte e 6 le zone
+5. [ ] Nuove variabili convettive in input: CAPE, radiazione shortwave, copertura nuvolosa multi-livello, eventualmente 500 hPa
+6. [ ] Primo target di classificazione: pioggia sì/no orario (vedi Fase 7 per la metodologia)
+7. [ ] Riaddestrare RF corrector sulle nuove stazioni
+8. [ ] Confrontare MAE pre/post per Tivoli e Castelli Romani; curva MAE vs lead
+9. [ ] Rimuovere la correzione ARSIAL post-hoc (incorporata nel modello)
+
+### 🟫 Fase 6 — Generalizzazione multi-località (post-retraining)
+
+Per ultima, deliberatamente: parametrizzare una metodologia ancora in evoluzione significa rifattorizzare due volte. Tre livelli:
+
+**Livello 1 — Configurazione esplicita.** Censire tutte le costanti Roma-specifiche sparse nel codice (ID stazioni hardcoded, `ARSIAL_PROXY`, `dist_center_km` da Piazza Venezia, `bearing_sea` costa laziale, bbox Netatmo, `STATION_TYPES`) e spostarle in un unico `config.yaml` di deployment: nome località, bbox, centroide urbano, lista stazioni, fonti dati attive/disattive (ARSIAL diventa un plugin opzionale, non un componente strutturale). Il codice diventa identico per ogni località; cambia solo il config.
+
+**Livello 2 — Orografia automatica da sole coordinate.** Sostituire le assegnazioni manuali (`microclima`, `dist_sea_km`, `bearing_sea`) con fonti calcolabili: altitudine da Open-Meteo Elevation API (già così), distanza/bearing costa da coastline globale (Natural Earth / OSM), microclima da LCZ Copernicus invece che etichetta manuale. `compute_static_orography()` diventa veramente universale.
+
+**Livello 3 — Ciclo di vita del cold start.** Una località nuova non ha 6 mesi di Netatmo. Documentare il ciclo di vita esplicito (è la storia già vissuta con Roma):
+
+- Giorno 0: bootstrap con METAR storico (IEM ASOS è globale, quasi ovunque c'è un aeroporto entro 30–50 km) + ERA5 → modello "stazione standard" subito operativo.
+- Mesi 1–6: accumulo Netatmo sulle micro-zone, bias correction climatologica provvisoria (il ruolo che ARSIAL ha avuto per Roma).
+- Mese 6+: retraining completo con target iper-locali.
+
+Promessa onesta: non "iper-locale ovunque dal giorno 0", ma "operativo dal giorno 0, iper-locale dopo l'accumulo" — la traiettoria che Roma ha dimostrato fattibile.
+
+1. [ ] `config.yaml` di deployment + refactor delle costanti
+2. [ ] Orografia automatica da coordinate (coastline + LCZ Copernicus)
+3. [ ] Ciclo di vita cold-start documentato
+4. [ ] Comando `bootstrap_location.py --lat --lon` che genera config + bootstrap
+
+### 🟥 Fase 7 — Convettività e target difficili (continuativa, post-storico)
+
+Rispettare la gerarchia di difficoltà: `temperatura < direzione vento ≈ rischio temporali < pioggia puntuale (mm)`.
+
+Feature convettive = incroci con l'orografia. Gli indici convettivi sono a griglia larga: un CAPE di 1500 J/kg sulla cella di Roma non dice dove scoppia il temporale. È l'orografia che modula il triggering (i Castelli innescano convezione che il litorale non vede). Feature interessanti: CAPE × altitudine, CAPE × allineamento vento-rilievo, radiazione × esposizione del versante.
+
+**Gerarchia dei target, in ordine:**
+
+1. [ ] Probabilità di precipitazione (sì/no orario) — classificazione binaria, target giusto per iniziare (pluviometri Netatmo + METAR precip + ARSIAL daily per cross-check). Metriche: Brier score, ROC-AUC (non MAE). Gestire lo sbilanciamento di classe (a Roma piove in una piccola frazione delle ore). → già avviato in Fase 5.
+2. [ ] Rischio temporale — classificazione su soglie CAPE+shear con correzione locale appresa. Eventi rari: serve più storico (temporali forti su una zona = decine/anno, non migliaia).
+3. [ ] Pioggia puntuale in mm — il più difficile, distribuzione zero-inflated. Approccio a due stadi: classificatore di occorrenza + regressore di quantità addestrato solo sulle ore piovose. Per ultimo, con aspettative calibrate (anche i servizi nazionali la sbagliano alla scala puntuale).
+
+**Soleggiamento — caso speciale.** Gran parte del downscaling della radiazione è geometria, non statistica: pendenza, esposizione, orizzonte topografico si calcolano deterministicamente dal DEM. → modulo geometrico esplicito accanto al ML, non un target appreso.
+
+---
+
+## 🚀 Sviluppo a lungo termine
+
+Lavoro sul frontend/mappa che procede in parallelo alla Roadmap estesa (Fasi 4–7) ma non ne fa parte concettualmente — non tocca pipeline dati, modello o storage.
+
+### 🟦 Radar temporali live (stile Windy, storico 1h)
 
 **Obiettivo:** sezione dedicata sulla mappa con overlay radar precipitazioni in tempo reale, slider temporale su ~1h di storico + nowcast breve, animazione automatica stile Windy.
 
@@ -313,58 +445,7 @@ Un unico elenco cronologico per fase: cosa è completato, cosa è in corso, cosa
 - [ ] Refresh automatico ogni 10 min
 - [ ] Nota limiti in UI/tooltip
 
-### 🟦 Fase 4d — Pipeline previsionale 48h (Open-Meteo Forecast API)
-
-**Priorità:** dopo Fase 4c (Radar RainViewer).
-
-**Obiettivo:** estendere l'orizzonte di previsione da +1h a +48h, con toggle Adesso/+1h/.../+48h nel pannello controlli, alimentato da Open-Meteo Forecast API invece dell'attuale grid a singolo step.
-
-*(Placeholder — dettagli tecnici da definire in un brief dedicato quando si arriva a questa fase.)*
-
-### 🧪 Esperimento — TimesFM-3 (zero-shot) vs MOS attuale — Roma Sud, T+1h e T+24h
-
-**Data:** 01/09/2026
-**Setup:** confronto isolato (script `benchmark_timesfm3_vs_mos*.py`, non in produzione) su Roma Sud (id=3), usando TimesFM-3 (Google, 330M par., licenza non-commerciale) zero-shot con la serie osservata reale come contesto e la temperatura ERA5 come covariata nota ("past-future covariate").
-
-**Risultati MAE (°C):**
-
-| Orizzonte | Split | LGBM solo | LGBM + RF | MOS scelto (baseline) | TimesFM-3 zero-shot |
-|:-------|:-------|:-------|:-------|:-------|:-------|
-| T+1h | full val (16.974 righe) | — | 0.8447 | 0.8447 | — |
-| T+1h | sottocampione 300 pt | — | — | 0.8823 | 1.1689 |
-| T+24h | full val (16.903 righe) | 1.6123 (train 1.3136) | 1.6331 (train 1.2446) | **1.6123 (LGBM solo)** | — |
-| T+24h | sottocampione 300 pt | — | — | 1.6420 | 2.0197 |
-
-Gap relativo TimesFM-3 vs MOS: **+32% a T+1h, +23% a T+24h** (si restringe con l'orizzonte, ma il MOS resta avanti in entrambi i casi).
-
-**Top-10 feature importance (gain) del modello T+24h addestrato ad-hoc:** temperature, wind_chill, temperature_lag_1, shortwave_radiation, doy_cos, doy_sin, hour_cos, pressure, wind_u, temperature_roll_mean_6. Best iteration: 147/1000 (contro 643/1000 del modello T+1h).
-
-**Cosa abbiamo imparato:**
-
-1. **Il MOS vince su entrambi gli orizzonti testati.** Nessun elemento per integrare TimesFM-3 in pipeline, ora o dopo dicembre. Parcheggiato, non scartato: da rivalutare solo se emergono use case specifici (es. come secondo parere in un ensemble, non come sostituto).
-2. **Il correttore RF non è universalmente utile — va validato per orizzonte, non applicato per default.** A T+1h migliora il val MAE; a T+24h lo *peggiora* (1.6123 → 1.6331) pur migliorando molto il train (1.3136 → 1.2446): overfitting sui residui, perché a 24h i residui del LightGBM sono meno strutturati (più vicini a rumore) che a 1h. **Azione:** nel retraining di dicembre, validare il correttore RF su ogni orizzonte prima di includerlo, non assumerlo automaticamente benefico.
-3. **Segnale strutturale importante per il redesign multi-horizon:** il modello T+24h, ottenuto semplicemente riapplicando il feature set pensato per T+1h a un target shiftato di 24h, si appoggia quasi interamente su persistenza (`temperature`, `temperature_lag_1`) e stagionalità (`doy_sin/cos`), non su un vero pattern predittivo a lungo raggio. Il modello "rinuncia prima" (147 alberi contro 643) perché il feature set non gli offre altro segnale da sfruttare oltre quello. Questo NON è un limite di LightGBM in sé, è un limite di riusare feature T+1h-centriche su orizzonti lunghi senza ridisegnarle.
-
-**Implicazioni per il redesign T+1h → T+24/48h (Fase 4):**
-
-- **Non retrainare lo stesso feature set a orizzonti diversi** (quello che abbiamo fatto qui, di proposito, solo per il benchmark). Serve un redesign delle feature, non solo un nuovo target shift.
-- **Lead-time come feature esplicita**: un solo modello multi-horizon che riceve l'orizzonte come input (invece di un modello per horizon) impara a modulare quanto pesare persistenza vs pattern stagionale vs input NWP in funzione di quanto lontano sta prevedendo — coerente con quanto già pianificato per dicembre.
-- **Sostituire ERA5 con Open-Meteo Historical Forecast API come input di training per gli orizzonti lunghi** (già in roadmap): questo esperimento ha usato ERA5 come covariata "nota" anche nel futuro, il che è realistico a T+1h ma è un'idealizzazione forte a T+24h — in produzione reale a 24h di distanza si userebbe una vera previsione NWP, non una rianalisi. Il gap TimesFM-3-vs-MOS misurato qui è quindi un limite superiore ottimistico per entrambi, non una stima del MAE reale raggiungibile a T+24h in produzione.
-- **Feature dedicate a orizzonti lunghi** (convettività, gradiente di pressione su finestre più ampie, feature derivate dalla traiettoria NWP invece che dal solo valore puntuale a T) invece di lag/rolling pensati per T+1h.
-- **Validare il correttore RF per-orizzonte** (punto 2 sopra) come parte standard del processo di retraining multi-horizon.
-
-**Riferimenti — dove trovare codice e artefatti di questo esperimento:**
-
-- **Script di benchmark T+1h** (branch `claude/timesfm3-mos-benchmark-fkq48z`, repo `meteo_locale`): `benchmark_timesfm3_vs_mos.py`, gira dentro `meteo_locale/` (usa direttamente `data/training_10y_h1.parquet` e `model/` di produzione, solo in lettura)
-- **Esperimento T+24h (script + dataset + modello) — cartella isolata, FUORI dal repo git**, mai committata: `~/Desktop/timesfm_h24_experiment/` (locale, solo sulla macchina di sviluppo). Include anche lo script di confronto T+24h (equivalente locale di `benchmark_timesfm3_vs_mos.py` ma non versionato)
-  - Contiene copie di `historical.py`, `features.py`, `db.py`, `forecast.py`, `correttore.py` + `.env`, usate per generare un modello LightGBM+RF ad-hoc per T+24h (non esiste in produzione, che copre solo T+1h)
-  - Dataset generato: `data/roma_sud_h24.parquet` (Roma Sud, 2015–2024, 84.514 righe utilizzabili)
-  - Modello generato: `model_experimental_h24/lgbm_temperature.txt` + `rf_correttore_temperature.pkl`
-  - Questi artefatti (cartella, script, dataset, modello) sono riproducibili dal codice e non sono conservati: se servono di nuovo, si rigenerano con gli stessi comandi.
-
----
-
-## 🎨 Restyling mappa — luglio 2026
+### 🎨 Restyling mappa — luglio 2026
 
 Restyling puramente estetico/CSS della mappa live, senza alcuna modifica alla logica di calcolo, ai dati, o alla pipeline di inferenza/export.
 
@@ -383,9 +464,7 @@ Restyling puramente estetico/CSS della mappa live, senza alcuna modifica alla lo
 - Pannello ora vive in `<body>` invece che dentro `#map` (fix necessario per evitare conflitti di click con il popup IDW della mappa)
 - Bug preesistente non risolto: riferimento a un elemento `#updated-at` mai esistito nel markup, in un blocco `catch` — da investigare separatamente
 
----
-
-## 📱 PWA installabile su iPhone — luglio 2026
+### 📱 Creazione app — PWA installabile su iPhone (luglio 2026)
 
 Modifica puramente additiva, nessun impatto su chi apre il sito da browser senza installarlo. Target: iPhone iOS precedente alla 26 (17/18), dove l'apertura in standalone da Home Screen non è automatica e va dichiarata esplicitamente via meta tag.
 
@@ -408,6 +487,48 @@ Modifica puramente additiva, nessun impatto su chi apre il sito da browser senza
 **Limite noto (non risolto, di natura simile alla pausa Supabase dopo inattività prolungata):** iOS può svuotare la cache di una PWA rimasta inutilizzata a lungo. Impatto minimo qui — la strategia network-first sui dati significa che al riavvio si scaricano comunque dati freschi; nel peggiore dei casi si perde solo il fallback offline.
 
 **Fuori scopo (deciso, non da implementare):** push notification (inaffidabili su iOS, non richieste da questo caso d'uso), background sync (non disponibile su iOS), app nativa/App Store (richiede account developer a pagamento), prompt di installazione automatico (non esiste su iOS — gesto manuale Safari → Condividi → Aggiungi a Home).
+
+---
+
+## 📌 Come riprendere il lavoro
+
+```bash
+cd ~/Desktop/meteo_locale
+conda activate meteo
+python3 db.py   # verifica connessione
+```
+
+**Riferimento GitHub:** `https://github.com/filippopetto-maker/meteo_locale`
+
+**Stato corrente (settembre 2026):** Fase 1, 2a, 2b, 3 in produzione (Fase 3 include carta del vento e dashboard Chart.js). Fase 2c parziale (bias correction ARSIAL attiva, Protezione Civile Lazio ancora da integrare). Radar RainViewer in corso (vedi *Sviluppo a lungo termine*). Roadmap strategica di lungo periodo (48h, retraining dicembre, generalizzazione, convettività) → [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47). GitHub Actions attivi, tutti triggerati esternamente via cron-job.org (nessuno `schedule:` interno ai workflow — inaffidabile su repo a bassa attività):
+- `inference.yml` — previsioni, ogni 30 min
+- `ingestion.yml` — osservazioni METAR + Netatmo, ogni 30 min
+- `export.yml` — export griglia statica (`latest.json`, `wind_grid.json`), ogni ora
+- `export-dashboard.yml` — export `dashboard_data.json`, 2×/giorno (8:00, 20:00)
+
+**Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
+
+**Prossima scadenza fissa: Dicembre 2026** — retraining completo con Netatmo accumulato (Fase 5 della Roadmap estesa).
+
+**Completato (giugno 2026):**
+- Correzione SST sul mare: `sst.py` + blend graduale asimmetrico in `grid.py` + `export_static.py`; `LATIUM_COAST` estesa da Anzio→Gaeta a sud e fino a (42.85, 10.85) a nord
+- Toggle T / T+1h sulla mappa: `temp_grid_observed` + `temp_grid_forecast` in `latest.json`; scala colori unificata tra i due stati
+- 4 nuove stazioni (id 51–54): Fiano Romano, Civitavecchia, Filettino 1044m, Gaeta
+- Palette umidità ridisegnata per contrasto reale nel range 40-80% (pivot verde)
+- Fix copertura Netatmo: `mainMETEO.py` portato da `ROMA_BBOX` singolo a `LAZIO_BBOXES` (5 sotto-zone con dedup), risolve sia i buchi geografici (Cassino, Filettino) sia il "soffocamento" delle zone dense (EUR, Trastevere) causato dal tetto di risultati per chiamata Netatmo
+- `min_cluster` rilassato a 1 per id≥39 e per microclima `quota`/`alta_quota`/`colline_interne`
+- Pulizia naming: rinominate stazioni con nomi duplicati/imprecisi (Saxa Rubra id46→Labaro, Gaeta/Formia id49→Fondi); riclassificati microclima (Tivoli/Bracciano/Rieti→`colline_interne`, Filettino→`alta_quota`, isolando `quota` alla sola Castelli Romani)
+
+**Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
+
+**Prossimo task immediato:** Radar RainViewer (vedi *Sviluppo a lungo termine*). A seguire: Fase 4a della Roadmap estesa — Infrastruttura 48h.
+
+~~Fix legenda nodi~~ — **RISOLTO** (vedi Diario degli errori risolti): la scala del gradiente ora converte correttamente `ws_min`/`ws_max` da km/h a nodi anche per i colori della heatmap tramite `updateWindLegend()`.
+
+**Miglioramenti futuri mappa:**
+- Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
+- Upgrade a MapLibre GL JS per qualità visiva superiore (vettoriale, tile più dettagliate)
+- Upgrade `actions/checkout@v4` → `@v5` e `actions/setup-python@v5` → versione corrente (warning Node.js 20 deprecation)
 
 ---
 
@@ -827,6 +948,28 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 
 **Dati:** `docs/data/dashboard_data.json` — aggiornato 2×/giorno (08:00 e 20:00 UTC) dal workflow dedicato `export-dashboard.yml`.
 
+
+---
+
+## 🏆 Differenziali competitivi
+
+- **Statistical downscaling ERA5 → stazioni reali** — approccio corretto e sostenibile vs NWP pesante; impara le correzioni che il modello globale sbaglia
+- **Rete Netatmo densa** — 340+ stazioni pubbliche nel bbox Roma aggregano il segnale urbano reale ogni 30 min, con QC spaziale integrato su cluster di 5 km
+- **Architettura multi-stazione** — 32 stazioni con profili orografici contrastanti (costiera, urbano, quota, pianura) abilitano l'apprendimento dei gradienti territoriali
+- **Carta del vento dedicata** — heatmap velocità ERA5-corretta + frecce barbed sinottiche zoom-adaptive con intensità codificata dalle stanghette; toggle automatico particelle/frecce
+- **Feature orografiche esplicite** — delta quota vs cella ERA5, onshore alignment, isola di calore, one-hot microclima: il territorio codificato come predittori
+- **Modello a due stadi** — LightGBM cattura il segnale principale; RF correttore elimina gli errori sistematici residui per microzona
+- **QC climatologico contestuale** — validazione contro climatologia locale per mese e fascia oraria, con offset per tipo di stazione; raro nei tool open source
+- **Soglie aggiornate ai cambiamenti climatici** — trend 2015–2024, non medie storiche obsolete
+- **Split temporale rigoroso** — nessun leakage tra training e validation; `temporal_split()` condiviso tra `forecast.py` e `correttore.py` garantisce split identico
+- **Addestramento immediato sullo storico** — nessuna attesa per accumulare dati live
+- **Deploy autonomo a costo zero** — GitHub Actions cron, Supabase free tier, Open-Meteo gratuito, Netatmo pubblico: zero spesa operativa
+- **Infrastruttura robusta** — Streamlit dashboard live, metriche su DB, modelli versionati
+- **Mappa iperlocale Windy-style** [Fase 3] — visualizzazione del gradiente microclima
+  Roma su carta interattiva: il campo colorato mostra le previsioni corrette dal modello
+  (non ERA5 grezzo), le particelle animate mostrano il vento iper-locale. Nessuna app
+  mainstream mostra la differenza termica Trastevere/Tivoli su una mappa zoomabile.
+
 ---
 
 ## 🐛 Diario degli errori risolti
@@ -883,69 +1026,6 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 - Nominatim restituiva "Municipio Roma XII": `suburb` conteneva il nome del municipio → logica cambiata in `"${city}, ${quarter}"` con `city = a.city||a.town||a.municipality` e `quarter = a.neighbourhood||a.quarter||a.suburb||a.village`; `zoom=10→14`
 - Tick legenda sovrapposti con 5 tick su 160 px → ridotti a 3 tick dinamici `[vMin, mid, vMax]` per entrambi i layer
 - `displayValues: true` su leaflet-velocity mostrava pannello "Wind Direction / Wind Speed" al movimento del cursore → `displayValues: false`
-
----
-
-## 🏆 Differenziali competitivi
-
-- **Statistical downscaling ERA5 → stazioni reali** — approccio corretto e sostenibile vs NWP pesante; impara le correzioni che il modello globale sbaglia
-- **Rete Netatmo densa** — 340+ stazioni pubbliche nel bbox Roma aggregano il segnale urbano reale ogni 30 min, con QC spaziale integrato su cluster di 5 km
-- **Architettura multi-stazione** — 32 stazioni con profili orografici contrastanti (costiera, urbano, quota, pianura) abilitano l'apprendimento dei gradienti territoriali
-- **Carta del vento dedicata** — heatmap velocità ERA5-corretta + frecce barbed sinottiche zoom-adaptive con intensità codificata dalle stanghette; toggle automatico particelle/frecce
-- **Feature orografiche esplicite** — delta quota vs cella ERA5, onshore alignment, isola di calore, one-hot microclima: il territorio codificato come predittori
-- **Modello a due stadi** — LightGBM cattura il segnale principale; RF correttore elimina gli errori sistematici residui per microzona
-- **QC climatologico contestuale** — validazione contro climatologia locale per mese e fascia oraria, con offset per tipo di stazione; raro nei tool open source
-- **Soglie aggiornate ai cambiamenti climatici** — trend 2015–2024, non medie storiche obsolete
-- **Split temporale rigoroso** — nessun leakage tra training e validation; `temporal_split()` condiviso tra `forecast.py` e `correttore.py` garantisce split identico
-- **Addestramento immediato sullo storico** — nessuna attesa per accumulare dati live
-- **Deploy autonomo a costo zero** — GitHub Actions cron, Supabase free tier, Open-Meteo gratuito, Netatmo pubblico: zero spesa operativa
-- **Infrastruttura robusta** — Streamlit dashboard live, metriche su DB, modelli versionati
-- **Mappa iperlocale Windy-style** [Fase 3] — visualizzazione del gradiente microclima
-  Roma su carta interattiva: il campo colorato mostra le previsioni corrette dal modello
-  (non ERA5 grezzo), le particelle animate mostrano il vento iper-locale. Nessuna app
-  mainstream mostra la differenza termica Trastevere/Tivoli su una mappa zoomabile.
-
----
-
-## 📌 Come riprendere il lavoro
-
-```bash
-cd ~/Desktop/meteo_locale
-conda activate meteo
-python3 db.py   # verifica connessione
-```
-
-**Riferimento GitHub:** `https://github.com/filippopetto-maker/meteo_locale`
-
-**Stato corrente (settembre 2026):** Fase 1, 2a, 2b, 3, 4a, 4b in produzione. Fase 2c parziale (bias correction ARSIAL attiva, Protezione Civile Lazio ancora da integrare). Fase 4c (radar) in corso, Fase 4d pianificata. Dettaglio completo per fase → [Stato attuale e Roadmap](#-stato-attuale-e-roadmap). GitHub Actions attivi, tutti triggerati esternamente via cron-job.org (nessuno `schedule:` interno ai workflow — inaffidabile su repo a bassa attività):
-- `inference.yml` — previsioni, ogni 30 min
-- `ingestion.yml` — osservazioni METAR + Netatmo, ogni 30 min
-- `export.yml` — export griglia statica (`latest.json`, `wind_grid.json`), ogni ora
-- `export-dashboard.yml` — export `dashboard_data.json`, 2×/giorno (8:00, 20:00)
-
-**Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
-
-**Prossima scadenza fissa: Dicembre 2026** — retraining completo con Netatmo accumulato.
-
-**Completato (giugno 2026):**
-- Correzione SST sul mare: `sst.py` + blend graduale asimmetrico in `grid.py` + `export_static.py`; `LATIUM_COAST` estesa da Anzio→Gaeta a sud e fino a (42.85, 10.85) a nord
-- Toggle T / T+1h sulla mappa: `temp_grid_observed` + `temp_grid_forecast` in `latest.json`; scala colori unificata tra i due stati
-- 4 nuove stazioni (id 51–54): Fiano Romano, Civitavecchia, Filettino 1044m, Gaeta
-- Palette umidità ridisegnata per contrasto reale nel range 40-80% (pivot verde)
-- Fix copertura Netatmo: `mainMETEO.py` portato da `ROMA_BBOX` singolo a `LAZIO_BBOXES` (5 sotto-zone con dedup), risolve sia i buchi geografici (Cassino, Filettino) sia il "soffocamento" delle zone dense (EUR, Trastevere) causato dal tetto di risultati per chiamata Netatmo
-- `min_cluster` rilassato a 1 per id≥39 e per microclima `quota`/`alta_quota`/`colline_interne`
-- Pulizia naming: rinominate stazioni con nomi duplicati/imprecisi (Saxa Rubra id46→Labaro, Gaeta/Formia id49→Fondi); riclassificati microclima (Tivoli/Bracciano/Rieti→`colline_interne`, Filettino→`alta_quota`, isolando `quota` alla sola Castelli Romani)
-
-**Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
-
-**Prossimo task immediato:** Fase 4c — Radar RainViewer (RainViewer API, `docs/js/radar.js`, slider temporale + play/pause, refresh 10 min). A seguire: Fase 4d — pipeline previsionale 48h.
-
-~~Fix legenda nodi~~ — **RISOLTO** (vedi Diario degli errori risolti): la scala del gradiente ora converte correttamente `ws_min`/`ws_max` da km/h a nodi anche per i colori della heatmap tramite `updateWindLegend()`.
-
-**Miglioramenti futuri mappa:**
-- Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
-- Upgrade a MapLibre GL JS per qualità visiva superiore (vettoriale, tile più dettagliate)
-- Upgrade `actions/checkout@v4` → `@v5` e `actions/setup-python@v5` → versione corrente (warning Node.js 20 deprecation)
 
 ---
 
