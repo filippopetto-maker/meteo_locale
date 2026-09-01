@@ -2,9 +2,13 @@
 benchmark_timesfm3_vs_mos.py — Benchmark locale: pipeline MOS attuale vs TimesFM-3 zero-shot
 Stazione: Roma Sud (id=3) | target: temperature | orizzonte: T+1h
 
+v2 — API timesfm3 verificata (TimesFM3Evaluator/ModelConfig/predict_batch),
+inferenza in batch invece che punto-per-punto, introspezione automatica del
+parametro covariata con fallback esplicito se non riconosciuto.
+
 Non fa parte della pipeline di produzione (inference.py / GitHub Actions).
-Script sperimentale — non committare (in linea con la convenzione già in uso
-per script locali e file dati generati automaticamente).
+Script sperimentale — non committare i dati generati, solo il codice
+(coerente con la convenzione già in uso per i file dati auto-generati).
 
 Uso:
     cd ~/Desktop/meteo_locale
@@ -16,21 +20,11 @@ Uso:
 timesfm-non-commercial-license-v1.0 (non-commercial, non-production).
 Questo script è un test locale/offline. NON integrare in inference.py /
 GitHub Actions senza rivalutare la licenza rispetto all'uso del progetto.
-
-⚠️ DA VERIFICARE PRIMA DI LANCIARE (API troppo recente per essere certi):
-    1. Nome esatto della classe/factory per il checkpoint 3.0
-       (nel dubbio: `python3 -c "import timesfm; print(dir(timesfm))"`
-       dopo l'installazione, e controllare il README aggiornato su
-       https://github.com/google-research/timesfm e la model card
-       https://huggingface.co/google/timesfm-3.0-pytorch)
-    2. Nome del parametro per passare la covariata nota (past-future
-       covariate) a model.forecast() — verificare negli esempi xreg
-       del repo prima di eseguire su tutto il sottocampione.
-   I due punti sono segnati con "# TODO-VERIFICA" nel codice sotto.
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
 import pickle
 from pathlib import Path
@@ -38,6 +32,7 @@ from pathlib import Path
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import torch
 from sklearn.metrics import mean_absolute_error
 
 from forecast import load_dataset, temporal_split, get_feature_cols
@@ -52,21 +47,24 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
-DATA_PATH     = "data/training_10y_h1.parquet"
-MODEL_DIR     = Path("model")
-STATION_ID    = 3          # Roma Sud — nel training set originale, no ARSIAL
-TARGET        = "temperature"
-HORIZON_HOURS = 1
-VAL_FRAC      = 0.2        # deve coincidere con forecast.py / correttore.py
-CONTEXT_HOURS = 512        # ~21 giorni di storico reale come contesto TimesFM
-N_EVAL_POINTS = 300        # sottocampionamento per contenere i tempi CPU
-RANDOM_SEED   = 42
+DATA_PATH        = "data/training_10y_h1.parquet"
+MODEL_DIR        = Path("model")
+STATION_ID       = 3          # Roma Sud — nel training set originale, no ARSIAL
+TARGET           = "temperature"
+HORIZON_HOURS    = 1
+VAL_FRAC         = 0.2        # deve coincidere con forecast.py / correttore.py
+CONTEXT_HOURS    = 512        # ~21 giorni di storico reale come contesto TimesFM
+N_EVAL_POINTS    = 300        # sottocampionamento del val set
+PREDICT_BATCH_SZ = 32         # dimensione batch per predict_batch (CPU-friendly)
+RANDOM_SEED      = 42
+
+TIMESFM_CHECKPOINT = "google/timesfm-3.0-pytorch"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Dataset + split IDENTICO alla produzione
 # ─────────────────────────────────────────────────────────────────────────────
 df = load_dataset(DATA_PATH)
-train_df, val_df = temporal_split(df, val_frac=VAL_FRAC)  # split globale multi-stazione
+train_df, val_df = temporal_split(df, val_frac=VAL_FRAC)
 
 train_st = (train_df[train_df["station_id"] == STATION_ID]
             .sort_values("recorded_at").reset_index(drop=True))
@@ -105,8 +103,6 @@ logger.info(
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Serie osservata reale (contesto TimesFM) + covariata nota (ERA5)
 # ─────────────────────────────────────────────────────────────────────────────
-# target_temperature a T = METAR osservato a T + HORIZON_HOURS.
-# Ricostruiamo la serie osservata vera allineata a obs_time = T + horizon.
 obs_source = pd.concat([train_st, val_st], ignore_index=True)[["recorded_at", target_col]].copy()
 obs_source["obs_time"] = obs_source["recorded_at"] + pd.Timedelta(hours=HORIZON_HOURS)
 obs_series = (
@@ -115,12 +111,9 @@ obs_series = (
     .drop_duplicates("obs_time")
     .sort_values("obs_time")
     .set_index("obs_time")["temp_obs"]
-    .asfreq("h")  # forza griglia oraria regolare; introduce NaN nei buchi METAR
+    .asfreq("h")
 )
 
-# Covariata nota = ERA5 "temperature" grezza a T (stessa colonna che il MOS
-# usa come input X). È lecito trattarla come nota anche nel futuro qui,
-# perché ERA5 è rianalisi storica — esattamente come fa il MOS stesso.
 covariate_series = (
     pd.concat([train_st, val_st], ignore_index=True)[["recorded_at", "temperature"]]
     .drop_duplicates("recorded_at")
@@ -130,89 +123,110 @@ covariate_series = (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Sottocampionamento dei punti di valutazione
+# 4. Sottocampionamento + costruzione finestre di contesto (per il batch)
 # ─────────────────────────────────────────────────────────────────────────────
 rng = np.random.default_rng(RANDOM_SEED)
 n_pick = min(N_EVAL_POINTS, len(val_st))
 eval_idx = np.sort(rng.choice(len(val_st), size=n_pick, replace=False))
 
-eval_times = val_st["recorded_at"].iloc[eval_idx].reset_index(drop=True)
-eval_truth = val_st[target_col].iloc[eval_idx].to_numpy()
+eval_times    = val_st["recorded_at"].iloc[eval_idx].reset_index(drop=True)
+eval_truth    = val_st[target_col].iloc[eval_idx].to_numpy()
 eval_our_pred = our_pred[eval_idx]
 
 our_mae_sub = mean_absolute_error(eval_truth, eval_our_pred)
-logger.info(
-    f"[Roma Sud] MOS attuale — MAE sul sottocampione "
-    f"({n_pick} punti): {our_mae_sub:.4f}°C"
-)
+logger.info(f"[Roma Sud] MOS attuale — MAE sul sottocampione ({n_pick} punti): {our_mae_sub:.4f}°C")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. TimesFM-3 zero-shot
-# ─────────────────────────────────────────────────────────────────────────────
-import torch
-import timesfm
+contexts = []
+cov_context_future = []   # covariata su contesto + horizon, per punto valido
+kept_mask = np.zeros(n_pick, dtype=bool)
 
-torch.set_float32_matmul_precision("high")
-
-# TODO-VERIFICA (1): nome esatto classe/factory per il checkpoint 3.0.
-# Controllare `dir(timesfm)` dopo l'installazione; se non esiste ancora una
-# classe dedicata TimesFM_3_..., potrebbe servire lo stesso pattern usato
-# per 2.5 (TimesFM_2p5_200M_torch.from_pretrained) puntato al repo 3.0.
-model = timesfm.TimesFM_3_0_torch.from_pretrained("google/timesfm-3.0-pytorch")
-model.compile(
-    timesfm.ForecastConfig(
-        max_context=CONTEXT_HOURS,
-        max_horizon=HORIZON_HOURS,
-        normalize_inputs=True,
-    )
-)
-
-
-def timesfm_predict_one(t: pd.Timestamp) -> float | None:
-    """Previsione zero-shot per l'ora t, usando solo storico reale fino a t-horizon."""
-    ctx_end = t - pd.Timedelta(hours=HORIZON_HOURS)
+for i, t in enumerate(eval_times):
+    t = pd.Timestamp(t)
+    ctx_end   = t - pd.Timedelta(hours=HORIZON_HOURS)
     ctx_start = ctx_end - pd.Timedelta(hours=CONTEXT_HOURS - 1)
 
-    context = obs_series.loc[ctx_start:ctx_end]
-    if len(context) < CONTEXT_HOURS or context.isna().mean() > 0.1:
-        return None  # contesto incompleto o troppi buchi METAR: salta il punto
-
-    context_filled = context.interpolate(limit=6).ffill().bfill()
-    if context_filled.isna().any():
-        return None
+    ctx = obs_series.loc[ctx_start:ctx_end]
+    if len(ctx) < CONTEXT_HOURS or ctx.isna().mean() > 0.1:
+        continue
+    ctx_filled = ctx.interpolate(limit=6).ffill().bfill()
+    if ctx_filled.isna().any():
+        continue
 
     cov = covariate_series.loc[ctx_start:t].interpolate(limit=6).ffill().bfill()
-    if cov.isna().any() or len(cov) < len(context_filled) + HORIZON_HOURS:
-        return None
+    if cov.isna().any() or len(cov) < len(ctx_filled) + HORIZON_HOURS:
+        continue
 
-    # TODO-VERIFICA (2): nome del parametro per la covariata nota (past-future
-    # covariate). Controllare gli esempi "xreg" del repo TimesFM prima di
-    # lanciare su tutto il sottocampione — qui è solo un placeholder plausibile.
-    point_forecast, _ = model.forecast(
-        horizon=HORIZON_HOURS,
-        inputs=[context_filled.to_numpy()],
-        dynamic_numerical_covariates={"era5_temperature": [cov.to_numpy()]},
-    )
-    return float(np.asarray(point_forecast)[0, -1])
+    contexts.append(ctx_filled.to_numpy(dtype=np.float32))
+    cov_context_future.append(cov.to_numpy(dtype=np.float32))
+    kept_mask[i] = True
 
-
-logger.info(f"TimesFM-3: inferenza zero-shot su {n_pick} punti (loop non ottimizzato)...")
-timesfm_preds = [timesfm_predict_one(pd.Timestamp(t)) for t in eval_times]
-
-mask_valid = np.array([p is not None for p in timesfm_preds])
-n_skipped = int((~mask_valid).sum())
+n_skipped = n_pick - len(contexts)
 if n_skipped:
-    logger.warning(
-        f"TimesFM-3: {n_skipped}/{n_pick} punti saltati "
-        f"(buchi nel contesto osservato o nella covariata)"
-    )
+    logger.warning(f"TimesFM-3: {n_skipped}/{n_pick} punti scartati (buchi nel contesto o covariata)")
 
-y_true_tfm = eval_truth[mask_valid]
-y_pred_tfm = np.array([p for p in timesfm_preds if p is not None])
+y_true_tfm = eval_truth[kept_mask]
+our_pred_matched = eval_our_pred[kept_mask]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. TimesFM-3 — API verificata: timesfm3.TimesFM3Evaluator / ModelConfig
+# ─────────────────────────────────────────────────────────────────────────────
+from timesfm3 import TimesFM3Evaluator, ModelConfig  # noqa: E402
+
+device = "cuda" if torch.cuda.is_available() else (
+    "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"
+)
+logger.info(f"TimesFM-3: device={device}")
+
+config = ModelConfig(
+    checkpoint_path=TIMESFM_CHECKPOINT,
+    per_core_batch_size=PREDICT_BATCH_SZ,
+    device=device,
+)
+forecaster = TimesFM3Evaluator(config)
+
+# ── Introspezione: scopriamo il vero nome del parametro covariata ──────────
+sig = inspect.signature(forecaster.predict_batch)
+param_names = list(sig.parameters.keys())
+logger.info(f"predict_batch signature: {sig}")
+
+# "past_future_covariates" è il nome verificato nel README upstream
+# (google-research/timesfm, esempio "Multivariate Forecasting with
+# Covariates"); gli altri restano come fallback nel caso l'API cambi.
+# Nota: nell'esempio upstream la covariata multivariata ha shape
+# (canali, contesto+horizon) — qui passiamo array 1D per serie (1 canale
+# implicito). Non verificato se predict_batch accetti anche questa forma
+# per un batch di serie univariate: se fallisce, prova a reshape a (1, T).
+CANDIDATE_COV_PARAMS = [
+    "past_future_covariates", "past_and_future_covariates",
+    "dynamic_numerical_covariates", "future_covariates", "covariates",
+    "xreg", "past_covariates",
+]
+cov_param = next((p for p in CANDIDATE_COV_PARAMS if p in param_names), None)
+
+used_covariates = False
+outputs = None
+
+if cov_param is not None:
+    logger.info(f"Parametro covariata riconosciuto: '{cov_param}' — tentativo con covariate ERA5")
+    try:
+        kwargs = {cov_param: cov_context_future}
+        outputs = list(forecaster.predict_batch(
+            contexts, horizon=HORIZON_HOURS, return_quantiles=False, **kwargs
+        ))
+        used_covariates = True
+    except Exception as exc:
+        logger.warning(f"Chiamata con covariate fallita ({exc!r}) — ripiego su zero-shot univariato")
+        outputs = None
+
+if outputs is None:
+    logger.info("Esecuzione zero-shot SENZA covariate (baseline univariato)")
+    outputs = list(forecaster.predict_batch(
+        contexts, horizon=HORIZON_HOURS, return_quantiles=False
+    ))
+
+y_pred_tfm = np.array([np.asarray(o.forecast).reshape(-1)[-1] for o in outputs], dtype=np.float64)
+
 tfm_mae = mean_absolute_error(y_true_tfm, y_pred_tfm) if len(y_true_tfm) else float("nan")
-
-# stesso identico sottoinsieme per un confronto alla pari
-our_pred_matched = eval_our_pred[mask_valid]
 our_mae_matched = (mean_absolute_error(y_true_tfm, our_pred_matched)
                     if len(y_true_tfm) else float("nan"))
 
@@ -225,6 +239,7 @@ print(f"Roma Sud (id={STATION_ID}) — target {TARGET}, T+{HORIZON_HOURS}h")
 print(f"Val set completo    : {len(val_st)} righe")
 print(f"Punti confrontati   : {len(y_true_tfm)} / {n_pick} campionati "
       f"({n_skipped} scartati per buchi dati)")
+print(f"TimesFM-3 covariate : {'usate (' + cov_param + ')' if used_covariates else 'NON usate (fallback univariato)'}")
 print(f"{'-' * 62}")
 print(f"{'Modello':38s} {'MAE (°C)':>10s}")
 print(f"{'MOS attuale (LGBM+RF), full val':38s} {our_mae_full:>10.4f}")
