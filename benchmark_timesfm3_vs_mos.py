@@ -157,7 +157,9 @@ for i, t in enumerate(eval_times):
         continue
 
     contexts.append(ctx_filled.to_numpy(dtype=np.float32))
-    cov_context_future.append(cov.to_numpy(dtype=np.float32))
+    # shape (1, contesto+horizon): 1 canale covariata esplicito, come
+    # nell'esempio multivariato del README upstream (canali, lunghezza).
+    cov_context_future.append(cov.to_numpy(dtype=np.float32).reshape(1, -1))
     kept_mask[i] = True
 
 n_skipped = n_pick - len(contexts)
@@ -192,10 +194,9 @@ logger.info(f"predict_batch signature: {sig}")
 # "past_future_covariates" è il nome verificato nel README upstream
 # (google-research/timesfm, esempio "Multivariate Forecasting with
 # Covariates"); gli altri restano come fallback nel caso l'API cambi.
-# Nota: nell'esempio upstream la covariata multivariata ha shape
-# (canali, contesto+horizon) — qui passiamo array 1D per serie (1 canale
-# implicito). Non verificato se predict_batch accetti anche questa forma
-# per un batch di serie univariate: se fallisce, prova a reshape a (1, T).
+# Sulla forma dell'array per un batch di serie univariate (non documentata
+# esplicitamente: l'esempio upstream mostra solo il caso multivariato con
+# shape (canali, contesto+horizon)) vedi lo shape_attempts qui sotto.
 CANDIDATE_COV_PARAMS = [
     "past_future_covariates", "past_and_future_covariates",
     "dynamic_numerical_covariates", "future_covariates", "covariates",
@@ -208,15 +209,30 @@ outputs = None
 
 if cov_param is not None:
     logger.info(f"Parametro covariata riconosciuto: '{cov_param}' — tentativo con covariate ERA5")
-    try:
-        kwargs = {cov_param: cov_context_future}
-        outputs = list(forecaster.predict_batch(
-            contexts, horizon=HORIZON_HOURS, return_quantiles=False, **kwargs
-        ))
-        used_covariates = True
-    except Exception as exc:
-        logger.warning(f"Chiamata con covariate fallita ({exc!r}) — ripiego su zero-shot univariato")
-        outputs = None
+    # Non è documentato se predict_batch, per un batch di serie univariate,
+    # voglia la covariata come (1, T) esplicito (coerente con l'esempio
+    # multivariato del README) o come vettore piatto (T,). Proviamo prima
+    # la forma 2D e, solo su un fallimento che sembra di shape, ripieghiamo
+    # sulla forma 1D piatta come seconda ipotesi.
+    shape_attempts = [
+        ("2D (1, T)", cov_context_future),
+        ("1D piatta (T,)", [c.reshape(-1) for c in cov_context_future]),
+    ]
+    for shape_label, cov_batch in shape_attempts:
+        try:
+            kwargs = {cov_param: cov_batch}
+            outputs = list(forecaster.predict_batch(
+                contexts, horizon=HORIZON_HOURS, return_quantiles=False, **kwargs
+            ))
+            used_covariates = True
+            logger.info(f"Covariate accettate con forma {shape_label}")
+            break
+        except Exception as exc:
+            logger.warning(f"Forma {shape_label} fallita ({exc!r})")
+            outputs = None
+
+    if outputs is None:
+        logger.warning("Entrambe le forme covariata fallite — ripiego su zero-shot univariato")
 
 if outputs is None:
     logger.info("Esecuzione zero-shot SENZA covariate (baseline univariato)")
