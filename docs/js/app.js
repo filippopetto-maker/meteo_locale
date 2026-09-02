@@ -389,11 +389,33 @@
   async function init() {
     const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
 
-    // ⚠️ DIAG TEMPORANEA (bug barra nera) — RIMUOVERE dopo verifica su device.
-    // Atteso post-fix: "map rect height" == "screen height" (non più -47px).
-    console.log('[diag-inset] map rect height:', document.getElementById('map').getBoundingClientRect().height,
-      '| screen height:', window.screen.height / window.devicePixelRatio,
-      '| innerHeight:', window.innerHeight);
+    // Diagnostica bug barra nera PWA — attiva SOLO con ?diag=1 nell'URL, quindi
+    // inerte per chiunque non lo chieda esplicitamente (nessun residuo da rimuovere,
+    // a differenza dell'overlay round 6). Atteso post-fix inset:0: mapRectH == screenH/dpr.
+    if (location.search.includes('diag=1')) {
+      const mapRect = document.getElementById('map').getBoundingClientRect();
+      const htmlRect = document.documentElement.getBoundingClientRect();
+      const info = {
+        isPWA: document.documentElement.classList.contains('is-pwa'),
+        screenH: window.screen.height,
+        innerH: window.innerHeight,
+        vvH: window.visualViewport?.height ?? 'n/d',
+        htmlRectH: Math.round(htmlRect.height),
+        mapRectH: Math.round(mapRect.height),
+        mapRectBottom: Math.round(mapRect.bottom),
+        dpr: window.devicePixelRatio,
+        mapCSSHeight: getComputedStyle(document.getElementById('map')).height,
+        bodyCSSHeight: getComputedStyle(document.body).height,
+      };
+      console.log('[diag]', info);
+      const badge = document.createElement('div');
+      badge.style.cssText =
+        'position:fixed; top:4px; left:4px; z-index:99999; ' +
+        'background:rgba(0,0,0,.85); color:#0f0; font:9px monospace; ' +
+        'padding:4px 6px; border-radius:4px; max-width:96vw; white-space:pre-wrap;';
+      badge.textContent = JSON.stringify(info, null, 0);
+      document.body.appendChild(badge);
+    }
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
