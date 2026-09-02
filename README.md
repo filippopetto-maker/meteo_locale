@@ -17,16 +17,17 @@ Sistema di previsione meteo su scala comunale che cala lo stato meteorologico re
 5. [Fonti dati](#-fonti-dati)
 6. [Feature orografiche](#-feature-orografiche)
 7. [Stato attuale](#-stato-attuale)
-8. [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47)
-9. [Sviluppo a lungo termine](#-sviluppo-a-lungo-termine)
-10. [Come riprendere il lavoro](#-come-riprendere-il-lavoro)
-11. [Risultati del modello](#-risultati-del-modello)
-12. [Struttura del progetto](#-struttura-del-progetto)
-13. [Database — schema](#-database--schema)
-14. [Setup e installazione](#-setup-e-installazione)
-15. [I moduli](#-i-moduli)
-16. [Differenziali competitivi](#-differenziali-competitivi)
-17. [Diario degli errori risolti](#-diario-degli-errori-risolti)
+8. [Operazioni da svolgere](#-operazioni-da-svolgere)
+9. [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47)
+10. [Sviluppo a lungo termine](#-sviluppo-a-lungo-termine)
+11. [Come riprendere il lavoro](#-come-riprendere-il-lavoro)
+12. [Risultati del modello](#-risultati-del-modello)
+13. [Struttura del progetto](#-struttura-del-progetto)
+14. [Database — schema](#-database--schema)
+15. [Setup e installazione](#-setup-e-installazione)
+16. [I moduli](#-i-moduli)
+17. [Differenziali competitivi](#-differenziali-competitivi)
+18. [Diario degli errori risolti](#-diario-degli-errori-risolti)
 
 ---
 
@@ -274,7 +275,20 @@ Esecuzione a breve termine, fase per fase: cosa è completato, cosa è in corso,
 7. [x] **Dashboard GitHub Pages (Chart.js)** — `docs/dashboard.html` + `dashboard_data.json` (serie forecast/observed 7gg, MAE globale e per stazione). Generata da `export_static.py --dashboard-only`, workflow dedicato `export-dashboard.yml` (trigger 8:00/20:00). Sostituisce la dashboard Streamlit. Dettagli tecnici → sezione *I moduli*, `docs/dashboard.html`
 8. [ ] API REST FastAPI — rimandato, sostituito da static JSON su GH Pages; resta opzionale in futuro per query dinamiche (storico per stazione, confronto date; ipotesi deploy su Render)
 
-Il piano di lungo periodo (previsioni 48h, retraining di dicembre 2026, generalizzazione multi-località, convettività) è nella sezione **Roadmap estesa — Fasi 4–7** che segue.
+Il piano di lungo periodo (previsioni 48h, retraining di dicembre 2026, generalizzazione multi-località, convettività) è nella sezione **Roadmap estesa — Fasi 4–7** più sotto. Prima, le operazioni concrete in sospeso sulla mappa/UI (sezione seguente).
+
+---
+
+## 🔧 Operazioni da svolgere
+
+Task concreti sulla mappa/UI, più vicini nel tempo e più piccoli in scope rispetto alle Fasi 4–7 — non toccano pipeline dati o modello.
+
+| # | Task | Stato | Dettagli |
+|:--|:-----|:------|:---------|
+| 1 | Temperatura percepita — formula di Stull (2011) | 🟡 Parziale | Architettura già definita: derivata display-side dopo interpolazione IDW separata di T e RH (mai prima). Bozze Python (`export_static.py`/`features.py`) e JS (`app.js`) esistenti da sessione precedente, verificate numericamente (Tw≈28.9°C per T=34.3°C/RH=66%). Da integrare in UI (layer o campo popup) ed export statico. |
+| 2 | Bug PWA "schermata schiacciata in basso" | 🔴 Aperto | Black bar in basso al cold boot iOS, overlap layer radar, si autocorregge con rotazione schermo. Causa nota: WebKit inizializza il viewport in modo scorretto prima che `visualViewport` sia leggibile. Prossimo esperimento non ancora tentato: verificare se `visualViewport.height` è corretto al boot mentre `innerHeight` resta stale — se confermato, spostare `stabilizeMapSize()` e ogni lettura di viewport a usare `visualViewport` ovunque. |
+| 3 | Modernizzazione legenda/timeline radar | 🔴 Da avviare | Radar RainViewer attuale mostra solo "adesso..." statico. Serve barra timeline scrubbabile con frame passati (e valutare nowcast, oggi esclusa di proposito) con etichette orarie lungo tutta la barra, play/pause. |
+| 4 | Immagini satellitari oltre al radar | 🔴 Da avviare | Layer satellite (infrared) RainViewer, stesso pattern a tile del radar attuale — nessun nuovo backend richiesto, coerente col vincolo costo-zero. |
 
 ---
 
