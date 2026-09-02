@@ -359,24 +359,31 @@
     markers.forEach(m => m.addTo(map));
   }
 
-  // Solo PWA (vedi chiamata in init()): al boot in standalone iOS, window.innerHeight può
-  // continuare ad assestarsi per un tempo non prevedibile — invece di indovinare quanti
-  // frame aspettare, si ripete invalidateSize() finché l'altezza smette di cambiare (o si
-  // esauriscono i tentativi). window.visualViewport resta il meccanismo per le rotazioni
-  // successive: qui si copre solo la finestra di boot, dove quell'evento non arriva mai.
-  function stabilizeMapSize(map, attempts = 8, delay = 150) {
-    let lastHeight = null;
-    let count = 0;
-    const check = () => {
-      const currentHeight = window.innerHeight;
-      map.invalidateSize();
-      if (currentHeight !== lastHeight && count < attempts) {
-        lastHeight = currentHeight;
-        count++;
-        setTimeout(check, delay);
-      }
-    };
-    check();
+  // Round 6 — causa isolata: Leaflet non ha un ResizeObserver interno sul suo container,
+  // ascolta SOLO l'evento nativo 'resize' di window (leaflet-src.js, _updateMapPanes:
+  // `onOff(window, 'resize', this._onResize, this)`), poi lo rimbalza con rAF su
+  // invalidateSize(). Round 3 aveva già confermato che window.visualViewport non spara mai
+  // un evento 'resize' al boot in standalone iOS; per lo stesso motivo neanche il 'resize'
+  // nativo di window scatta in quella finestra — non è un resize "vero" agli occhi del
+  // sistema, è il compositor WebKit che si assesta da solo sul primissimo paint. Risultato:
+  // L.map() misura this._container.clientHeight una volta sola, alla costruzione, e se in
+  // quel preciso istante il valore non è ancora quello vero, Leaflet resta convinto di
+  // avere meno spazio per sempre — nessun evento arriverà mai a smentirlo. Le tile/l'overlay
+  // heatmap vengono quindi disegnati solo fino a quell'altezza sbagliata: sotto resta il
+  // background di #map (#0e1119, quasi nero) non dipinto — la barra nera segnalata in foto.
+  // Il vecchio criterio "fermati quando innerHeight smette di cambiare" (Round 5) è cieco a
+  // questo, perché window.innerHeight risulta già stabile e corretto dal boot (Round 4,
+  // ipotesi chiusa) — il valore sbagliato è tutto interno alla cache di Leaflet
+  // (map.getSize()/this._size), mai controllato finora. Fix: invalidare su un calendario
+  // fisso che copre l'intera finestra dello splash screen (min. 1700ms + 340ms fade, vedi
+  // index.html — l'utente vede la mappa solo alla rimozione dello splash, molto dopo che il
+  // vecchio ciclo breve si era già fermato), così anche un assestamento tardivo del
+  // compositor viene comunque intercettato prima che l'utente guardi lo schermo.
+  const STABILIZE_CHECKPOINTS_MS = [0, 100, 250, 500, 900, 1400, 2000, 2600, 3200];
+  function stabilizeMapSize(map) {
+    STABILIZE_CHECKPOINTS_MS.forEach(delay => {
+      setTimeout(() => map.invalidateSize(), delay);
+    });
   }
 
   async function init() {
@@ -423,9 +430,9 @@
       // Round 3: confermato su device che window.visualViewport non emette mai un evento
       // 'resize' per l'assestamento iniziale (non è un resize agli occhi di quell'API), e un
       // doppio rAF non basta perché l'assestamento reale non ha una durata fissa in frame.
-      // Al posto di "aspetta N frame", si ripete invalidateSize() finché window.innerHeight
-      // non smette di cambiare (o si esauriscono i tentativi) — segue il valore vero invece
-      // di indovinare quando è pronto.
+      // Calendario fisso di invalidateSize() su tutta la finestra dello splash (Round 6,
+      // vedi commento sopra stabilizeMapSize) — copre il caso in cui l'assestamento del
+      // compositor arrivi più tardi di quanto ci si aspetterebbe.
       stabilizeMapSize(map);
 
       // Fix strutturale, non solo una tantum: visualViewport è l'API pensata apposta per
@@ -436,6 +443,37 @@
       } else {
         window.addEventListener('resize', () => map.invalidateSize());
       }
+
+      // Round 6 — fix primario: Leaflet non osserva la vera box CSS di #map, solo l'evento
+      // 'resize' di window (mai sparato al boot, vedi sopra). Un ResizeObserver diretto su
+      // #map non dipende da nessun evento e da nessun calendario indovinato: scatta esattamente
+      // nell'istante in cui il compositor WebKit cambia davvero le dimensioni del container,
+      // qualunque esso sia — copre in un colpo solo sia il boot lento sia qualunque altro
+      // ridimensionamento che sfugga a window/visualViewport. Supportato su iOS Safari da
+      // versione 13.4 (2020), quindi sempre disponibile sui device target di questa PWA.
+      if ('ResizeObserver' in window) {
+        const mapEl = document.getElementById('map');
+        let lastW = -1, lastH = -1;
+        const mapResizeObserver = new ResizeObserver(entries => {
+          for (const entry of entries) {
+            const w = Math.round(entry.contentRect.width);
+            const h = Math.round(entry.contentRect.height);
+            if (w !== lastW || h !== lastH) {
+              lastW = w; lastH = h;
+              map.invalidateSize();
+            }
+          }
+        });
+        mapResizeObserver.observe(mapEl);
+      }
+
+      // Riapertura da background (app switcher) è, per questo bug, uno scenario analogo al
+      // cold boot: il WebView può ripresentare un compositor non ancora risincronizzato con
+      // il container. Stesso trattamento del boot, senza bisogno che l'utente ruoti lo schermo.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') stabilizeMapSize(map);
+      });
+      window.addEventListener('pageshow', () => stabilizeMapSize(map));
     }
 
     try {
@@ -580,12 +618,16 @@
         `<div id="legend-labels" class="legend-labels"></div>`;
       document.getElementById('map').appendChild(legend);
 
-      // ⚠️ DIAGNOSTICA TEMPORANEA (round 5) — rimuovere insieme all'overlay prima del commit
+      // ⚠️ DIAGNOSTICA TEMPORANEA (round 6) — rimuovere insieme all'overlay prima del commit
       // finale. env()/innerHeight/dvh confermati stabili e corretti dal boot (round 4,
-      // ipotesi chiusa) — ora si misura l'OUTPUT (dove finiscono realmente #map/#layer-rail/
-      // .temp-legend) invece dell'input, per confrontare boot vs dopo-rotazione sugli stessi
-      // elementi. Un log automatico qui (primo momento in cui tutti e tre esistono nel DOM),
-      // più un pulsante per loggare di nuovo su richiesta (es. dopo aver ruotato lo schermo).
+      // ipotesi chiusa); round 5 misurava l'OUTPUT DOM (#map/#layer-rail/.temp-legend) ma
+      // mai la cache interna di Leaflet — che leaflet-src.js dimostra essere aggiornata
+      // SOLO da invalidateSize() o da un evento 'resize' di window, mai da un semplice
+      // cambio di layout CSS. Aggiunta qui: map.getSize() (this._size cache di Leaflet) a
+      // fianco del rect DOM di #map, per vedere direttamente se e quando i due divergono.
+      // Log automatico sugli stessi checkpoint di stabilizeMapSize (invece del solo BOOT +
+      // pulsante manuale) così la timeline completa boot→splash-off è catturabile da un
+      // singolo cold-launch, senza dover ruotare lo schermo o premere nulla a mano.
       if (isPWA) {
         (function debugElementRects() {
           const overlay = document.createElement('div');
@@ -612,7 +654,9 @@
               const b = el.getBoundingClientRect();
               return `${id}: top=${Math.round(b.top)} bottom=${Math.round(b.bottom)} height=${Math.round(b.height)}\n`;
             };
-            return r('map') + r('layer-rail') + r('.temp-legend');
+            const leafletSize = map.getSize(); // cache interna Leaflet — MAI loggata prima d'ora
+            return r('map') + r('layer-rail') + r('.temp-legend') +
+              `map.getSize(): width=${Math.round(leafletSize.x)} height=${Math.round(leafletSize.y)}\n`;
           }
           function vvLine() {
             return `vv: height=${Math.round(window.visualViewport?.height ?? -1)} width=${Math.round(window.visualViewport?.width ?? -1)} scale=${window.visualViewport?.scale ?? 'n/d'}\n`;
@@ -623,6 +667,11 @@
           }
 
           appendLog(`--- BOOT (t=0ms) innerHeight=${window.innerHeight} ---\n`);
+          STABILIZE_CHECKPOINTS_MS.filter(t => t > 0).forEach(t => {
+            setTimeout(() => {
+              appendLog(`--- AUTO t=${t}ms innerHeight=${window.innerHeight} ---\n`);
+            }, t);
+          });
           btn.addEventListener('click', () => {
             appendLog(`--- LOG MANUALE (t=${Math.round(performance.now() - t0)}ms dal boot) innerHeight=${window.innerHeight} ---\n`);
           });
