@@ -389,6 +389,12 @@
   async function init() {
     const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
 
+    // ⚠️ DIAG TEMPORANEA (bug barra nera) — RIMUOVERE dopo verifica su device.
+    // Atteso post-fix: "map rect height" == "screen height" (non più -47px).
+    console.log('[diag-inset] map rect height:', document.getElementById('map').getBoundingClientRect().height,
+      '| screen height:', window.screen.height / window.devicePixelRatio,
+      '| innerHeight:', window.innerHeight);
+
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
       subdomains: 'abcd',

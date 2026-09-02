@@ -23,11 +23,12 @@
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
-      height: 100%; width: 100%; overflow: hidden;
+      position: fixed; inset: 0;
+      overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #0e1119;
     }
-    #map { height: 100vh; width: 100vw; background: #0e1119; }
+    #map { position: fixed; inset: 0; background: #0e1119; }
 
     /* ─── Pannello di controllo unico — top-left (iniettato da JS) ─── */
     #control-panel {
@@ -439,19 +440,18 @@
       --sab: env(safe-area-inset-bottom, 0px);
     }
 
-    /* ─── Fix #1 (bug fisici iPhone): 100vh su iOS standalone può essere più alto dello
-           spazio realmente visibile → fascia nera in fondo. dvh = altezza dinamica reale.
-           html/body risolvono height:100% contro lo stesso "large viewport" instabile —
-           corretto anche qui (non solo su #map), altrimenti body { overflow:hidden } può
-           ritagliare #map alla misura sbagliata anche se #map stesso è già in dvh. ─── */
-    html.is-pwa, .is-pwa body {
-      height: 100vh; /* fallback per browser senza supporto dvh */
-      height: 100dvh;
-    }
-    .is-pwa #map {
-      height: 100vh; /* fallback per browser senza supporto dvh */
-      height: 100dvh;
-    }
+    /* ─── Altezza viewport iPhone standalone — approccio vh/dvh ABBANDONATO.
+           Diagnosi (numeri del log round 6, iPhone 390×844pt): innerHeight,
+           visualViewport.height e map.getSize() riportano staticamente 797 invece di
+           844 fin dal primo frame, rotazioni incluse. Lo scarto di 47px è esattamente
+           safe-area-inset-top (notch/Dynamic Island). Non è un valore che si assesta
+           male dopo un evento mancato (ipotesi dei round 5/6): WebKit lo considera
+           definitivo dal boot, quindi nessun ricalcolo d'altezza — vh, dvh, innerHeight,
+           resize/ResizeObserver — potrà correggerlo. Fix: html/body/#map usano
+           position:fixed; inset:0 (vedi sopra), riempiono il layout viewport reale senza
+           mai passare da un'altezza calcolata. Vale identico in PWA e in browser, quindi
+           non serve più una regola .is-pwa dedicata. env(safe-area-inset-*) resta usato
+           altrove per il padding dei controlli: quello era ed è corretto. ─── */
 
     /* ─── Brand lockup (top-left) ─── */
     .is-pwa #brand-lockup {
