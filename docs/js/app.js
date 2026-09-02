@@ -618,66 +618,6 @@
         `<div id="legend-labels" class="legend-labels"></div>`;
       document.getElementById('map').appendChild(legend);
 
-      // ⚠️ DIAGNOSTICA TEMPORANEA (round 6) — rimuovere insieme all'overlay prima del commit
-      // finale. env()/innerHeight/dvh confermati stabili e corretti dal boot (round 4,
-      // ipotesi chiusa); round 5 misurava l'OUTPUT DOM (#map/#layer-rail/.temp-legend) ma
-      // mai la cache interna di Leaflet — che leaflet-src.js dimostra essere aggiornata
-      // SOLO da invalidateSize() o da un evento 'resize' di window, mai da un semplice
-      // cambio di layout CSS. Aggiunta qui: map.getSize() (this._size cache di Leaflet) a
-      // fianco del rect DOM di #map, per vedere direttamente se e quando i due divergono.
-      // Log automatico sugli stessi checkpoint di stabilizeMapSize (invece del solo BOOT +
-      // pulsante manuale) così la timeline completa boot→splash-off è catturabile da un
-      // singolo cold-launch, senza dover ruotare lo schermo o premere nulla a mano.
-      if (isPWA) {
-        (function debugElementRects() {
-          const overlay = document.createElement('div');
-          overlay.id = 'debug-rects-overlay';
-          overlay.style.cssText =
-            'position:fixed; top:0; left:0; right:0; z-index:99999; ' +
-            'background:rgba(0,0,0,.85); color:#0f0; font:10px monospace; padding:6px; ' +
-            'padding-top:36px; max-height:40vh; overflow:auto; white-space:pre-wrap;';
-          document.body.appendChild(overlay);
-
-          const btn = document.createElement('button');
-          btn.textContent = 'Log ora';
-          btn.style.cssText =
-            'position:fixed; top:4px; right:4px; z-index:100000; ' +
-            'background:#0f0; color:#000; font:11px monospace; font-weight:bold; ' +
-            'border:none; border-radius:4px; padding:4px 10px;';
-          document.body.appendChild(btn);
-
-          const t0 = performance.now();
-          function rectLines() {
-            const r = id => {
-              const el = id.startsWith('.') ? document.querySelector(id) : document.getElementById(id);
-              if (!el) return `${id}: non presente nel DOM\n`;
-              const b = el.getBoundingClientRect();
-              return `${id}: top=${Math.round(b.top)} bottom=${Math.round(b.bottom)} height=${Math.round(b.height)}\n`;
-            };
-            const leafletSize = map.getSize(); // cache interna Leaflet — MAI loggata prima d'ora
-            return r('map') + r('layer-rail') + r('.temp-legend') +
-              `map.getSize(): width=${Math.round(leafletSize.x)} height=${Math.round(leafletSize.y)}\n`;
-          }
-          function vvLine() {
-            return `vv: height=${Math.round(window.visualViewport?.height ?? -1)} width=${Math.round(window.visualViewport?.width ?? -1)} scale=${window.visualViewport?.scale ?? 'n/d'}\n`;
-          }
-          function appendLog(header) {
-            overlay.textContent += header + rectLines() + vvLine();
-            overlay.scrollTop = overlay.scrollHeight;
-          }
-
-          appendLog(`--- BOOT (t=0ms) innerHeight=${window.innerHeight} ---\n`);
-          STABILIZE_CHECKPOINTS_MS.filter(t => t > 0).forEach(t => {
-            setTimeout(() => {
-              appendLog(`--- AUTO t=${t}ms innerHeight=${window.innerHeight} ---\n`);
-            }, t);
-          });
-          btn.addEventListener('click', () => {
-            appendLog(`--- LOG MANUALE (t=${Math.round(performance.now() - t0)}ms dal boot) innerHeight=${window.innerHeight} ---\n`);
-          });
-        })();
-      }
-
       function updateLegend(layer, vMin, vMax, unit, customTicks) {
         const unitLabel = unit.trim();
         const titles = {
