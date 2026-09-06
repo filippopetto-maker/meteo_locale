@@ -1,6 +1,6 @@
 // ⚠️ INCREMENTARE CACHE_VERSION AD OGNI MODIFICA DI HTML/CSS/JS
 // altrimenti le modifiche non compaiono sui dispositivi già installati
-const CACHE_VERSION = 'meteo-v15';
+const CACHE_VERSION = 'meteo-v16';
 
 // Asset statici dell'app — cache-first
 const STATIC_ASSETS = [

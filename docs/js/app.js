@@ -389,10 +389,13 @@
   async function init() {
     const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
 
-    // Diagnostica bug barra nera PWA — attiva SOLO con ?diag=1 nell'URL, quindi
-    // inerte per chiunque non lo chieda esplicitamente (nessun residuo da rimuovere,
-    // a differenza dell'overlay round 6). Atteso post-fix inset:0: mapRectH == screenH/dpr.
-    if (location.search.includes('diag=1')) {
+    // Diagnostica bug barra nera PWA — flag persistente in localStorage perché
+    // il parametro URL non sopravvive allo start_url del manifest in modalità PWA.
+    // ?diag=1 accende, ?diag=0 spegne esplicitamente. Atteso post-fix inset:0: mapRectH == screenH/dpr.
+    if (location.search.includes('diag=1')) localStorage.setItem('meteo_diag', '1');
+    if (location.search.includes('diag=0')) localStorage.removeItem('meteo_diag');
+
+    if (localStorage.getItem('meteo_diag') === '1') {
       const mapRect = document.getElementById('map').getBoundingClientRect();
       const htmlRect = document.documentElement.getBoundingClientRect();
       const info = {
