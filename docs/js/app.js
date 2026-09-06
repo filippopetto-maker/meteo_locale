@@ -389,13 +389,12 @@
   async function init() {
     const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
 
-    // Diagnostica bug barra nera PWA — flag persistente in localStorage perché
-    // il parametro URL non sopravvive allo start_url del manifest in modalità PWA.
-    // ?diag=1 accende, ?diag=0 spegne esplicitamente. Atteso post-fix inset:0: mapRectH == screenH/dpr.
-    if (location.search.includes('diag=1')) localStorage.setItem('meteo_diag', '1');
-    if (location.search.includes('diag=0')) localStorage.removeItem('meteo_diag');
-
-    if (localStorage.getItem('meteo_diag') === '1') {
+    // Diagnostica bug barra nera PWA — badge on-demand.
+    // Attivazione: 5 tap rapidi sul logo "Metek" (gesto permanente, innocuo perché
+    // richiede un'azione esplicita — wiring più sotto, dopo la creazione di #brand-lockup).
+    // ⚠️ TEMPORANEA: la chiamata automatica su isPWA qui sotto va RIMOSSA nel prossimo
+    // commit, dopo aver ottenuto lo screenshot (stesso errore del round 6 da non ripetere).
+    function runDiagBadge() {
       const mapRect = document.getElementById('map').getBoundingClientRect();
       const htmlRect = document.documentElement.getBoundingClientRect();
       const info = {
@@ -418,6 +417,11 @@
         'padding:4px 6px; border-radius:4px; max-width:96vw; white-space:pre-wrap;';
       badge.textContent = JSON.stringify(info, null, 0);
       document.body.appendChild(badge);
+    }
+
+    // ⚠️ TEMPORANEA — rimuovere nel prossimo commit dopo lo screenshot (round 6 lesson).
+    if (document.documentElement.classList.contains('is-pwa')) {
+      runDiagBadge();
     }
 
     L.tileLayer('https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=cb1_2z1t_1_543dbd31737c2140d7d3e4bd', {
@@ -577,6 +581,19 @@
           `<div id="info-radar" style="display:none"></div>` +
           `</div>`;
         document.body.appendChild(brand);
+
+        // ─── Gesto diagnostico nascosto: 5 tap rapidi sul logo → runDiagBadge() ───
+        // Permanente: innocuo perché richiede un'azione esplicita dell'utente.
+        let tapCount = 0, tapTimer = null;
+        brand.addEventListener('click', () => {
+          tapCount++;
+          clearTimeout(tapTimer);
+          tapTimer = setTimeout(() => { tapCount = 0; }, 2000);
+          if (tapCount >= 5) {
+            tapCount = 0;
+            runDiagBadge();
+          }
+        });
 
         // ─── Pillola tempo (top-right) — id "time-toggle" riusato dal pannello legacy ───
         const timeToggle = L.DomUtil.create('div');
