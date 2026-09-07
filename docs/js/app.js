@@ -111,10 +111,10 @@
     return renderGridLayer(tg, globalTMin, globalTMax, TEMP_PALETTE, 127);
   }
 
-  function renderHumidity(latest) {
-    const hg = latest.humidity_grid;
+  function renderHumidity(latest, time) {
+    const hg = time === 'forecast' ? latest.humidity_grid_forecast : latest.humidity_grid_observed;
     if (!hg || !hg.values || hg.values.length === 0) return null;
-    return renderGridLayer(hg, HUM_SCALE_MIN, HUM_SCALE_MAX, HUM_PALETTE, 149);
+    return renderGridLayer(hg, globalHMin, globalHMax, HUM_PALETTE, 149);
   }
 
   function renderWindSpeed(latest) {
@@ -139,6 +139,9 @@
   // Range temperatura unificato tra le due griglie (Adesso e +1h)
   let globalTMin = 0;
   let globalTMax = 40;
+  // Range umidità unificato tra le due griglie (osservata e prevista)
+  let globalHMin = 0;
+  let globalHMax = 100;
   let heatOverlay = null;
 
   const MICROCLIMA_COLORS = {
@@ -157,14 +160,15 @@
       const vento = fc?.wind_speed     != null ? formatWind(fc.wind_speed)          : 'n/d';
       const dir   = fc?.wind_direction != null ? degreesToCardinal(fc.wind_direction) : 'n/d';
       const wName = fc?.wind_direction != null ? windName(fc.wind_direction)        : '';
-      const hum   = fc?.humidity       != null ? fc.humidity.toFixed(0)     + '%'  : 'n/d';
+      const hPrev = fc?.humidity       != null ? fc.humidity.toFixed(0)     + '%'  : 'n/d';
+      const hOss  = ob?.humidity       != null ? ob.humidity.toFixed(0)     + '%'  : 'n/d';
       const ore   = fc?.valid_for      ? formatTime(fc.valid_for) : '';
       markers[i].setPopupContent(
         `<b>${st.name}</b> <small style="opacity:.7">${st.microclima}</small><br>` +
         `🌡️ Prevista: <b>${tPrev}</b> — Osservata: <b>${tOss}</b><br>` +
         `💨 <b>${vento}</b> da <b>${dir}</b><br>` +
         (wName ? `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` : '') +
-        `💧 Umidità: <b>${hum}</b><br>` +
+        `💧 Prevista: <b>${hPrev}</b> — Osservata: <b>${hOss}</b><br>` +
         `<small style="opacity:.6">Valido ore ${ore}</small>`
       );
     });
@@ -521,6 +525,22 @@
       const tgFc  = latest.temp_grid_forecast;
       globalTMin = Math.min(tgObs?.t_min ?? Infinity,  tgFc?.t_min ?? Infinity);
       globalTMax = Math.max(tgObs?.t_max ?? -Infinity, tgFc?.t_max ?? -Infinity);
+      // Guardia: se entrambe le griglie T mancano i valori restano ±Infinity → NaN nel
+      // rendering. Bug latente mai emerso (le griglie T ci sono sempre), ma allineato a H.
+      if (!isFinite(globalTMin) || !isFinite(globalTMax)) {
+        globalTMin = 0;
+        globalTMax = 40;
+      }
+
+      // Range unificato Umidità osservata / prevista — stesso pattern della temperatura
+      const hgObs = latest.humidity_grid_observed;
+      const hgFc  = latest.humidity_grid_forecast;
+      globalHMin = Math.min(hgObs?.h_min ?? Infinity,  hgFc?.h_min ?? Infinity);
+      globalHMax = Math.max(hgObs?.h_max ?? -Infinity, hgFc?.h_max ?? -Infinity);
+      if (!isFinite(globalHMin) || !isFinite(globalHMax)) {
+        globalHMin = HUM_SCALE_MIN;
+        globalHMax = HUM_SCALE_MAX;
+      }
 
       // Il ramo `else` sotto è il pannello legacy, invariato, per qualunque visita da browser
       // normale; il ramo `if (isPWA)` costruisce brand lockup/rail/popover.
@@ -750,7 +770,8 @@
         document.getElementById('btn-temp').classList.toggle('active', layer === 'temperature');
         document.getElementById('btn-hum').classList.toggle('active',  layer === 'humidity');
         document.getElementById('btn-radar').classList.toggle('active', layer === 'radar');
-        document.getElementById('time-toggle').style.display = layer === 'temperature' ? 'flex' : 'none';
+        document.getElementById('time-toggle').style.display =
+          (layer === 'temperature' || layer === 'humidity') ? 'flex' : 'none';
 
         const windToggle    = document.getElementById('wind-toggle');
         const arrowToggle   = document.getElementById('arrow-toggle');
@@ -819,9 +840,8 @@
             heatOverlay = renderTemperature(latest, activeTime);
             updateLegend('temperature', globalTMin, globalTMax, '°C');
           } else {
-            heatOverlay = renderHumidity(latest);
-            if (latest.humidity_grid)
-              updateLegend('humidity', latest.humidity_grid.h_min, latest.humidity_grid.h_max, '%');
+            heatOverlay = renderHumidity(latest, activeTime);
+            updateLegend('humidity', globalHMin, globalHMax, '%');
           }
         }
 
@@ -842,7 +862,7 @@
           // (evita la collisione con la pillola tempo, vedi CSS), invariato in legacy.
           label.textContent = !src ? '' : (isPWA ? ` · previsioni ${validOreNow}` : `Previsioni per le ore ${validOreNow}`);
         }
-        if (activeLayer === 'temperature') switchLayer('temperature');
+        if (activeLayer === 'temperature' || activeLayer === 'humidity') switchLayer(activeLayer);
       }
 
       document.getElementById('btn-wind').addEventListener('click', () => switchLayer('wind'));
@@ -932,8 +952,9 @@
         let dir = Math.atan2(-windU, -windV) * 180 / Math.PI;
         if (dir < 0) dir += 360;
 
-        const hum = latest.humidity_grid
-          ? lookupGrid(lat, lng, latest.humidity_grid) : null;
+        const hgActive = activeTime === 'forecast'
+          ? latest.humidity_grid_forecast : latest.humidity_grid_observed;
+        const hum = hgActive ? lookupGrid(lat, lng, hgActive) : null;
 
         const cardinal = degreesToCardinal(dir);
         const wName    = windName(dir);

@@ -102,7 +102,8 @@ def build_latest_json(
     observations: dict,
     temp_grid_observed_data: dict | None = None,
     temp_grid_forecast_data: dict | None = None,
-    humidity_grid_data: dict | None = None,
+    humidity_grid_forecast_data: dict | None = None,
+    humidity_grid_observed_data: dict | None = None,
     wind_speed_grid_data: dict | None = None,
 ) -> dict:
     station_list = []
@@ -128,6 +129,7 @@ def build_latest_json(
         if obs:
             entry["observation"] = {
                 "temperature": obs.get("temperature"),
+                "humidity": obs.get("humidity"),
                 "recorded_at": obs.get("recorded_at"),
             }
         station_list.append(entry)
@@ -140,8 +142,10 @@ def build_latest_json(
         payload["temp_grid_observed"] = temp_grid_observed_data
     if temp_grid_forecast_data:
         payload["temp_grid_forecast"] = temp_grid_forecast_data
-    if humidity_grid_data:
-        payload["humidity_grid"] = humidity_grid_data
+    if humidity_grid_observed_data:
+        payload["humidity_grid_observed"] = humidity_grid_observed_data
+    if humidity_grid_forecast_data:
+        payload["humidity_grid_forecast"] = humidity_grid_forecast_data
     if wind_speed_grid_data:
         payload["wind_speed_grid"] = wind_speed_grid_data
     return payload
@@ -244,6 +248,8 @@ def main() -> None:
     log.info("Calcolo griglia temperatura (ERA5 background + IDW correzioni)...")
     temp_grid_observed = None
     temp_grid_forecast = None
+    humidity_grid_observed = None
+    humidity_grid_forecast = None
 
     # Stazioni con observation e/o forecast di temperatura valido (unione, non intersezione)
     stations_with_data = []
@@ -343,6 +349,45 @@ def main() -> None:
                 "t_max": round(float(grid.max()), 2),
             }
 
+        def _build_hum_grid(mask: np.ndarray, values: np.ndarray) -> dict | None:
+            """Costruisce una humidity_grid da un sottoinsieme di stazioni
+            (osservata o forecast, indifferente al chiamante).
+
+            Nota deliberata: nessun blend SST sull'umidità. _build_temp_grid applica
+            blend_w/sst_grid perché la SST è una temperatura; non esiste un equivalente
+            per l'umidità relativa."""
+            if mask.sum() < 2:
+                return None
+            pts = np.array(list(zip(np.array(st_lats)[mask], np.array(st_lons)[mask])))
+            if era5_data:
+                era5_hum_at_subset = era5_hum_flat[n_bg:][mask]
+                corrections = values[mask] - era5_hum_at_subset
+                era5_hum_coarse = era5_hum_flat[:n_bg].reshape(N_BG_LAT, N_BG_LON)
+                era5_hum_fine = bilinear_to_fine(
+                    era5_hum_coarse, bg_lats, bg_lons, fine_lats, fine_lons
+                )
+                corr_grid = compute_idw_grid(
+                    pts, corrections,
+                    LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+                )
+                grid = np.clip(era5_hum_fine + corr_grid, 0, 100)
+            else:
+                grid = np.clip(
+                    compute_idw_grid(
+                        pts, values[mask],
+                        LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
+                    ),
+                    0, 100,
+                )
+            return {
+                "lat_min": LAT_MIN, "lat_max": LAT_MAX,
+                "lon_min": LON_MIN, "lon_max": LON_MAX,
+                "nx": NX, "ny": NY,
+                "values": [round(v, 1) for v in grid.flatten().tolist()],
+                "h_min": round(float(grid.min()), 1),
+                "h_max": round(float(grid.max()), 1),
+            }
+
         obs_mask = np.array([st["has_obs"] for st in stations_with_data])
         fc_mask  = np.array([st["has_fc"]  for st in stations_with_data])
         obs_vals = np.array([
@@ -362,47 +407,33 @@ def main() -> None:
         if temp_grid_forecast is None:
             log.warning(f"Solo {int(fc_mask.sum())} stazioni con forecast valido (< 2) — temp_grid_forecast non incluso")
 
-        # ── Umidità (resta solo forecast, nessun "osservato" per ora) ────────
-        hum_mask = fc_mask & np.array([
-            (st.get("forecast") or {}).get("humidity") is not None
+        # ── Umidità: due griglie (osservata + forecast), stesso pattern della temperatura
+        hum_obs_mask = np.array([
+            st["has_obs"] and (st.get("observation") or {}).get("humidity") is not None
             for st in stations_with_data
         ])
-        if hum_mask.sum() >= 2:
-            hum_values = np.array([
-                st["forecast"]["humidity"]
-                for st, m in zip(stations_with_data, hum_mask) if m
-            ])
-            if era5_data:
-                era5_hum_at_st  = era5_hum_flat[n_bg:][hum_mask]
-                hum_corr        = hum_values - era5_hum_at_st
-                era5_hum_coarse = era5_hum_flat[:n_bg].reshape(N_BG_LAT, N_BG_LON)
-                era5_hum_fine   = bilinear_to_fine(
-                    era5_hum_coarse, bg_lats, bg_lons, fine_lats, fine_lons
-                )
-                hum_corr_grid = compute_idw_grid(
-                    np.array(list(zip(np.array(st_lats)[hum_mask], np.array(st_lons)[hum_mask]))), hum_corr,
-                    LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
-                )
-                hum_grid = np.clip(era5_hum_fine + hum_corr_grid, 0, 100)
-            else:
-                hum_grid = np.clip(
-                    compute_idw_grid(
-                        np.array(list(zip(np.array(st_lats)[hum_mask], np.array(st_lons)[hum_mask]))), hum_values,
-                        LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY,
-                    ),
-                    0, 100,
-                )
-            humidity_grid_data = {
-                "lat_min": LAT_MIN, "lat_max": LAT_MAX,
-                "lon_min": LON_MIN, "lon_max": LON_MAX,
-                "nx": NX, "ny": NY,
-                "values": [round(v, 1) for v in hum_grid.flatten().tolist()],
-                "h_min": round(float(hum_grid.min()), 1),
-                "h_max": round(float(hum_grid.max()), 1),
-            }
-        else:
-            log.warning(f"Solo {int(hum_mask.sum())} stazioni valide per umidità (< 2) — humidity_grid non incluso")
-            humidity_grid_data = None
+        hum_fc_mask = np.array([
+            st["has_fc"] and (st.get("forecast") or {}).get("humidity") is not None
+            for st in stations_with_data
+        ])
+        hum_obs_vals = np.array([
+            (st.get("observation") or {}).get("humidity") if m else np.nan
+            for st, m in zip(stations_with_data, hum_obs_mask)
+        ], dtype=float)
+        hum_fc_vals = np.array([
+            (st.get("forecast") or {}).get("humidity") if m else np.nan
+            for st, m in zip(stations_with_data, hum_fc_mask)
+        ], dtype=float)
+
+        humidity_grid_observed = _build_hum_grid(hum_obs_mask, hum_obs_vals)
+        humidity_grid_forecast = _build_hum_grid(hum_fc_mask, hum_fc_vals)
+
+        if humidity_grid_observed is None:
+            log.warning(f"Solo {int(hum_obs_mask.sum())} stazioni con umidità osservata (< 2) — humidity_grid_observed non incluso")
+        if humidity_grid_forecast is None:
+            log.warning(f"Solo {int(hum_fc_mask.sum())} stazioni con umidità prevista (< 2) — humidity_grid_forecast non incluso")
+
+        log.info(f"  Umidità: {int(hum_obs_mask.sum())} stazioni osservate, {int(hum_fc_mask.sum())} previste")
 
         # ── 9. Griglia wind_speed (ERA5 background + IDW correzioni) ────────────
         wind_mask = fc_mask & np.array([
@@ -450,13 +481,15 @@ def main() -> None:
             wind_speed_grid_data = None
     else:
         log.warning(f"Solo {len(stations_with_data)} stazioni con dati validi (< 2) — temp_grid non incluso")
-        humidity_grid_data = None
+        humidity_grid_observed = None
+        humidity_grid_forecast = None
         wind_speed_grid_data = None
 
     log.info("Calcolo latest.json...")
     latest = build_latest_json(
         stations, forecasts, observations,
-        temp_grid_observed, temp_grid_forecast, humidity_grid_data,
+        temp_grid_observed, temp_grid_forecast,
+        humidity_grid_forecast, humidity_grid_observed,
         wind_speed_grid_data,
     )
     latest_path = DOCS_DATA / "latest.json"
