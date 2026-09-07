@@ -105,13 +105,59 @@
     return [mid - minSpan / 2, mid + minSpan / 2];
   }
 
+  // Bulbo umido termodinamico — Stull (2011).
+  // Valida per T in [-20, 50]°C e RH in [5, 99]%; accuratezza tipica ±0.3°C.
+  // RH viene clampata al dominio: a saturazione il bulbo umido tende a T,
+  // quindi il clamp a 99 introduce un errore trascurabile ed evita buchi in mappa.
+  // Assume pressione al livello del mare — errore di qualche decimo di grado alle
+  // quote del Lazio, trascurabile.
+  function wetBulbStull(tempC, rhPct) {
+    const t  = tempC;
+    const rh = Math.min(99, Math.max(5, rhPct));
+    return t * Math.atan(0.151977 * Math.sqrt(rh + 8.313659))
+         + Math.atan(t + rh)
+         - Math.atan(rh - 1.676331)
+         + 0.00391838 * Math.pow(rh, 1.5) * Math.atan(0.023101 * rh)
+         - 4.686035;
+  }
+
+  // Temperatura apparente: Humidex al caldo, Wind Chill al freddo, T reale in mezzo.
+  // - T >= 20°C  → Humidex (Environment Canada)
+  // - T <= 10°C e vento > 4.8 km/h → Wind Chill (NWS/EC 2001)
+  // - altrimenti → temperatura reale (nessuna delle due formule è valida)
+  // L'Humidex da solo degenera al freddo (0.5555·(e−10) negativo sotto ~10 hPa di
+  // pressione di vapore): non è un effetto fisiologico, per questo i tre rami.
+  function apparentTemp(tempC, rhPct, windKmh) {
+    if (tempC >= 20) {
+      const es = 6.112 * Math.exp(17.62 * tempC / (243.12 + tempC));
+      const e  = es * Math.min(100, Math.max(0, rhPct)) / 100;
+      return tempC + 0.5555 * (e - 10);
+    }
+    if (tempC <= 10 && windKmh != null && windKmh > 4.8) {
+      const v = Math.pow(windKmh, 0.16);
+      return 13.12 + 0.6215 * tempC - 11.37 * v + 0.3965 * tempC * v;
+    }
+    return tempC;
+  }
+
   function renderTemperature(latest, time) {
+    if (tempMode === 'apparent') {
+      const ag = time === 'forecast' ? apparentGridFc : apparentGridObs;
+      if (!ag) return null;
+      return renderGridLayer(ag, globalAMin, globalAMax, TEMP_PALETTE, 127);
+    }
     const tg = time === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
     if (!tg || !tg.values || tg.values.length === 0) return null;
     return renderGridLayer(tg, globalTMin, globalTMax, TEMP_PALETTE, 127);
   }
 
   function renderHumidity(latest, time) {
+    if (humMode === 'wetbulb') {
+      const wg = time === 'forecast' ? wetBulbGridFc : wetBulbGridObs;
+      if (!wg) return null;
+      // Palette temperatura: il bulbo umido è una temperatura, non una percentuale
+      return renderGridLayer(wg, globalWMin, globalWMax, TEMP_PALETTE, 149);
+    }
     const hg = time === 'forecast' ? latest.humidity_grid_forecast : latest.humidity_grid_observed;
     if (!hg || !hg.values || hg.values.length === 0) return null;
     return renderGridLayer(hg, globalHMin, globalHMax, HUM_PALETTE, 149);
@@ -135,6 +181,8 @@
   // Stato layer attivo
   let activeLayer = 'temperature';
   let activeTime = 'observed';  // 'observed' | 'forecast'
+  let tempMode = 'real';  // 'real' | 'apparent'  — solo tab Temperatura
+  let humMode  = 'real';  // 'real' | 'wetbulb'   — solo tab Umidità
 
   // Range temperatura unificato tra le due griglie (Adesso e +1h)
   let globalTMin = 0;
@@ -142,6 +190,11 @@
   // Range umidità unificato tra le due griglie (osservata e prevista)
   let globalHMin = 0;
   let globalHMax = 100;
+  // Griglie derivate (percepita, bulbo umido) — calcolate una volta post-fetch
+  let apparentGridObs  = null, apparentGridFc  = null;
+  let wetBulbGridObs   = null, wetBulbGridFc   = null;
+  let globalAMin = 0, globalAMax = 40;
+  let globalWMin = 0, globalWMax = 30;
   let heatOverlay = null;
 
   const MICROCLIMA_COLORS = {
@@ -542,6 +595,49 @@
         globalHMax = HUM_SCALE_MAX;
       }
 
+      // ── Griglie derivate (percepita, bulbo umido) — calcolate una volta sola ──
+      // Stesse dimensioni delle griglie sorgente; nessuna interpolazione aggiuntiva:
+      // T e RH sono già interpolate separatamente, le derivate si calcolano per cella.
+      function buildDerivedGrid(tGrid, hGrid, wGrid, fn) {
+        if (!tGrid?.values || !hGrid?.values) return null;
+        if (tGrid.values.length !== hGrid.values.length) {
+          console.warn('Griglie T e RH di dimensioni diverse — derivata non calcolabile');
+          return null;
+        }
+        const n = tGrid.values.length;
+        const w = (wGrid?.values && wGrid.values.length === n) ? wGrid.values : null;
+        const out = new Array(n);
+        let vMin = Infinity, vMax = -Infinity;
+        for (let i = 0; i < n; i++) {
+          const v = fn(tGrid.values[i], hGrid.values[i], w ? w[i] : null);
+          out[i] = v;
+          if (v < vMin) vMin = v;
+          if (v > vMax) vMax = v;
+        }
+        return {
+          lat_min: tGrid.lat_min, lat_max: tGrid.lat_max,
+          lon_min: tGrid.lon_min, lon_max: tGrid.lon_max,
+          nx: tGrid.nx, ny: tGrid.ny,
+          values: out,
+          v_min: Math.round(vMin * 10) / 10,
+          v_max: Math.round(vMax * 10) / 10,
+        };
+      }
+      console.time('derived');
+      const wsGrid = latest.wind_speed_grid;
+      apparentGridObs = buildDerivedGrid(tgObs, hgObs, wsGrid, apparentTemp);
+      apparentGridFc  = buildDerivedGrid(tgFc,  hgFc,  wsGrid, apparentTemp);
+      wetBulbGridObs  = buildDerivedGrid(tgObs, hgObs, null, (t, h) => wetBulbStull(t, h));
+      wetBulbGridFc   = buildDerivedGrid(tgFc,  hgFc,  null, (t, h) => wetBulbStull(t, h));
+      console.timeEnd('derived');
+      // Range unificati tra Adesso e +1h, stesso pattern di globalTMin/globalTMax
+      globalAMin = Math.min(apparentGridObs?.v_min ?? Infinity,  apparentGridFc?.v_min ?? Infinity);
+      globalAMax = Math.max(apparentGridObs?.v_max ?? -Infinity, apparentGridFc?.v_max ?? -Infinity);
+      if (!isFinite(globalAMin) || !isFinite(globalAMax)) { globalAMin = 0; globalAMax = 40; }
+      globalWMin = Math.min(wetBulbGridObs?.v_min ?? Infinity,  wetBulbGridFc?.v_min ?? Infinity);
+      globalWMax = Math.max(wetBulbGridObs?.v_max ?? -Infinity, wetBulbGridFc?.v_max ?? -Infinity);
+      if (!isFinite(globalWMin) || !isFinite(globalWMax)) { globalWMin = 0; globalWMax = 30; }
+
       // Il ramo `else` sotto è il pannello legacy, invariato, per qualunque visita da browser
       // normale; il ramo `if (isPWA)` costruisce brand lockup/rail/popover.
       const firstFc = (latest.stations || []).find(s => s.forecast?.valid_for);
@@ -619,6 +715,21 @@
           `<button id="btn-plus1">+1h</button>`;
         document.body.appendChild(timeToggle);
 
+        // ─── Pillole modalità (sotto la pillola tempo) — mutuamente esclusive per tab ───
+        const tempModeToggle = L.DomUtil.create('div');
+        tempModeToggle.id = 'tempmode-toggle';
+        tempModeToggle.innerHTML =
+          `<button id="btn-treal" class="active">Reale</button>` +
+          `<button id="btn-tapp">Percepita</button>`;
+        document.body.appendChild(tempModeToggle);
+
+        const humModeToggle = L.DomUtil.create('div');
+        humModeToggle.id = 'hummode-toggle';
+        humModeToggle.innerHTML =
+          `<button id="btn-hreal" class="active">Reale</button>` +
+          `<button id="btn-hwb">Bulbo umido</button>`;
+        document.body.appendChild(humModeToggle);
+
         // ─── Rail layer (bottom-center) ───
         const rail = L.DomUtil.create('div');
         rail.id = 'layer-rail';
@@ -661,6 +772,14 @@
           `<button id="btn-hum">💧 Umidità</button>` +
           `<button id="btn-radar">🌧️ Radar</button>` +
           `</div>` +
+          `<div class="layer-toggle" id="tempmode-toggle">` +
+          `<button id="btn-treal" class="active">Reale</button>` +
+          `<button id="btn-tapp">Percepita</button>` +
+          `</div>` +
+          `<div class="layer-toggle" id="hummode-toggle">` +
+          `<button id="btn-hreal" class="active">Reale</button>` +
+          `<button id="btn-hwb">Bulbo umido</button>` +
+          `</div>` +
           `<div class="layer-toggle" id="time-toggle">` +
           `<button id="btn-now" class="active">Adesso</button>` +
           `<button id="btn-plus1">+1h</button>` +
@@ -685,12 +804,17 @@
         const unitLabel = unit.trim();
         const titles = {
           temperature: `Temperatura (${unitLabel})`,
+          apparent:    `Percepita (${unitLabel})`,
+          wetbulb:     `Bulbo umido (${unitLabel})`,
           humidity:    `Umidità (${unitLabel})`,
           wind:        `Velocità vento (${unitLabel})`,
           radar:       `Intensità precipitazione (${unitLabel})`,
         };
+        const tempGradient = 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)';
         const gradients = {
-          temperature: 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)',
+          temperature: tempGradient,
+          apparent:    tempGradient,
+          wetbulb:     tempGradient,
           humidity:    'linear-gradient(to right, #d96f27, #fee080, #b0e090, #317ec8, #08306b)',
           wind:        'linear-gradient(to right, #003399, #0099ff, #00cc66, #ffdd00, #ff6600, #cc0000)',
           radar:       'linear-gradient(to right, #6ec6e0 0%, #4caf50 25%, #ffd54f 50%, #ff7043 75%, #b71c1c 100%)',
@@ -717,12 +841,25 @@
           const pos = ((v - vMin) / (vMax - vMin)) * 100;
           const span = document.createElement('span');
           span.className = 'legend-tick';
-          const decimals = layer === 'temperature' ? 1 : 0;
+          const decimals = (layer === 'temperature' || layer === 'apparent' || layer === 'wetbulb') ? 1 : 0;
           const showUnit = !isPWA || i === ticks.length - 1;
           span.textContent = v.toFixed(decimals) + (showUnit ? unit : '');
           span.style.left = pos + '%';
           labelsEl.appendChild(span);
         });
+      }
+
+      // Badge centrale "Dati assenti" — mostrato quando una griglia derivata non è
+      // calcolabile (griglie sorgente mancanti) e la mappa resterebbe senza overlay.
+      function setNoDataOverlay(visible) {
+        let el = document.getElementById('nodata-overlay');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'nodata-overlay';
+          el.textContent = 'Dati assenti';
+          document.body.appendChild(el);
+        }
+        el.style.display = visible ? 'block' : 'none';
       }
 
       // Stato popover preferenze — solo PWA, il pannello legacy non ha un concetto di
@@ -772,6 +909,10 @@
         document.getElementById('btn-radar').classList.toggle('active', layer === 'radar');
         document.getElementById('time-toggle').style.display =
           (layer === 'temperature' || layer === 'humidity') ? 'flex' : 'none';
+        document.getElementById('tempmode-toggle').style.display =
+          layer === 'temperature' ? 'flex' : 'none';
+        document.getElementById('hummode-toggle').style.display =
+          layer === 'humidity' ? 'flex' : 'none';
 
         const windToggle    = document.getElementById('wind-toggle');
         const arrowToggle   = document.getElementById('arrow-toggle');
@@ -838,14 +979,17 @@
           }
           if (layer === 'temperature') {
             heatOverlay = renderTemperature(latest, activeTime);
-            updateLegend('temperature', globalTMin, globalTMax, '°C');
+            if (tempMode === 'apparent') updateLegend('apparent', globalAMin, globalAMax, '°C');
+            else                         updateLegend('temperature', globalTMin, globalTMax, '°C');
           } else {
             heatOverlay = renderHumidity(latest, activeTime);
-            updateLegend('humidity', globalHMin, globalHMax, '%');
+            if (humMode === 'wetbulb') updateLegend('wetbulb', globalWMin, globalWMax, '°C');
+            else                       updateLegend('humidity', globalHMin, globalHMax, '%');
           }
         }
 
         if (heatOverlay) heatOverlay.addTo(map);
+        setNoDataOverlay(!heatOverlay && layer !== 'radar');
       }
 
       function switchTime(time) {
@@ -865,12 +1009,29 @@
         if (activeLayer === 'temperature' || activeLayer === 'humidity') switchLayer(activeLayer);
       }
 
+      function switchTempMode(mode) {
+        tempMode = mode;
+        document.getElementById('btn-treal').classList.toggle('active', mode === 'real');
+        document.getElementById('btn-tapp').classList.toggle('active', mode === 'apparent');
+        if (activeLayer === 'temperature') switchLayer('temperature');
+      }
+      function switchHumMode(mode) {
+        humMode = mode;
+        document.getElementById('btn-hreal').classList.toggle('active', mode === 'real');
+        document.getElementById('btn-hwb').classList.toggle('active', mode === 'wetbulb');
+        if (activeLayer === 'humidity') switchLayer('humidity');
+      }
+
       document.getElementById('btn-wind').addEventListener('click', () => switchLayer('wind'));
       document.getElementById('btn-temp').addEventListener('click', () => switchLayer('temperature'));
       document.getElementById('btn-hum').addEventListener('click', () => switchLayer('humidity'));
       document.getElementById('btn-radar').addEventListener('click', () => switchLayer('radar'));
       document.getElementById('btn-now').addEventListener('click', () => switchTime('observed'));
       document.getElementById('btn-plus1').addEventListener('click', () => switchTime('forecast'));
+      document.getElementById('btn-treal').addEventListener('click', () => switchTempMode('real'));
+      document.getElementById('btn-tapp').addEventListener('click',  () => switchTempMode('apparent'));
+      document.getElementById('btn-hreal').addEventListener('click', () => switchHumMode('real'));
+      document.getElementById('btn-hwb').addEventListener('click',   () => switchHumMode('wetbulb'));
 
       if (isPWA) {
         document.getElementById('prefs-btn')?.addEventListener('click', () => {
@@ -956,13 +1117,27 @@
           ? latest.humidity_grid_forecast : latest.humidity_grid_observed;
         const hum = hgActive ? lookupGrid(lat, lng, hgActive) : null;
 
+        // Derivati puntuali: letti da lookupGrid sulle griglie derivate (non ricalcolati
+        // dalla formula) così il popup resta coerente al pixel con la heatmap.
+        const agActive = activeTime === 'forecast' ? apparentGridFc : apparentGridObs;
+        const wgActive = activeTime === 'forecast' ? wetBulbGridFc  : wetBulbGridObs;
+        const tApp = agActive ? lookupGrid(lat, lng, agActive) : null;
+        const tWb  = wgActive ? lookupGrid(lat, lng, wgActive) : null;
+
         const cardinal = degreesToCardinal(dir);
         const wName    = windName(dir);
 
         function buildContent(localita) {
+          const tStr = temp !== null ? temp.toFixed(1) + '°C' : 'n/d';
+          let tempLine = `🌡️ <b>${tStr}</b>`;
+          if (activeLayer === 'temperature' && tApp !== null) {
+            tempLine += ` <span style="opacity:.75">· perc. <b>${tApp.toFixed(1)}°C</b></span>`;
+          } else if (activeLayer === 'humidity' && tWb !== null) {
+            tempLine += ` <span style="opacity:.75">· 💦 <b>${tWb.toFixed(1)}°C</b></span>`;
+          }
           return (
             `<b>${localita}</b><br>` +
-            `🌡️ <b>${temp !== null ? temp.toFixed(1) + '°C' : 'n/d'}</b><br>` +
+            tempLine + `<br>` +
             `💨 <b>${formatWind(speed)}</b> — ${cardinal}<br>` +
             `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` +
             `💧 Umidità: <b>${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>`
