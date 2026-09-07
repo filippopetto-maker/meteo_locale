@@ -6,7 +6,13 @@
   <title>Meteo Roma</title>
   <link rel="manifest" href="./manifest.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- FASE A (set 2026) — bug barra nera PWA: 'black-translucent' faceva ancorare il
+       contenuto a y=0 ma dimensionava il layout viewport a screen.height - 47pt (status
+       bar), lasciando 47pt neri in fondo al cold boot. Con 'black' il contenuto parte
+       sotto la status bar e il viewport 797 combacia. NOTA: iOS legge questo meta SOLO
+       al momento dell'"Aggiungi a Home", non ai boot successivi — dopo il deploy va
+       reinstallata l'icona. Se si torna a 'black-translucent', vedi FASE B nel brief. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Metek">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <meta name="theme-color" content="#0e1119">
@@ -451,7 +457,11 @@
            position:fixed; inset:0 (vedi sopra), riempiono il layout viewport reale senza
            mai passare da un'altezza calcolata. Vale identico in PWA e in browser, quindi
            non serve più una regola .is-pwa dedicata. env(safe-area-inset-*) resta usato
-           altrove per il padding dei controlli: quello era ed è corretto. ─── */
+           altrove per il padding dei controlli: quello era ed è corretto.
+
+           AGGIORNAMENTO set 2026: lo scarto di 47px NON era un valore da correggere
+           lato pagina — era iOS che dimensionava il viewport come opaco pur ancorando
+           il contenuto come translucent. Vedi meta status-bar-style in <head>. ─── */
 
     /* ─── Brand lockup (top-left) ─── */
     .is-pwa #brand-lockup {
