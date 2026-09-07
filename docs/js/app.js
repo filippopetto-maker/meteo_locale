@@ -1131,9 +1131,9 @@
           const tStr = temp !== null ? temp.toFixed(1) + '°C' : 'n/d';
           let tempLine = `🌡️ <b>${tStr}</b>`;
           if (activeLayer === 'temperature' && tApp !== null) {
-            tempLine += ` <span style="opacity:.75">· perc. <b>${tApp.toFixed(1)}°C</b></span>`;
+            tempLine += ` · perc. <b>${tApp.toFixed(1)}°C</b>`;
           } else if (activeLayer === 'humidity' && tWb !== null) {
-            tempLine += ` <span style="opacity:.75">· 💦 <b>${tWb.toFixed(1)}°C</b></span>`;
+            tempLine += ` · 💦 <b>${tWb.toFixed(1)}°C</b>`;
           }
           return (
             `<b>${localita}</b><br>` +
