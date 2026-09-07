@@ -9,9 +9,12 @@
   <!-- FASE A (set 2026) — bug barra nera PWA: 'black-translucent' faceva ancorare il
        contenuto a y=0 ma dimensionava il layout viewport a screen.height - 47pt (status
        bar), lasciando 47pt neri in fondo al cold boot. Con 'black' il contenuto parte
-       sotto la status bar e il viewport 797 combacia. NOTA: iOS legge questo meta SOLO
-       al momento dell'"Aggiungi a Home", non ai boot successivi — dopo il deploy va
-       reinstallata l'icona. Se si torna a 'black-translucent', vedi FASE B nel brief. -->
+       sotto la status bar e il viewport 797 combacia. CONFERMATO su iPhone 12 il 7 set
+       2026: buco in fondo sparito; badge diag riporta innerHeight/mapRectBottom = 797
+       (= 844 - 47), ora ancorati a y=47 quindi senza gap. Soluzione definitiva.
+       NOTA: iOS legge questo meta SOLO al momento dell'"Aggiungi a Home", non ai boot
+       successivi — dopo il deploy va reinstallata l'icona. Se un domani si torna a
+       'black-translucent', vedi FASE B nel brief (altezza forzata da screen.height). -->
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Metek">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">

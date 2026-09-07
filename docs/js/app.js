@@ -392,8 +392,9 @@
     // Diagnostica bug barra nera PWA — badge on-demand.
     // Attivazione: 5 tap rapidi sul logo "Metek" (gesto permanente, innocuo perché
     // richiede un'azione esplicita — wiring più sotto, dopo la creazione di #brand-lockup).
-    // ⚠️ TEMPORANEA: la chiamata automatica su isPWA qui sotto va RIMOSSA nel prossimo
-    // commit, dopo aver ottenuto lo screenshot (stesso errore del round 6 da non ripetere).
+    // L'attivazione automatica su isPWA usata per il test della FASE A è stata rimossa
+    // (7 set 2026) dopo aver raccolto i numeri: con status-bar-style 'black' il viewport
+    // resta 797 su iPhone 12 ma è ancorato a y=47, quindi 47+797=844 e nessun buco in fondo.
     function runDiagBadge() {
       const mapRect = document.getElementById('map').getBoundingClientRect();
       const htmlRect = document.documentElement.getBoundingClientRect();
@@ -417,11 +418,6 @@
         'padding:4px 6px; border-radius:4px; max-width:96vw; white-space:pre-wrap;';
       badge.textContent = JSON.stringify(info, null, 0);
       document.body.appendChild(badge);
-    }
-
-    // ⚠️ TEMPORANEA — rimuovere nel prossimo commit dopo lo screenshot (round 6 lesson).
-    if (document.documentElement.classList.contains('is-pwa')) {
-      runDiagBadge();
     }
 
     L.tileLayer('https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=cb1_2z1t_1_543dbd31737c2140d7d3e4bd', {
