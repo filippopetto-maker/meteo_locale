@@ -275,14 +275,6 @@ Esecuzione a breve termine, fase per fase: cosa è completato, cosa è in corso,
 7. [x] **Dashboard GitHub Pages (Chart.js)** — `docs/dashboard.html` + `dashboard_data.json` (serie forecast/observed 7gg, MAE globale e per stazione). Generata da `export_static.py --dashboard-only`, workflow dedicato `export-dashboard.yml` (trigger 8:00/20:00). Sostituisce la dashboard Streamlit. Dettagli tecnici → sezione *I moduli*, `docs/dashboard.html`
 8. [ ] API REST FastAPI — rimandato, sostituito da static JSON su GH Pages; resta opzionale in futuro per query dinamiche (storico per stazione, confronto date; ipotesi deploy su Render)
 
-Il piano di lungo periodo (previsioni 48h, retraining di dicembre 2026, generalizzazione multi-località, convettività) è nella sezione **Roadmap estesa — Fasi 4–7** più sotto. Prima, le operazioni concrete in sospeso sulla mappa/UI (sezione seguente).
-
----
-
-## 🔧 Operazioni da svolgere
-
-Task concreti sulla mappa/UI, più vicini nel tempo e più piccoli in scope rispetto alle Fasi 4–7 — non toccano pipeline dati o modello.
-
 ### 🌡️💧 Umidità osservata, temperatura percepita e bulbo umido — settembre 2026
 
 Estensione del layer Umidità alla parità funzionale con Temperatura, seguita da due grandezze derivate — nessuna modifica al training o ai modelli, solo pipeline di export e frontend.
@@ -321,6 +313,14 @@ RH clampata a [5, 99] (dominio di validità della formula) prima del calcolo, si
 - Stull assume pressione al livello del mare — errore di qualche decimo di grado alle quote del Lazio (stazioni `alta_quota`, già in cold-start)
 
 **Verificato prima del deploy:** su dati reali del 7 settembre (55.000 celle), Humidex 28,8-43,1°C contro T 22,9-29,7°C (sale con l'afa, atteso), bulbo umido 19,5-27,4°C (sta sotto, atteso) — le due grandezze si muovono in direzioni opposte, a conferma che tenerle in sezioni separate era la scelta corretta.
+
+Il piano di lungo periodo (previsioni 48h, retraining di dicembre 2026, generalizzazione multi-località, convettività) è nella sezione **Roadmap estesa — Fasi 4–7** più sotto. Prima, le operazioni concrete in sospeso sulla mappa/UI (sezione seguente).
+
+---
+
+## 🔧 Operazioni da svolgere
+
+Task concreti sulla mappa/UI, più vicini nel tempo e più piccoli in scope rispetto alle Fasi 4–7 — non toccano pipeline dati o modello.
 
 | # | Task | Stato | Dettagli |
 |:--|:-----|:------|:---------|
