@@ -1,10 +1,10 @@
 {
-  "fetched_at": "2026-09-17T09:38:23.864651+00:00",
+  "fetched_at": "2026-09-17T14:08:24.418254+00:00",
   "values": {
-    "Civitavecchia": 27.4,
-    "Fiumicino": 27.1,
-    "Anzio": 26.5,
+    "Civitavecchia": 26.7,
+    "Fiumicino": 26.5,
+    "Anzio": 26.4,
     "Sabaudia": 27.0,
-    "Gaeta": 26.7
+    "Gaeta": 26.6
   }
 }
