@@ -359,7 +359,7 @@ Due conseguenze che cambiano il piano:
   sulla serie che riceve, e in inference quella serie è la catena NWP (passato +
   futuro nella stessa tabella). Il refactor "features.py in due modalità" riguarda
   quindi il *training* di dicembre — dove i lag stanno su ERA5 e vanno spostati
-  sulla catena del run archiviato — non l'inference. Spostato in Fase 5.
+  sulla catena del run archiviato — non l'inference. Vedi *Preparazione al retraining*, R3.
 - **Il modello non è vincolato al presente.** `predict_station()` restituisce una
   riga sola perché prende `eligible.iloc[[-1]]`, l'ultima riga ≤ adesso: le ~47 righe
   future scaricate sono input mai interrogato, non previsioni scartate. Il contratto
@@ -378,10 +378,11 @@ la correzione microclimatica viene applicata correttamente, l'errore NWP passa
 intatto. Non può correggere un errore di cui ignora l'esistenza. Criterio di successo
 dichiarato: **battere l'NWP grezzo a ogni lead**, non raggiungere un MAE assoluto.
 
-**Decisioni di schema (da prendere prima di scrivere codice):**
+**Decisioni di schema:**
 
-1. **`lead_hours` in `forecasts`.** Oggi il vincolo è `UNIQUE (station_id, valid_for)`
-   e `db.insert_forecast` fa upsert su quella chiave: scrivendo 48 lead per run, ogni
+1. **`lead_hours` in `forecasts`** — ✅ applicata il 23/09/2026. Prima della migrazione
+   il vincolo era `UNIQUE (station_id, valid_for)`
+   e `db.insert_forecast` faceva upsert su quella chiave: scrivendo 48 lead per run, ogni
    run sovrascrive il precedente sullo stesso `valid_for` e la dimensione lead sparisce
    per sempre — con essa la curva MAE vs lead, irrecuperabile a posteriori. Serve
    colonna `lead_hours SMALLINT`, backfill a 1 sulle righe esistenti, vincolo
@@ -402,26 +403,123 @@ dichiarato: **battere l'NWP grezzo a ogni lead**, non raggiungere un MAE assolut
    `datetime.now().month`: su una serie di 48h a cavallo di fine mese applica il bias
    del mese sbagliato alle ultime ore.
 
+**Stato del DB al 23/09/2026 (tre migrazioni Supabase, in ordine):**
+
+- `forecasts_add_lead_hours` — colonna `lead_hours SMALLINT NOT NULL DEFAULT 1` (le
+  76.186 righe esistenti → 1), vincolo `UNIQUE (station_id, valid_for, lead_hours)`.
+  Rimossi i due vincoli precedenti: `(station_id, valid_for)` e un
+  `(station_id, valid_for, model_version)` mai documentato, scoperto leggendo lo schema live
+- `model_metrics_align_to_training_code` — fix del bug per cui nessuna metrica di
+  training è mai stata salvata (vedi *Diario degli errori*)
+- `forecasts_bridge_legacy_unique` — **ponte temporaneo**: ripristina
+  `UNIQUE (station_id, valid_for)` accanto al nuovo, per non interrompere la produzione
+  nell'intervallo tra migrazione e deploy del fix di `db.py`. Oggi non serve più (il fix
+  è su main) ma è innocuo finché si scrive solo lead 1. **Va rimosso prima della prima
+  riga con lead > 1** (punto 3 sotto), altrimenti blocca tutti i lead successivi
+
 **Piano operativo Fase 4a:**
 
-1. [ ] SQL su Supabase: `ALTER TABLE forecasts ADD COLUMN lead_hours` + backfill a 1 +
-   sostituzione del vincolo UNIQUE
-2. [ ] `db.py`: `insert_forecast(lead_hours=…)` con nuovo `on_conflict`, più una
-   versione batch (una chiamata REST per stazione, non 48)
-3. [ ] `model/inference.py`: `predict_series(station, leads)` a N righe, flag
+1. [x] SQL su Supabase: `lead_hours` + backfill a 1 + sostituzione del vincolo UNIQUE
+   (23/09/2026)
+2. [x] `db.py`: `insert_forecast(lead_hours=1)` con `on_conflict` a tre colonne
+   (commit `81f0c832`, 23/09/2026)
+   - [ ] resta: versione batch (una chiamata REST per stazione, non 48)
+3. [ ] `DROP CONSTRAINT forecasts_station_valid_unique` (il ponte) — dopo il punto 2,
+   prima del punto 4 in produzione
+4. [ ] `model/inference.py`: `predict_series(station, leads)` a N righe, flag
    `--max-lead` / `--leads`; default invariato a lead singolo per non toccare il
-   workflow esistente
-4. [ ] `scripts/export_static.py`: `.eq("lead_hours", 1)` in `fetch_latest_forecasts()`
-   e `fetch_dashboard_series()` — **stesso commit del punto 3**. Senza, la query
+   workflow esistente. Nello stesso passaggio: `forecast_days=4` con taglio a 48 righe,
+   bias ARSIAL indicizzato sul mese di `valid_for`
+5. [ ] `scripts/export_static.py`: `.eq("lead_hours", 1)` in `fetch_latest_forecasts()`
+   e `fetch_dashboard_series()` — **stesso commit del punto 4**. Senza, la query
    `.order("forecast_at").limit(1)` restituisce un lead arbitrario e la mappa "+1h" può
    mostrare la previsione a +37h senza errori né log
-5. [ ] `docs/data/forecast_48h.json` (per stazione: 48 × valid_for, T, RH, vento) +
-   workflow dedicato `inference-48h.yml`, trigger esterno cron-job.org. `latest.json`
-   non si tocca: rischio zero sulla mappa live
-6. [ ] Verificare su Historical Forecast API quali variabili e che profondità d'archivio
-   sono disponibili per Roma — condiziona lo schema della tabella di training di dicembre
-7. [ ] Stimare la dimensione della tabella di training multi-lead (archivio × lead ×
-   stazioni ≫ 331k righe attuali) e verificare che il training resti fattibile sul Mac
+6. [ ] `docs/data/forecast_48h.json` (per stazione: 48 × valid_for, T, RH, vento) +
+   workflow dedicato `inference-48h.yml` (ogni 3h, cron-job.org, lead salvati in DB:
+   {1, 3, 6, 12, 24, 36, 48}). `latest.json` non si tocca: rischio zero sulla mappa live
+7. [ ] Curva MAE per lead: estendere `forecast_vs_observed` con `lead_hours` e renderla
+   interrogabile per finestre (oggi un `count(*)` sull'intera view va in timeout)
+8. [x] ~~Verificare su Historical Forecast API variabili e profondità d'archivio~~ —
+   risolto il 23/09/2026 con esito diverso dal previsto: vedi *Preparazione al
+   retraining*, decisione A
+
+#### 🎯 Preparazione al retraining
+
+Tutto ciò che va pronto **prima** di dicembre perché il retraining sia un'esecuzione e
+non un cantiere. Il retraining (Fase 5) consuma questi risultati; qui si costruiscono.
+L'ordine conta: la decisione A condiziona R2–R4.
+
+**La scoperta del 23/09/2026 — la fonte prevista non esiste nella forma prevista.**
+Le versioni precedenti del piano indicavano la *Historical Forecast API* di Open-Meteo
+come archivio di "cosa il modello NWP prevedeva per quell'ora con quel lead time". Non
+lo è. Dalla documentazione: *"Each run's first few hours are stitched into a continuous
+hourly timeseries"*. Cuce le prime ore di ogni run: è una quasi-analisi a lead ≈ 0,
+concettualmente una seconda ERA5. Ottima per le variabili (CAPE, lifted index, CIN,
+shortwave, cloud cover su 4 livelli, pressione), inutile per imparare come cresce
+l'errore NWP col lead.
+
+Le fonti che conservano davvero il lead time:
+
+| Fonte | Storico | Lead | Pro | Contro |
+|:--|:--|:--|:--|:--|
+| Open-Meteo **Single Runs API**, GFS/ICON | da apr 2026 (~8 mesi a dicembre) | orario esatto, parametro `&run=` | REST/JSON, stesso fornitore dell'inference | nessun ciclo stagionale completo, niente inverno |
+| Open-Meteo **Single Runs API**, ECMWF IFS HRES 9 km | da 14 mar 2024 | orario, orizzonte 15 giorni | archivio vero, modello di qualità | obbliga ad allineare `&models=` anche in inference |
+| Open-Meteo **Previous Runs API** | da gen 2024 (GFS da mar 2021) | solo step di 24h (`_previous_day1`…`7`) | profondità discreta | granularità insufficiente per lead 1–23h |
+| **NCAR/UCAR RDA** — GFS 0.25° | dal 15 gen 2015 | tutti gli step, 3h da 0 a 240h | 11 anni, gratis, nessuna registrazione, CC-BY 4.0 | GRIB2 da scaricare e interpolare sul punto; aggiornamento dell'archivio fermato nel 2026 |
+| **Google Earth Engine** — `NOAA/GFS0P25` | dal 1 lug 2015 | 1h fino a 120h, poi 3h; ogni immagine ha `creation_time` + `forecast_hours` | 11 anni, lead orario, query per punto via API | account Earth Engine (gratis per uso non commerciale), nuova dipendenza |
+
+Scartate: DWD opendata (ICON) e NOMADS tengono solo una finestra rotante di run
+recenti; il bucket AWS `noaa-gfs-bdp-pds` è gratuito ma la profondità non è verificata.
+Strumento utile se si sceglie la via GRIB2: pacchetto Python `herbie-data`.
+
+**Decisioni aperte:**
+
+- **A — Fonte dei dati di training multi-lead.** Le opzioni reali: Single Runs
+  GFS/ICON (poco storico), Single Runs ECMWF (storico dal 2024), retraining in due
+  tempi (interim ora, revisione 2027), GFS da NCAR/Earth Engine (storico dal 2015, più
+  ingegneria). Blocca R2–R4.
+- **A-bis — Stesso modello NWP in training e in inference.** Qualunque sia A,
+  `inference.py` oggi non passa `&models=` e riceve il blend di default di Open-Meteo.
+  Se il training usa un modello specifico e l'inference un altro, si ricrea un mismatch
+  di distribuzione, diverso da quello già documentato.
+- **B — Salvare il valore NWP grezzo in `forecasts`?** Il criterio di successo è
+  "battere l'NWP grezzo a ogni lead", ma oggi la tabella salva solo la temperatura
+  corretta: il confronto non è misurabile. Proposta: colonna `nwp_temperature`, da
+  aggiungere insieme al punto 4 del piano operativo.
+- **C — Granularità dei lead.** Se A ha step di 3h, o si addestra solo sui lead
+  multipli di 3 (e si interpola in inference), o si sceglie una fonte oraria.
+- **D — Colonne storiche di `model_metrics`** (`mae_temperature`, `period_start/end`,
+  `n_samples`...): mai usate. Lasciarle, rimuoverle, o usarle per snapshot periodici
+  del MAE operativo per lead (sovrapposto al punto 7 del piano operativo).
+
+**Operazioni:**
+
+1. [ ] **R1 — Decisione A** (e di conseguenza A-bis, C)
+2. [ ] **R2 — Prototipo di estrazione:** una stazione (Roma Sud, id=3), un mese, dalla
+   fonte scelta. Misura tempi, volume, complessità reale prima di scalare
+3. [ ] **R3 — Tabella di training multi-lead:** input previsto + `lead_hours` + lag
+   calcolati sulla catena del run archiviato, non su ERA5 — refactor
+   `historical.py`/`features.py` in modalità "previsionale". Punto critico anti-leakage:
+   se il training usa lag su osservato o su ERA5, si addestra su informazioni che in
+   produzione non esistono
+4. [ ] **R4 — Stima dimensione:** archivio × lead × stazioni (≫ 331k righe attuali) e
+   verifica che il training resti fattibile sul Mac
+5. [ ] **R5 — Feature per orizzonti lunghi:** l'esperimento T+24h mostra che il feature
+   set T+1h porta il modello a reggersi su persistenza e stagionalità (147 alberi contro
+   643). Ridisegnarle prima del retraining, non durante
+6. [ ] **R6 — Variabili convettive in input:** CAPE, shortwave, copertura nuvolosa
+   multi-livello, eventualmente 500 hPa. Presupposto del target pioggia sì/no (Fase 7)
+7. [ ] **R7 — Nuovi CSV ARSIAL 2026:** download manuale (CIE/SPID), rieseguire
+   `arsial_bias_correction.py`
+8. [ ] **R8 — Protocollo di validazione del correttore RF per orizzonte:** a T+24h
+   peggiorava il val MAE (1.6123 → 1.6331). Definire prima la regola (RF sì/no per
+   fascia di lead), applicarla a dicembre
+9. [ ] **R9 — Verifica `model_metrics`:** un training con insert attivo, controllare
+   che la riga arrivi. Esclude che oltre allo schema ci fosse anche un problema di
+   RLS o credenziali. Senza questo, il confronto pre/post di dicembre torna a mano
+
+Non richiede azioni: i target Netatmo orari si accumulano da soli ogni 30 minuti da
+giugno 2026.
 
 ### 🧪 Esperimento — TimesFM-3 (zero-shot) vs MOS attuale — Roma Sud, T+1h e T+24h
 
@@ -447,7 +545,7 @@ Gap relativo TimesFM-3 vs MOS: **+32% a T+1h, +23% a T+24h** (si restringe con l
 2. **Il correttore RF non è universalmente utile — va validato per orizzonte, non applicato per default.** A T+1h migliora il val MAE; a T+24h lo *peggiora* (1.6123 → 1.6331) pur migliorando molto il train (1.3136 → 1.2446): overfitting sui residui, perché a 24h i residui del LightGBM sono meno strutturati (più vicini a rumore) che a 1h.
 3. **Segnale strutturale importante per il redesign multi-horizon:** il modello T+24h, ottenuto semplicemente riapplicando il feature set pensato per T+1h a un target shiftato di 24h, si appoggia quasi interamente su persistenza (`temperature`, `temperature_lag_1`) e stagionalità (`doy_sin/cos`), non su un vero pattern predittivo a lungo raggio. Il modello "rinuncia prima" (147 alberi contro 643) perché il feature set non gli offre altro segnale da sfruttare oltre quello. Questo NON è un limite di LightGBM in sé, è un limite di riusare feature T+1h-centriche su orizzonti lunghi senza ridisegnarle.
 
-**Implicazioni:** i punti chiave di questo esperimento — feature `lead_time` esplicita, input dall'archivio previsionale invece che da ERA5 per gli orizzonti lunghi, feature dedicate a orizzonti lunghi, validazione del correttore RF per-orizzonte prima del retraining — sono già incorporati nel piano operativo della Fase 4a sopra e nel retraining di Fase 5 sotto, non ripetuti qui.
+**Implicazioni:** i punti chiave di questo esperimento — feature `lead_time` esplicita, input dall'archivio previsionale invece che da ERA5 per gli orizzonti lunghi, feature dedicate a orizzonti lunghi, validazione del correttore RF per-orizzonte prima del retraining — sono già incorporati in Fase 4a → *Preparazione al retraining* (R3, R5, R8) e nel retraining di Fase 5, non ripetuti qui.
 
 **Riferimenti — dove trovare codice e artefatti di questo esperimento:**
 
@@ -471,18 +569,16 @@ Assorbe il task Chart.js già pianificato in Fase 3 ed estende la dashboard con 
 
 ### 🟪 Fase 5 — Retraining "grande" (Dicembre 2026)
 
-Un unico retraining che incorpora simultaneamente tutto ciò che è maturato. Definire ora lo schema della nuova tabella così che l'accumulo estivo-autunnale sia già nella forma giusta. Nota stagionale: l'estate è la stagione convettiva — i temporali di luglio–settembre 2026 sono dati preziosi da non perdere, motivo in più per fissare lo schema in anticipo.
+Un unico retraining che incorpora simultaneamente tutto ciò che è maturato. Nota stagionale: l'estate è la stagione convettiva — i temporali di luglio–settembre 2026 sono dati preziosi da non perdere.
 
-1. [ ] Scaricare nuovi CSV ARSIAL 2026, rieseguire `arsial_bias_correction.py`
-2. [ ] Input da archivio previsionale (Historical Forecast API) invece che ERA5 puro
-3. [ ] `historical.py`/`features.py`: lag calcolati sulla catena del run previsionale archiviato, non su ERA5 — punto critico anti-leakage, altrimenti si addestra su informazioni non disponibili in produzione
-4. [ ] Feature `lead_time` integrata
-5. [ ] Target Netatmo orario accumulato (giugno–dicembre 2026) per tutte e 6 le zone
-6. [ ] Nuove variabili convettive in input: CAPE, radiazione shortwave, copertura nuvolosa multi-livello, eventualmente 500 hPa
-7. [ ] Primo target di classificazione: pioggia sì/no orario (vedi Fase 7 per la metodologia)
-8. [ ] Riaddestrare RF corrector sulle nuove stazioni
-9. [ ] Confrontare MAE pre/post per Tivoli e Castelli Romani; curva MAE vs lead
-10. [ ] Rimuovere la correzione ARSIAL post-hoc (incorporata nel modello)
+Qui c'è solo l'**esecuzione**. Tutto il lavoro preparatorio (fonte dati, tabella multi-lead, refactor dei lag, feature per orizzonti lunghi, variabili convettive, CSV ARSIAL, protocollo RF) sta in **Fase 4a → Preparazione al retraining**: dicembre parte solo se quella lista è chiusa.
+
+1. [ ] Addestrare LightGBM sulla tabella multi-lead (R3), con `lead_hours` come feature e target Netatmo orario accumulato (giugno–dicembre 2026)
+2. [ ] Primo target di classificazione: pioggia sì/no orario (vedi Fase 7 per la metodologia)
+3. [ ] Riaddestrare il correttore RF secondo il protocollo per orizzonte (R8)
+4. [ ] Confronto pre/post tracciato in `model_metrics`: curva MAE vs lead contro il modello attuale **e** contro l'NWP grezzo (decisione B); focus su Tivoli e Castelli Romani
+5. [ ] Allineare `inference.py` al modello NWP usato in training (decisione A-bis) nello stesso deploy del nuovo modello
+6. [ ] Rimuovere la correzione ARSIAL post-hoc, se incorporata nel modello
 
 ### 🟫 Fase 6 — Generalizzazione multi-località (post-retraining)
 
@@ -611,11 +707,11 @@ python3 db.py   # verifica connessione
 
 **Riferimento GitHub:** `https://github.com/filippopetto-maker/meteo_locale`
 
-**Stato corrente (settembre 2026):** Fase 1, 2a, 2b, 3 in produzione (Fase 3 include carta del vento e dashboard Chart.js). Fase 2c parziale (bias correction ARSIAL attiva, Protezione Civile Lazio ancora da integrare). Radar RainViewer in corso (vedi *Sviluppo a lungo termine*). Roadmap strategica di lungo periodo (48h, retraining dicembre, generalizzazione, convettività) → [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47). GitHub Actions attivi, trigger misto — non ancora unificato su cron-job.org:
-- `inference.yml` — previsioni, ogni 30 min (`schedule:` interno)
-- `ingestion.yml` — osservazioni METAR + Netatmo, ogni 30 min (`schedule:` interno)
-- `export.yml` — export griglia statica (`latest.json`, `wind_grid.json`), ogni ora (trigger esterno via cron-job.org, `workflow_dispatch`, nessuno `schedule:` interno)
-- `export-dashboard.yml` — export `dashboard_data.json`, 2×/giorno (8:00, 20:00) (trigger esterno via cron-job.org, `workflow_dispatch`, nessuno `schedule:` interno)
+**Stato corrente (settembre 2026):** Fase 1, 2a, 2b, 3 in produzione (Fase 3 include carta del vento e dashboard Chart.js). Fase 2c parziale (bias correction ARSIAL attiva, Protezione Civile Lazio ancora da integrare). Radar RainViewer in corso (vedi *Sviluppo a lungo termine*). Roadmap strategica di lungo periodo (48h, retraining dicembre, generalizzazione, convettività) → [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47). GitHub Actions attivi. Trigger primario per tutti i workflow: cron-job.org (`workflow_dispatch`), l'unico che non ha mai saltato un run. I due workflow a 30 minuti hanno in più uno `schedule:` interno GitHub come rete di sicurezza (inaffidabile da solo su repo a bassa attività, ma innocuo come doppione):
+- `inference.yml` — previsioni, ogni 30 min (cron-job.org + `schedule:` interno di riserva)
+- `ingestion.yml` — osservazioni METAR + Netatmo, ogni 30 min (cron-job.org + `schedule:` interno di riserva)
+- `export.yml` — export griglia statica (`latest.json`, `wind_grid.json`), ogni ora (solo cron-job.org)
+- `export-dashboard.yml` — export `dashboard_data.json`, 2×/giorno (8:00, 20:00) (solo cron-job.org)
 
 **Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
 
@@ -632,7 +728,7 @@ python3 db.py   # verifica connessione
 
 **Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
 
-**Prossimo task immediato:** Radar RainViewer (vedi *Sviluppo a lungo termine*). A seguire: Fase 4a della Roadmap estesa — Infrastruttura 48h.
+**Prossimo task immediato:** Fase 4a della Roadmap estesa — Infrastruttura 48h, avviata il 23/09/2026 (schema DB già migrato, vedi piano operativo). In parallelo: *Preparazione al retraining*, a partire dalla scelta della fonte dati di training (decisione A).
 
 ~~Fix legenda nodi~~ — **RISOLTO** (vedi Diario degli errori risolti): la scala del gradiente ora converte correttamente `ws_min`/`ws_max` da km/h a nodi anche per i colori della heatmap tramite `updateWindLegend()`.
 
@@ -748,8 +844,8 @@ meteo_locale/
 │
 ├── .github/
 │   └── workflows/
-│       ├── inference.yml            # previsioni, trigger esterno (cron-job.org) ✅ ATTIVO
-│       ├── ingestion.yml            # osservazioni live, trigger esterno (cron-job.org) ✅ ATTIVO
+│       ├── inference.yml            # previsioni, cron-job.org + schedule: interno di riserva ✅ ATTIVO
+│       ├── ingestion.yml            # osservazioni live, cron-job.org + schedule: interno di riserva ✅ ATTIVO
 │       ├── export.yml               # export griglie mappa, trigger esterno ✅ ATTIVO
 │       └── export-dashboard.yml     # export dashboard_data.json, trigger esterno 8:00/20:00 ✅ ATTIVO
 │
@@ -1124,7 +1220,10 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 | Titolo legenda vento con doppio spazio (`Velocità vento ( km/h)`) | Unità formattata con spazio iniziale nel fix precedente | `unit.trim()` applicato solo alla stringa del titolo |
 | `export` job: `! [rejected] main -> main (stale info)` ~7-8x/giorno | `git push --force-with-lease` senza `pull --rebase` prima, race con altri push su main | `git pull --rebase origin main` + retry×3 prima del push |
 | `dashboard_data.json` ricalcolato 2 volte per ciclo (dentro `export` e dentro `export-dashboard`) | Blocco dashboard lasciato per errore anche dentro `main()` di `export_static.py`, oltre che nel ramo `--dashboard-only` | Rimosso da `main()`, resta solo nel ramo `--dashboard-only` |
-| GitHub Actions `schedule:` interno non affidabile (run saltati/ritardati) | Scheduler nativo GitHub degrada su repo a bassa attività | Migrati a trigger esterno via cron-job.org (`workflow_dispatch`, nessuno `schedule:` interno) solo `export.yml` ed `export-dashboard.yml`; `inference.yml` e `ingestion.yml` hanno ancora `schedule:` interno — migrazione non completata |
+| GitHub Actions `schedule:` interno non affidabile (run saltati/ritardati) | Scheduler nativo GitHub degrada su repo a bassa attività | Trigger primario via cron-job.org (`workflow_dispatch`) su tutti i workflow. `inference.yml` e `ingestion.yml` mantengono anche lo `schedule:` interno come riserva, per scelta: un run doppio è innocuo (upsert idempotenti), uno saltato no |
+| `model_metrics` sempre vuota (0 righe) | `db.insert_model_metrics()` scriveva colonne (`target`, `horizon_hours`, `train_mae`, `val_mae`, `n_train`, `best_iteration`...) inesistenti nella tabella, che aveva uno schema diverso mai cablato; il `try/except` non bloccante in `forecast.py` nascondeva l'errore a ogni training | Migrazione `model_metrics_align_to_training_code` (23/09/2026): aggiunte le colonne scritte dal codice. Le vecchie colonne non referenziate restano intatte. Il confronto operativo previsto vs osservato (`forecast_vs_observed`) non era toccato dal bug |
+| Insert `forecasts` falliti dopo la migrazione `lead_hours` | L'upsert di `db.py` usava `on_conflict="station_id,valid_for"`, vincolo appena sostituito da `(station_id, valid_for, lead_hours)` → PostgREST rifiuta un `on_conflict` senza vincolo corrispondente | `db.py` portato su `on_conflict="station_id,valid_for,lead_hours"` con `lead_hours=1` di default (commit `81f0c832`). Nel frattempo ripristinato il vecchio vincolo come ponte (`forecasts_bridge_legacy_unique`), da rimuovere prima dei lead > 1. Lezione: una migrazione che cambia un vincolo usato da `on_conflict` va sincronizzata col deploy del codice, o accompagnata da un ponte |
+| Stato del DB diverso da quello descritto nel codice | Su `forecasts` esisteva un secondo vincolo `UNIQUE (station_id, valid_for, model_version)`, mai documentato né usato | Rimosso nella migrazione `forecasts_add_lead_hours`. Lezione: prima di una migrazione, leggere lo schema live (`pg_constraint`), non solo `db.py` |
 
 **23/06/2026 — Aggiornamenti UI:**
 - Toggle unità vento km/h ↔ nodi in `app.js` + `index.html` (radio button sotto checkbox vento)
