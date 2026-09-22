@@ -57,7 +57,8 @@ def get_latest_observations() -> list[dict]:
     return res.data
 
 def insert_forecast(station_id, forecast_at, valid_for, temperature, wind_speed,
-                    wind_direction, humidity=None, model_version="v1", corrected=False):
+                    wind_direction, humidity=None, model_version="v1", corrected=False,
+                    lead_hours=1):
     data = {
         "station_id": station_id,
         "forecast_at": forecast_at.isoformat() if hasattr(forecast_at, 'isoformat') else forecast_at,
@@ -68,15 +69,19 @@ def insert_forecast(station_id, forecast_at, valid_for, temperature, wind_speed,
         "humidity": humidity,
         "model_version": model_version,
         "corrected": corrected,
+        "lead_hours": lead_hours,
     }
-    # Upsert su (station_id, valid_for): se la previsione per quella stazione
-    # e quell'orario di validità esiste già, viene sovrascritta invece di
-    # creare un duplicato. Richiede il vincolo UNIQUE
-    # `forecasts_station_valid_unique` su (station_id, valid_for) lato DB.
+    # Upsert su (station_id, valid_for, lead_hours): se la previsione per quella
+    # stazione, quell'orario di validità e quel lead esiste già, viene
+    # sovrascritta invece di creare un duplicato. Lead diversi per lo stesso
+    # valid_for convivono (Fase 4a, 48h). Richiede il vincolo UNIQUE
+    # `forecasts_station_valid_lead_unique` lato DB (migrazione 23/09/2026).
+    # lead_hours=1 di default: i chiamanti esistenti (inference.py T+1h)
+    # continuano a funzionare senza modifiche.
     res = (
         get_client()
         .table("forecasts")
-        .upsert(data, on_conflict="station_id,valid_for")
+        .upsert(data, on_conflict="station_id,valid_for,lead_hours")
         .execute()
     )
     return res.data[0]["id"] if res.data else None
