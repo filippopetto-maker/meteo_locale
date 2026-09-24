@@ -472,12 +472,64 @@ Scartate: DWD opendata (ICON) e NOMADS tengono solo una finestra rotante di run
 recenti; il bucket AWS `noaa-gfs-bdp-pds` è gratuito ma la profondità non è verificata.
 Strumento utile se si sceglie la via GRIB2: pacchetto Python `herbie-data`.
 
+**Backfill storico target — verifica 24/09/2026.** La Decisione A era bloccata dal
+timore che il target osservato (tabella `observations`, tutte le stazioni da giugno
+2026) rendesse inutile uno storico NWP più profondo. Verificato se le 32 stazioni
+progetto hanno storico *aggiuntivo* recuperabile via Netatmo `getmeasure` oltre alle
+osservazioni dirette.
+
+- **Metodo:** `stations.source_id` è NULL per tutte le stazioni (mai persistito), quindi
+  il `device_id` Netatmo è stato ritrovato per prossimità geografica (`getpublicdata`
+  centrato sulle coordinate di ciascuna stazione, raggio ~3 km, device più vicino) —
+  stessa logica di match usata in produzione da `mainMETEO.py`.
+- **Risultato:** 30/31 stazioni testate (Roma Sud esclusa, già coperta da METAR) hanno un
+  device pubblico corrispondente; **29 con storico reale multi-anno** (0,2–6 anni, media
+  4,1 anni), quasi tutte attive fino ad oggi. 8 stazioni toccano un **floor di retention
+  Netatmo al 2020-09-26** (limite della piattaforma per device non di proprietà, non la
+  vera età del dispositivo — oltre questa soglia lo storico non è recuperabile da questo
+  endpoint). Copertura quasi continua per la maggioranza; 6 stazioni (Tivoli, Pratica di
+  Mare, Viterbo, Labaro, Tor Bella Monaca, Tor Vergata Est) hanno gap reali (14–34% di
+  giorni mancanti nel periodo). **Sigillo (id 57)**: nessun device pubblico trovato nel
+  raggio testato, resta scoperta da questa fonte.
+- **Variabili disponibili:** `temperature`, `humidity`, `pressure` confermate su tutte le
+  30 stazioni trovate. **Nessuna ha `wind_strength`/`windangle` o `rain`** — moduli
+  opzionali che i dispositivi Netatmo privati generici quasi mai montano.
+- **Attenzione:** il `device_id` trovato per prossimità in questo test non è garantito
+  essere lo stesso che `mainMETEO.py` aggrega in produzione (raggio 5 km, mai persistito
+  in `stations.source_id`) — è una stima di fattibilità, non una fonte pronta all'uso: il
+  backfill vero (R2/R3) dovrà ri-verificare device per device.
+- **Nota tecnica sul parsing** (vedi anche *Diario degli errori*): `getmeasure` limita
+  ~1024 valori per chiamata e ogni blocco copre più giorni consecutivi (`beg_time` +
+  array `value` a passo `step_time`), non un giorno per chiave — un primo script che
+  leggeva solo `beg_time` sottostimava sistematicamente sia la profondità sia la
+  continuità dello storico. Il backfill vero richiede paginazione reale (chiamate
+  successive con `date_begin` = timestamp dell'ultimo valore ricevuto + `step_time`).
+
+**Decisione vento — asimmetria accettata (24/09/2026).** Nessuna fonte esterna testata
+copre il vento storico. ARSIAL (`data/arsial_roma_2023_2025.parquet`) conferma solo
+`temp_min/med/max`, `humidity_med`, `precip_mm` — **niente vento** (ma `precip_mm` è un
+bonus non pianificato, utile per un futuro target pioggia, Fase 7). Due reti regionali
+restano candidate non sfruttate, non bloccanti: ARPA Lazio (rete micrometeorologica, 8
+stazioni, storico CSV 2013–2024 scaricabile) e il Centro Funzionale Regionale — Protezione
+Civile Lazio (232 stazioni, 23 con sensore vento, copertura diretta anche a Cassino/
+Filettino/Sigillo/Fiano Romano non verificata; il portale è orientato al realtime,
+accesso allo storico non trovato in una prima ricerca). **Decisione:** il training del
+vento usa solo le osservazioni dirette del progetto da giugno 2026, con copertura molto
+diseguale tra le 32 stazioni (verificato via query `observations`: 13 stazioni >90%
+copertura, 6 a ~0%, il resto parziale). Confermato che `mainMETEO.py` (riga ~314) è
+corretto — aggrega mediana/media circolare su tutti i device Netatmo pubblici nel raggio
+di 5 km che riportano vento, `None` se nessuno lo riporta — la copertura scarsa è un
+limite hardware reale (pochi Netatmo privati hanno l'anemometro), non un bug.
+
 **Decisioni aperte:**
 
-- **A — Fonte dei dati di training multi-lead.** Le opzioni reali: Single Runs
-  GFS/ICON (poco storico), Single Runs ECMWF (storico dal 2024), retraining in due
-  tempi (interim ora, revisione 2027), GFS da NCAR/Earth Engine (storico dal 2015, più
-  ingegneria). Blocca R2–R4.
+- **A — Fonte dei dati di training multi-lead. RISOLTA (24/09/2026): Open-Meteo
+  Single Runs API, ECMWF IFS HRES 9 km.** Il dubbio che bloccava la scelta era: "uno
+  storico NWP profondo (dal 2024) serve a poco se il nostro target osservato parte da
+  giugno 2026". Verificato e superato — vedi *Backfill storico target* qui sotto: 29/31
+  stazioni hanno target reale (temperatura/umidità/pressione) backfillabile da Netatmo
+  per 1–6 anni, quindi lo storico ECMWF dal 2024-03 è pienamente sfruttabile per la
+  maggior parte delle stazioni, non solo per Roma Sud. Sblocca R2–R4.
 - **A-bis — Stesso modello NWP in training e in inference.** Qualunque sia A,
   `inference.py` oggi non passa `&models=` e riceve il blend di default di Open-Meteo.
   Se il training usa un modello specifico e l'inference un altro, si ricrea un mismatch
@@ -494,7 +546,7 @@ Strumento utile se si sceglie la via GRIB2: pacchetto Python `herbie-data`.
 
 **Operazioni:**
 
-1. [ ] **R1 — Decisione A** (e di conseguenza A-bis, C)
+1. [x] **R1 — Decisione A** (24/09/2026: ECMWF IFS HRES via Single Runs API — vedi sopra). A-bis e C restano da chiudere
 2. [ ] **R2 — Prototipo di estrazione:** una stazione (Roma Sud, id=3), un mese, dalla
    fonte scelta. Misura tempi, volume, complessità reale prima di scalare
 3. [ ] **R3 — Tabella di training multi-lead:** input previsto + `lead_hours` + lag
@@ -728,7 +780,7 @@ python3 db.py   # verifica connessione
 
 **Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
 
-**Prossimo task immediato:** Fase 4a della Roadmap estesa — Infrastruttura 48h, avviata il 23/09/2026 (schema DB già migrato, vedi piano operativo). In parallelo: *Preparazione al retraining*, a partire dalla scelta della fonte dati di training (decisione A).
+**Prossimo task immediato:** Fase 4a della Roadmap estesa — Infrastruttura 48h, avviata il 23/09/2026 (schema DB già migrato, vedi piano operativo). In parallelo: *Preparazione al retraining* — Decisione A chiusa il 24/09/2026 (ECMWF IFS HRES), prossimo passo R2 (prototipo di estrazione su Roma Sud).
 
 ~~Fix legenda nodi~~ — **RISOLTO** (vedi Diario degli errori risolti): la scala del gradiente ora converte correttamente `ws_min`/`ws_max` da km/h a nodi anche per i colori della heatmap tramite `updateWindLegend()`.
 
@@ -1224,6 +1276,8 @@ Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboa
 | `model_metrics` sempre vuota (0 righe) | `db.insert_model_metrics()` scriveva colonne (`target`, `horizon_hours`, `train_mae`, `val_mae`, `n_train`, `best_iteration`...) inesistenti nella tabella, che aveva uno schema diverso mai cablato; il `try/except` non bloccante in `forecast.py` nascondeva l'errore a ogni training | Migrazione `model_metrics_align_to_training_code` (23/09/2026): aggiunte le colonne scritte dal codice. Le vecchie colonne non referenziate restano intatte. Il confronto operativo previsto vs osservato (`forecast_vs_observed`) non era toccato dal bug |
 | Insert `forecasts` falliti dopo la migrazione `lead_hours` | L'upsert di `db.py` usava `on_conflict="station_id,valid_for"`, vincolo appena sostituito da `(station_id, valid_for, lead_hours)` → PostgREST rifiuta un `on_conflict` senza vincolo corrispondente | `db.py` portato su `on_conflict="station_id,valid_for,lead_hours"` con `lead_hours=1` di default (commit `81f0c832`). Nel frattempo ripristinato il vecchio vincolo come ponte (`forecasts_bridge_legacy_unique`), da rimuovere prima dei lead > 1. Lezione: una migrazione che cambia un vincolo usato da `on_conflict` va sincronizzata col deploy del codice, o accompagnata da un ponte |
 | Stato del DB diverso da quello descritto nel codice | Su `forecasts` esisteva un secondo vincolo `UNIQUE (station_id, valid_for, model_version)`, mai documentato né usato | Rimosso nella migrazione `forecasts_add_lead_hours`. Lezione: prima di una migrazione, leggere lo schema live (`pg_constraint`), non solo `db.py` |
+| Backfill storico Netatmo sottostimato (tutte le stazioni "finivano" mesi/anni fa) | `getmeasure` a scala `1day` non restituisce un punto per chiave: ogni blocco (`beg_time`) contiene un array `value` di giorni consecutivi a passo `step_time`; il parsing iniziale leggeva solo `beg_time` come singolo giorno, ignorando `len(value)` | Calcolo corretto: `ultimo_giorno = beg_time_ultimo_blocco + (len(valori)-1) × step_time`. Inoltre `getmeasure` limita ~1024 valori per chiamata: serve paginazione reale (richieste successive con `date_begin` = timestamp dell'ultimo valore ricevuto + `step_time`) per coprire storici pluriennali |
+| Molte stazioni Netatmo pubbliche mostravano identica data di inizio storico (2020-09-26) | Non è la data di installazione del device: è il floor di retention dell'API `getmeasure` per dispositivi non di proprietà (~6 anni indietro dalla data della richiesta) | Nessun fix lato nostro; oltre questa soglia lo storico non è recuperabile da questo endpoint, qualunque sia l'età reale del dispositivo |
 
 **23/06/2026 — Aggiornamenti UI:**
 - Toggle unità vento km/h ↔ nodi in `app.js` + `index.html` (radio button sotto checkbox vento)
