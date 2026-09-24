@@ -237,13 +237,26 @@ def predict_series(
         Lista di dict (uno per lead calcolato) pronti per db.insert_forecast().
         Un lead senza riga di input viene saltato con un warning.
     """
-    sid = station["id"]
-
-    # ── 1. Fetch forecast NWP ────────────────────────────────────────────────
     df = fetch_forecast(station["lat"], station["lon"], model=nwp_model)
     if df.empty:
-        logger.warning(f"[st.{sid}] Open-Meteo vuoto, skip")
+        logger.warning(f"[st.{station['id']}] Open-Meteo vuoto, skip")
         return []
+    return predict_from_df(df, station, leads, target=target)
+
+
+def predict_from_df(
+    df: pd.DataFrame,
+    station: dict,
+    leads: list[int],
+    target: str = "temperature",
+    now_utc: Optional[datetime] = None,
+) -> list[dict]:
+    """
+    Come predict_series ma su una serie NWP già scaricata. now_utc (aware,
+    default: ora corrente troncata all'ora) permette di simulare un'emissione
+    passata nel backtest.
+    """
+    sid = station["id"]
 
     # ── 2. Feature engineering (stessi 5 strati di training) ─────────────────
     feat_df = build_feature_matrix(df, station)
@@ -259,7 +272,9 @@ def predict_series(
             feat_df[col] = pd.NA
 
     # ── 4. Per ogni lead: valid_for = now + L, riga di input a valid_for − 1h ─
-    now_utc   = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    now_utc   = now_utc.replace(minute=0, second=0, microsecond=0)
     now_naive = now_utc.replace(tzinfo=None)
 
     feat_df = feat_df.sort_values("recorded_at").reset_index(drop=True)
