@@ -4,9 +4,10 @@ Blocco 3 - Fase 4
 
 Pipeline operativa:
   1. Per ciascuna stazione attiva, scarica le previsioni Open-Meteo
-     (past_days=2 per warm-up di lag/rolling, forecast_days=2 per il futuro).
+     (past_days=2 per warm-up di lag/rolling, forecast_days=4 per il futuro).
   2. Applica build_feature_matrix() come in training (stesse colonne, stesso ordine).
-  3. Predice T+horizon con LightGBM (lgbm_temperature.txt).
+  3. Predice i lead richiesti con LightGBM (lgbm_temperature.txt): per
+     valid_for = V usa la riga NWP a V−1h (contratto appreso: X → X+1h).
   4. Se esiste rf_correttore_temperature.pkl, applica la correzione RF
      (corrected=True nel DB). Altrimenti, salva la previsione LGBM grezza
      (corrected=False).
@@ -19,6 +20,8 @@ Utilizzo:
     python3 model/inference.py
     python3 model/inference.py --horizon 3
     python3 model/inference.py --dry-run
+    python3 model/inference.py --dry-run --max-lead 48 --json-out /tmp/f48.json
+    python3 model/inference.py --max-lead 48 --db-leads 3,6,12 --allow-multi-lead
 """
 
 from __future__ import annotations
@@ -71,8 +74,9 @@ def fetch_forecast(
     lat: float,
     lon: float,
     past_days: int = 2,
-    forecast_days: int = 2,
+    forecast_days: int = 4,
     retries: int = 3,
+    model: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Scarica previsioni Open-Meteo (forecast API, non archive).
@@ -83,7 +87,12 @@ def fetch_forecast(
     Args:
         lat, lon:      coordinate della stazione.
         past_days:     giorni di storico (default 2).
-        forecast_days: giorni di previsione futura (default 2).
+        forecast_days: giorni di previsione futura (default 4). Open-Meteo
+                       parte dalla mezzanotte UTC del giorno corrente: con 2
+                       giorni alle 21 UTC resterebbero ~27 h di futuro, con 4
+                       ne restano sempre almeno 48.
+        model:         modello NWP Open-Meteo (es. "ecmwf_ifs"); None = blend
+                       di default.
 
     Returns:
         DataFrame con colonna 'recorded_at' (UTC naive) e le variabili
@@ -97,6 +106,8 @@ def fetch_forecast(
         "forecast_days": forecast_days,
         "timezone":      "UTC",
     }
+    if model:
+        params["models"] = model
 
     last_exc: Exception = RuntimeError("Nessun tentativo eseguito")
     for attempt in range(retries):
@@ -203,27 +214,36 @@ def load_rf(target: str) -> Optional[object]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Predizione per UNA stazione
+# Predizione per UNA stazione, N lead
 # ─────────────────────────────────────────────────────────────────────────────
 
-def predict_station(
+def _num(v) -> float:
+    return float(v) if pd.notna(v) else float("nan")
+
+
+def predict_series(
     station: dict,
-    horizon_hours: int,
+    leads: list[int],
     target: str = "temperature",
-) -> Optional[dict]:
+    nwp_model: Optional[str] = None,
+) -> list[dict]:
     """
-    Genera la previsione T+horizon per una singola stazione.
+    Genera le previsioni per i lead richiesti con una sola fetch e una sola
+    predict. Contratto del modello: riga NWP all'ora X → temperatura a X+1h,
+    quindi per valid_for = V si usa la riga a V−1h (per il lead 1 è la riga
+    "adesso", identica al comportamento storico T+1h).
 
     Returns:
-        dict con forecast_at, valid_for, temperature, wind_speed, wind_direction,
-        humidity, corrected, model_version  — pronto per db.insert_forecast().
-        None se la stazione non ha dati sufficienti.
+        Lista di dict (uno per lead calcolato) pronti per db.insert_forecast().
+        Un lead senza riga di input viene saltato con un warning.
     """
+    sid = station["id"]
+
     # ── 1. Fetch forecast NWP ────────────────────────────────────────────────
-    df = fetch_forecast(station["lat"], station["lon"])
+    df = fetch_forecast(station["lat"], station["lon"], model=nwp_model)
     if df.empty:
-        logger.warning(f"[st.{station['id']}] Open-Meteo vuoto, skip")
-        return None
+        logger.warning(f"[st.{sid}] Open-Meteo vuoto, skip")
+        return []
 
     # ── 2. Feature engineering (stessi 5 strati di training) ─────────────────
     feat_df = build_feature_matrix(df, station)
@@ -238,103 +258,196 @@ def predict_station(
         if col not in feat_df.columns:
             feat_df[col] = pd.NA
 
-    # ── 4. Scegli la riga T_now e calcola valid_for = T_now + horizon ────────
-    now_utc      = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    now_naive    = now_utc.replace(tzinfo=None)
-    valid_for    = now_utc + timedelta(hours=horizon_hours)
+    # ── 4. Per ogni lead: valid_for = now + L, riga di input a valid_for − 1h ─
+    now_utc   = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_naive = now_utc.replace(tzinfo=None)
 
     feat_df = feat_df.sort_values("recorded_at").reset_index(drop=True)
-    # Usa la riga più vicina (≤) all'ora corrente: questa è la "snapshot" T
-    # corrispondente all'input usato in training (ERA5 a T).
-    eligible = feat_df[feat_df["recorded_at"] <= now_naive]
-    if eligible.empty:
-        logger.warning(
-            f"[st.{station['id']}] Nessuna riga ≤ {now_naive}, "
-            f"min disponibile: {feat_df['recorded_at'].min()}"
-        )
-        return None
-    row = eligible.iloc[[-1]]   # DataFrame, non Series → mantiene 2D per predict()
+    row_idx = pd.Series(feat_df.index, index=feat_df["recorded_at"])
+    row_idx = row_idx[~row_idx.index.duplicated(keep="last")]
 
-    X = row[feature_cols].apply(pd.to_numeric, errors="coerce")
+    idxs, used_leads, skipped = [], [], []
+    for L in leads:
+        input_at = now_naive + timedelta(hours=L - 1)
+        if input_at in row_idx.index:
+            idxs.append(int(row_idx[input_at]))
+            used_leads.append(L)
+            continue
+        if L == 1:
+            # Fallback storico del job T+1h: ultima riga ≤ adesso.
+            eligible = feat_df[feat_df["recorded_at"] <= now_naive]
+            if not eligible.empty:
+                idxs.append(int(eligible.index[-1]))
+                used_leads.append(L)
+                continue
+        skipped.append(L)
+    if skipped:
+        logger.warning(f"[st.{sid}] Lead senza riga di input, saltati: {skipped}")
+    if not idxs:
+        logger.warning(
+            f"[st.{sid}] Nessuna riga di input utilizzabile, "
+            f"range disponibile: {feat_df['recorded_at'].min()} → {feat_df['recorded_at'].max()}"
+        )
+        return []
+
+    X = feat_df.loc[idxs, feature_cols].apply(pd.to_numeric, errors="coerce")
 
     # ── 5. LGBM predict ──────────────────────────────────────────────────────
-    lgbm_pred = float(booster.predict(X)[0])
+    lgbm_pred = booster.predict(X)
 
     # ── 6. Correttore RF se disponibile ──────────────────────────────────────
     rf = load_rf(target)
     if rf is not None:
-        X_rf = X.assign(lgbm_pred=lgbm_pred)
-        rf_correction = float(rf.predict(X_rf)[0])
-        final_pred = lgbm_pred + rf_correction
+        final_pred = lgbm_pred + rf.predict(X.assign(lgbm_pred=lgbm_pred))
         corrected  = True
     else:
-        final_pred = lgbm_pred
+        final_pred = lgbm_pred.copy()
         corrected  = False
 
-    # ── 6b. Correzione ARSIAL bias mensile (stazioni 25–29) ─────────────────
+    valid_fors = [now_utc + timedelta(hours=L) for L in used_leads]
+
+    # ── 6b. Correzione ARSIAL bias mensile, sul mese di valid_for ────────────
     # bias_temp_med = ARSIAL − ERA5: positivo → zona più calda di ERA5.
     # Sommiamo il bias a final_pred perché il modello, addestrato su stazioni
     # pianura/costiere, sottostima sistematicamente le zone non nel training.
     if target == "temperature":
-        arsial_proxy = ARSIAL_PROXY.get(station["id"])
+        arsial_proxy = ARSIAL_PROXY.get(sid)
         if arsial_proxy is not None:
-            month_key = str(datetime.now(timezone.utc).month)
-            try:
-                bias = load_arsial_bias()[arsial_proxy]["monthly"][month_key]["bias_temp_med"]
-                final_pred += bias
-                logger.info(
-                    f"[ARSIAL bias] st.{station['id']} {bias:+.3f}°C "
-                    f"(mese {month_key}, stazione {arsial_proxy})"
-                )
-            except (KeyError, TypeError):
-                pass  # JSON mancante o chiave assente — fallback silenzioso
+            applied = {}
+            for i, vf in enumerate(valid_fors):
+                month_key = str(vf.month)
+                try:
+                    bias = load_arsial_bias()[arsial_proxy]["monthly"][month_key]["bias_temp_med"]
+                except (KeyError, TypeError):
+                    continue  # JSON mancante o chiave assente — fallback silenzioso
+                final_pred[i] += bias
+                applied[month_key] = bias
+            if applied:
+                desc = ", ".join(f"mese {m} {b:+.3f}°C" for m, b in applied.items())
+                logger.info(f"[ARSIAL bias] st.{sid} {desc} (stazione {arsial_proxy})")
 
-    # ── 7. Pass-through NWP per i campi non ancora coperti dai modelli ───────
-    nwp_at_horizon = df[df["recorded_at"] == valid_for.replace(tzinfo=None)]
-    if not nwp_at_horizon.empty:
-        nwp_row = nwp_at_horizon.iloc[0]
-        wind_speed_nwp     = float(nwp_row.get("wind_speed",     float("nan")))
-        wind_direction_nwp = float(nwp_row.get("wind_direction", float("nan")))
-        humidity_nwp       = float(nwp_row.get("humidity",       float("nan")))
-    else:
-        wind_speed_nwp = wind_direction_nwp = humidity_nwp = float("nan")
+    # ── 7. Pass-through NWP sulla riga valid_for ─────────────────────────────
+    nwp_by_time = df.drop_duplicates("recorded_at", keep="last").set_index("recorded_at")
 
-    # Il target è la temperatura: gli altri campi sono NWP grezzo (corrected
-    # si riferisce solo al campo temperature). Lo schema richiede tutti e tre.
-    return {
-        "forecast_at":    now_utc,
-        "valid_for":      valid_for,
-        "temperature":    round(final_pred, 2) if target == "temperature" else float("nan"),
-        "wind_speed":     round(wind_speed_nwp, 2)     if pd.notna(wind_speed_nwp)     else None,
-        "wind_direction": round(wind_direction_nwp, 1) if pd.notna(wind_direction_nwp) else None,
-        "humidity":       round(humidity_nwp, 1)       if pd.notna(humidity_nwp)       else None,
-        "corrected":      corrected,
-        "lgbm_pred":      round(lgbm_pred, 2),  # solo per logging dry-run
-    }
+    out = []
+    for i, (L, vf) in enumerate(zip(used_leads, valid_fors)):
+        key = vf.replace(tzinfo=None)
+        nwp = nwp_by_time.loc[key] if key in nwp_by_time.index else None
+        get = (lambda c: _num(nwp.get(c))) if nwp is not None else (lambda c: float("nan"))
+        ws, wd, rh, t_nwp = get("wind_speed"), get("wind_direction"), get("humidity"), get("temperature")
+        out.append({
+            "forecast_at":     now_utc,
+            "valid_for":       vf,
+            "lead_hours":      L,
+            "temperature":     round(float(final_pred[i]), 2) if target == "temperature" else float("nan"),
+            "wind_speed":      round(ws, 2)    if pd.notna(ws)    else None,
+            "wind_direction":  round(wd, 1)    if pd.notna(wd)    else None,
+            "humidity":        round(rh, 1)    if pd.notna(rh)    else None,
+            "nwp_temperature": round(t_nwp, 2) if pd.notna(t_nwp) else None,
+            "nwp_humidity":    round(rh, 1)    if pd.notna(rh)    else None,
+            "corrected":       corrected,
+            "lgbm_pred":       round(float(lgbm_pred[i]), 2),  # solo per logging dry-run
+        })
+    return out
+
+
+def predict_station(
+    station: dict,
+    horizon_hours: int,
+    target: str = "temperature",
+) -> Optional[dict]:
+    """Wrapper retrocompatibile: un solo lead, None se non calcolabile."""
+    preds = predict_series(station, [horizon_hours], target=target)
+    return preds[0] if preds else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Orchestratore
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _json_num(v):
+    return None if v is None or (isinstance(v, float) and pd.isna(v)) else v
+
+
+def write_series_json(path: str, results: list[dict], stations: list[dict],
+                      leads: list[int], nwp_model: Optional[str],
+                      model_version: str) -> None:
+    names = {st["id"]: st.get("name", "") for st in stations}
+    by_station: dict[str, dict] = {}
+    for p in results:
+        entry = by_station.setdefault(
+            str(p["station_id"]), {"name": names.get(p["station_id"], ""), "series": []}
+        )
+        entry["series"].append({
+            "valid_for": _iso_z(p["valid_for"]),
+            "lead":      p["lead_hours"],
+            "t":         _json_num(p["temperature"]),
+            "t_nwp":     _json_num(p["nwp_temperature"]),
+            "rh":        _json_num(p["humidity"]),
+            "ws":        _json_num(p["wind_speed"]),
+            "wd":        _json_num(p["wind_direction"]),
+            "corrected": p["corrected"],
+        })
+    forecast_at = results[0]["forecast_at"] if results else None
+    payload = {
+        "generated_at":  _iso_z(datetime.now(timezone.utc)),
+        "forecast_at":   _iso_z(forecast_at) if forecast_at else None,
+        "nwp_model":     nwp_model or "default",
+        "model_version": model_version,
+        "leads":         leads,
+        "stations":      by_station,
+    }
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, allow_nan=False))
+    logger.info(f"JSON serie scritto: {out} ({len(results)} righe)")
+
+
 def run(
-    horizon_hours: int = 1,
+    leads: Optional[list[int]] = None,
+    db_leads: Optional[list[int]] = None,
     target: str = "temperature",
     dry_run: bool = False,
     model_version: Optional[str] = None,
+    nwp_model: Optional[str] = None,
+    json_out: Optional[str] = None,
+    allow_multi_lead: bool = False,
 ) -> list[dict]:
     """
     Esegue l'inference su tutte le stazioni attive.
 
     Args:
-        horizon_hours: N in "T_now + N ore" (default 1).
-        target:        variabile target del modello LGBM (default "temperature").
-        dry_run:       se True, stampa le previsioni senza scriverle su DB.
-        model_version: versione da loggare; se None usa "inference_v%Y%m%d_%H%M".
+        leads:            lead in ore da calcolare (default [1]).
+        db_leads:         sottoinsieme di leads da salvare su DB (None = tutti).
+        target:           variabile target del modello LGBM (default "temperature").
+        dry_run:          se True, stampa le previsioni senza scriverle su DB.
+        model_version:    versione da loggare; se None usa "inference_v%Y%m%d_%H%M".
+        nwp_model:        modello NWP Open-Meteo (None = blend di default).
+        json_out:         se valorizzato, scrive la serie completa in JSON.
+        allow_multi_lead: consente scritture su DB con lead > 1.
 
     Returns:
-        Lista dei dict di previsione (uno per stazione completata).
+        Lista dei dict di previsione (uno per stazione e lead calcolato).
     """
+    leads = sorted(set(leads or [1]))
+    db_leads = leads if db_leads is None else sorted(set(db_leads) & set(leads))
+
+    # Finché esiste il vincolo ponte UNIQUE (station_id, valid_for), una riga
+    # con lead > 1 blocca l'upsert successivo del lead 1 sullo stesso
+    # valid_for, e l'insert fallisce in silenzio (try/except non bloccante).
+    if not dry_run and db_leads and max(db_leads) > 1 and not allow_multi_lead:
+        logger.error(
+            "Scrittura su DB di lead > 1 rifiutata: finché esiste il vincolo ponte "
+            "forecasts_station_valid_unique (station_id, valid_for), un lead > 1 "
+            "impedirebbe al job da 30 min di scrivere il lead 1 sullo stesso valid_for. "
+            "Usa --dry-run, --db-leads 1, oppure --allow-multi-lead dopo aver rimosso il ponte."
+        )
+        sys.exit(2)
+
     if model_version is None:
         model_version = "inference_" + datetime.utcnow().strftime("v%Y%m%d_%H%M")
 
@@ -345,56 +458,96 @@ def run(
         logger.error("Nessuna stazione attiva in DB")
         return []
 
+    single = len(leads) == 1
+    lead_desc = f"T+{leads[0]}h" if single else f"{len(leads)} lead ({leads[0]}…{leads[-1]}h)"
     sep = "=" * 70
     print(f"\n{sep}")
-    print(f"Inference   : T+{horizon_hours}h  |  target={target}  |  "
+    print(f"Inference   : {lead_desc}  |  target={target}  |  "
           f"{'DRY-RUN' if dry_run else 'DB INSERT'}")
+    if nwp_model:
+        print(f"Modello NWP : {nwp_model}")
     print(f"Stazioni    : {len(stations)} attive")
     print(f"Versione    : {model_version}")
     print(f"{sep}")
 
     results: list[dict] = []
+    n_ok = 0
     for st in stations:
         sid  = st["id"]
         name = st.get("name", "")
         try:
-            pred = predict_station(st, horizon_hours, target=target)
+            preds = predict_series(st, leads, target=target, nwp_model=nwp_model)
         except Exception as exc:
             logger.error(f"[st.{sid} {name}] Errore: {exc}")
             continue
-        if pred is None:
+        if not preds:
             continue
+        n_ok += 1
 
-        corr_tag = "RF" if pred["corrected"] else "LGBM only"
-        print(
-            f"st.{sid:>2} {name:<24} | "
-            f"valid {pred['valid_for'].strftime('%Y-%m-%d %H:%M UTC')} | "
-            f"T={pred['temperature']:>5.2f}°C  ({corr_tag}, lgbm_raw={pred['lgbm_pred']:.2f})"
-        )
+        if single:
+            pred = preds[0]
+            corr_tag = "RF" if pred["corrected"] else "LGBM only"
+            print(
+                f"st.{sid:>2} {name:<24} | "
+                f"valid {pred['valid_for'].strftime('%Y-%m-%d %H:%M UTC')} | "
+                f"T={pred['temperature']:>5.2f}°C  ({corr_tag}, lgbm_raw={pred['lgbm_pred']:.2f})"
+            )
+        else:
+            by_lead = {p["lead_hours"]: p for p in preds}
+            snap = "  ".join(
+                f"+{L}h={by_lead[L]['temperature']:.2f}" for L in (1, 24, 48) if L in by_lead
+            )
+            missing = sorted(set(leads) - set(by_lead))
+            print(
+                f"st.{sid:>2} {name:<24} | {len(preds)}/{len(leads)} lead | {snap}"
+                + (f" | saltati {missing}" if missing else "")
+            )
 
         if not dry_run:
-            try:
-                fid = db.insert_forecast(
-                    station_id     = sid,
-                    forecast_at    = pred["forecast_at"],
-                    valid_for      = pred["valid_for"],
-                    temperature    = pred["temperature"],
-                    wind_speed     = pred["wind_speed"],
-                    wind_direction = pred["wind_direction"],
-                    humidity       = pred["humidity"],
-                    model_version  = model_version,
-                    corrected      = pred["corrected"],
-                )
-                print(f"    └─ Supabase id={fid}")
-            except Exception as exc:
-                logger.warning(f"[st.{sid}] Insert fallito (non bloccante): {exc}")
+            for pred in preds:
+                if pred["lead_hours"] not in db_leads:
+                    continue
+                try:
+                    fid = db.insert_forecast(
+                        station_id      = sid,
+                        forecast_at     = pred["forecast_at"],
+                        valid_for       = pred["valid_for"],
+                        temperature     = pred["temperature"],
+                        wind_speed      = pred["wind_speed"],
+                        wind_direction  = pred["wind_direction"],
+                        humidity        = pred["humidity"],
+                        model_version   = model_version,
+                        corrected       = pred["corrected"],
+                        lead_hours      = pred["lead_hours"],
+                        nwp_temperature = pred["nwp_temperature"],
+                        nwp_humidity    = pred["nwp_humidity"],
+                    )
+                    if single:
+                        print(f"    └─ Supabase id={fid}")
+                except Exception as exc:
+                    logger.warning(
+                        f"[st.{sid}] Insert lead {pred['lead_hours']} fallito (non bloccante): {exc}"
+                    )
 
-        results.append({**pred, "station_id": sid})
+        results.extend({**p, "station_id": sid} for p in preds)
+
+    if json_out:
+        write_series_json(json_out, results, stations, leads, nwp_model, model_version)
 
     print(f"{sep}")
-    print(f"Completate  : {len(results)}/{len(stations)} stazioni")
+    print(f"Completate  : {n_ok}/{len(stations)} stazioni")
     print(f"{sep}\n")
     return results
+
+
+def _parse_leads(s: str) -> list[int]:
+    try:
+        leads = [int(x) for x in s.split(",") if x.strip()]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"lista di lead non valida: {s!r}")
+    if not leads or min(leads) < 1:
+        raise argparse.ArgumentTypeError(f"i lead devono essere interi ≥ 1: {s!r}")
+    return leads
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,8 +564,21 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(
         description="Previsione operativa real-time (LGBM + opzionale correttore RF)"
     )
-    ap.add_argument("--horizon", type=int, default=1,
-                    help="Orizzonte previsionale in ore (default: 1)")
+    lead_group = ap.add_mutually_exclusive_group()
+    lead_group.add_argument("--horizon", type=int, default=None,
+                            help="Orizzonte previsionale in ore (default: 1); equivale a --leads N")
+    lead_group.add_argument("--leads", type=_parse_leads, default=None,
+                            help="Lead da calcolare, es. 1,3,6")
+    lead_group.add_argument("--max-lead", type=int, default=None,
+                            help="Calcola i lead 1…N")
+    ap.add_argument("--db-leads", type=_parse_leads, default=None,
+                    help="Sottoinsieme dei lead da salvare su DB (default: tutti)")
+    ap.add_argument("--allow-multi-lead", action="store_true",
+                    help="Consente di scrivere su DB lead > 1 (solo dopo la rimozione del vincolo ponte)")
+    ap.add_argument("--nwp-model", default=None,
+                    help="Modello NWP Open-Meteo, es. ecmwf_ifs (default: blend di Open-Meteo)")
+    ap.add_argument("--json-out", default=None,
+                    help="Scrive la serie completa in questo file JSON (non sotto docs/)")
     ap.add_argument("--target",  default="temperature",
                     choices=["temperature", "wind_speed", "wind_direction",
                              "humidity", "pressure"],
@@ -423,9 +589,22 @@ if __name__ == "__main__":
                     help="Versione da loggare in forecasts (default: timestamp automatico)")
     args = ap.parse_args()
 
+    if args.leads:
+        leads = args.leads
+    elif args.max_lead:
+        if args.max_lead < 1:
+            ap.error("--max-lead deve essere ≥ 1")
+        leads = list(range(1, args.max_lead + 1))
+    else:
+        leads = [args.horizon or 1]
+
     run(
-        horizon_hours=args.horizon,
+        leads=leads,
+        db_leads=args.db_leads,
         target=args.target,
         dry_run=args.dry_run,
         model_version=args.model_version,
+        nwp_model=args.nwp_model,
+        json_out=args.json_out,
+        allow_multi_lead=args.allow_multi_lead,
     )

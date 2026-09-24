@@ -58,7 +58,7 @@ def get_latest_observations() -> list[dict]:
 
 def insert_forecast(station_id, forecast_at, valid_for, temperature, wind_speed,
                     wind_direction, humidity=None, model_version="v1", corrected=False,
-                    lead_hours=1):
+                    lead_hours=1, nwp_temperature=None, nwp_humidity=None, nwp_run_at=None):
     data = {
         "station_id": station_id,
         "forecast_at": forecast_at.isoformat() if hasattr(forecast_at, 'isoformat') else forecast_at,
@@ -70,6 +70,9 @@ def insert_forecast(station_id, forecast_at, valid_for, temperature, wind_speed,
         "model_version": model_version,
         "corrected": corrected,
         "lead_hours": lead_hours,
+        "nwp_temperature": nwp_temperature,
+        "nwp_humidity": nwp_humidity,
+        "nwp_run_at": nwp_run_at.isoformat() if hasattr(nwp_run_at, 'isoformat') else nwp_run_at,
     }
     # Upsert su (station_id, valid_for, lead_hours): se la previsione per quella
     # stazione, quell'orario di validità e quel lead esiste già, viene
