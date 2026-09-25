@@ -1,0 +1,46 @@
+name: Ombra M2 (1–48 h, forecasts_shadow)
+
+# Prova in ombra: IFS grezzo, opzione E, modello attuale e M2 da 1 a 48 h,
+# scritti in forecasts_shadow. Nessun effetto sulla mappa né su forecasts.
+# Trigger esterno: cron-job.org alle 09:15 e 21:15 UTC (dopo i run IFS 00Z/12Z).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: shadow-m2
+  cancel-in-progress: false
+
+jobs:
+  shadow-m2:
+    name: Run shadow M2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: "Setup Miniconda (env: meteo, Python 3.12)"
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: meteo
+          python-version: "3.12"
+          auto-activate-base: false
+          use-mamba: true
+
+      - name: Install pip dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run shadow M2
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python3 model/shadow_m2.py

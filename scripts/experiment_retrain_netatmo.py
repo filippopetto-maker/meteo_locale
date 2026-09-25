@@ -43,7 +43,7 @@ sys.path.insert(0, str(ROOT / "model"))
 import backtest_ifs_lead as bt  # noqa: E402
 import db  # noqa: E402
 import inference as inf  # noqa: E402
-from features import build_feature_matrix  # noqa: E402
+from m2 import build_m2_frame  # noqa: E402
 from forecast import DEFAULT_LGB_PARAMS  # noqa: E402
 
 logger = logging.getLogger("retrain")
@@ -72,19 +72,9 @@ def lookup_bias(table: pd.Series, valid: pd.Series) -> np.ndarray:
 
 def station_frame(st: dict, nwp: pd.DataFrame, target: pd.DataFrame, feature_cols: list[str]) -> pd.DataFrame:
     """Righe di training/test per una stazione: feature a X, verità a X+1h."""
-    feat = build_feature_matrix(nwp.copy(), st)
-    for c in feature_cols:
-        if c not in feat.columns:
-            feat[c] = np.nan
-    feat = feat[["recorded_at", *feature_cols]].copy()
-    feat[feature_cols] = feat[feature_cols].apply(pd.to_numeric, errors="coerce")
-    feat["recorded_at"] = pd.to_datetime(feat.recorded_at).dt.tz_localize("UTC")
-    feat["valid_for"] = feat.recorded_at + timedelta(hours=1)
-
+    feat = build_m2_frame(nwp, st, feature_cols)
     nwp_t = nwp[["recorded_at", "temperature"]].copy()
     nwp_t["recorded_at"] = pd.to_datetime(nwp_t.recorded_at).dt.tz_localize("UTC")
-    feat = feat.merge(nwp_t.rename(columns={"recorded_at": "valid_for", "temperature": "nwp_valid"}),
-                      on="valid_for", how="left")
 
     obs = target[target.station_id == st["id"]][["recorded_at", "temperature"]]
     feat = feat.merge(obs.rename(columns={"recorded_at": "valid_for", "temperature": "y"}),
@@ -93,7 +83,6 @@ def station_frame(st: dict, nwp: pd.DataFrame, target: pd.DataFrame, feature_col
     both = nwp_t.merge(obs, on="recorded_at", suffixes=("_nwp", "_obs")).dropna()
     table = hour_bias_table(both.recorded_at, both.temperature_nwp - both.temperature_obs)
     feat["bias_st_hour"] = lookup_bias(table, feat.valid_for)
-    feat["station_cat"] = st["id"]
     return feat
 
 
