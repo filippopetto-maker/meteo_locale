@@ -27,6 +27,7 @@ Utilizzo:
 from __future__ import annotations
 
 import argparse
+import gzip
 import logging
 import sys
 from datetime import timedelta
@@ -114,8 +115,11 @@ def build_rows(api, stations, bk, feature_cols, tables: dict[str, dict], target)
 
 def evaluate(rows: pd.DataFrame, model_dir: Path, since: pd.Timestamp, feature_cols,
              bias_col: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    m1 = lgb.Booster(model_file=str(model_dir / "lgbm_m1.txt"))
-    m2 = lgb.Booster(model_file=str(model_dir / "lgbm_m2.txt"))
+    m1_file = model_dir / "lgbm_m1.txt"
+    m1 = lgb.Booster(model_file=str(m1_file)) if m1_file.exists() else None
+    m2_gz = model_dir / "lgbm_m2_temperature.txt.gz"  # modello congelato di scripts/train_m2.py
+    m2 = (lgb.Booster(model_str=gzip.open(m2_gz, "rt").read()) if m2_gz.exists()
+          else lgb.Booster(model_file=str(model_dir / "lgbm_m2.txt")))
     cols_m1 = [*feature_cols, "station_cat"]
     cols_m2 = [*cols_m1, "nwp_valid", "bias_st_hour"]
     te = rows[rows.valid_for >= since].dropna(subset=["t_obs", "t_nwp", "t_model"]).copy()
@@ -123,9 +127,11 @@ def evaluate(rows: pd.DataFrame, model_dir: Path, since: pd.Timestamp, feature_c
     te["IFS grezzo"] = te.t_nwp
     te["E (IFS − bias 30gg)"] = te.t_nwp - te.bias_st_hour.fillna(0)
     te["Modello attuale"] = te.t_model
-    te["M1 retrain"] = m1.predict(te[cols_m1])
     te["M2 retrain"] = te.nwp_valid + m2.predict(te[cols_m2])
-    names = ["IFS grezzo", "E (IFS − bias 30gg)", "Modello attuale", "M1 retrain", "M2 retrain"]
+    names = ["IFS grezzo", "E (IFS − bias 30gg)", "Modello attuale", "M2 retrain"]
+    if m1 is not None:
+        te["M1 retrain"] = m1.predict(te[cols_m1])
+        names.insert(3, "M1 retrain")
     err = te[names].sub(te.t_obs, axis=0).abs()
     err["lead"], err["station_id"] = te.lead.to_numpy(), te.station_cat.to_numpy()
     return te, err
