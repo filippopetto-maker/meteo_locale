@@ -111,6 +111,38 @@ def insert_model_metrics(target, horizon_hours, train_mae, train_rmse,
     res = get_client().table("model_metrics").insert(data).execute()
     return res.data[0]["id"] if res.data else None
 
+def get_netatmo_observations(station_id, start, end) -> list[dict]:
+    """Osservazioni live Netatmo (QC < 2) di una stazione in [start, end), paginate a 1000 righe."""
+    out, offset = [], 0
+    while True:
+        rows = (get_client().table("observations").select("recorded_at, temperature, raw_source")
+                .eq("station_id", station_id).lt("qc_flag", 2)
+                .gte("recorded_at", start.isoformat()).lt("recorded_at", end.isoformat())
+                .order("recorded_at").range(offset, offset + 999).execute().data)
+        out.extend(rows)
+        if len(rows) < 1000:
+            break
+        offset += 1000
+    return [r for r in out if isinstance(r.get("raw_source"), dict)
+            and r["raw_source"].get("source") == "netatmo_public" and r.get("temperature") is not None]
+
+def upsert_bias_table(rows: list[dict]) -> int:
+    """Righe (stazione × ora UTC) della tabella di bias IFS−Netatmo, una chiamata per blocco."""
+    if not rows:
+        return 0
+    get_client().table("bias_table").upsert(rows, on_conflict="station_id,hour_utc").execute()
+    return len(rows)
+
+def get_bias_table() -> list[dict]:
+    return get_client().table("bias_table").select("*").execute().data
+
+def upsert_forecasts_shadow(rows: list[dict], chunk: int = 500) -> int:
+    """Previsioni in ombra (forecasts_shadow), upsert a blocchi."""
+    for i in range(0, len(rows), chunk):
+        get_client().table("forecasts_shadow").upsert(
+            rows[i:i + chunk], on_conflict="station_id,issue_at,lead_hours").execute()
+    return len(rows)
+
 def health_check() -> bool:
     try:
         get_client().table("stations").select("id").limit(1).execute()

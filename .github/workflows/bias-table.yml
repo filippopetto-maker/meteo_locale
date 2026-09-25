@@ -1,0 +1,46 @@
+name: Bias table IFS − Netatmo (ombra M2)
+
+# Ricalcola bias_table (stazione × ora UTC, 30 giorni precedenti) per la prova
+# in ombra di M2 e dell'opzione E. Nessun effetto sulla mappa.
+# Trigger esterno: cron-job.org una volta al giorno alle 05:00 UTC.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: bias-table
+  cancel-in-progress: false
+
+jobs:
+  bias-table:
+    name: Update bias table
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: "Setup Miniconda (env: meteo, Python 3.12)"
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: meteo
+          python-version: "3.12"
+          auto-activate-base: false
+          use-mamba: true
+
+      - name: Install pip dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Update bias table
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python3 scripts/update_bias_table.py
