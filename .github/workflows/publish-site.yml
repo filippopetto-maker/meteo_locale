@@ -1,0 +1,38 @@
+name: publish-site
+
+# Ripubblica il sito quando cambia l'HTML/JS in docs/ (con la sorgente Pages
+# "GitHub Actions" un push su main non ripubblica più da solo), oppure a mano.
+# I dati vengono ripresi dal sito live (mode: none), senza toccare Supabase.
+# Da lanciare a mano con mode=all anche per il primo deploy e per il dry-run.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '!docs/data/**'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Cosa rigenerare prima del deploy"
+        type: choice
+        options: [none, static, dashboard, all]
+        default: none
+
+concurrency:
+  group: export-push
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Sul push parte solo a migrazione avvenuta: prima non serve (pubblica
+    # ancora il branch main /docs) e occuperebbe il gruppo export-push.
+    if: github.event_name != 'push' || vars.PAGES_SOURCE == 'actions'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      mode: ${{ inputs.mode || 'none' }}
+    secrets: inherit

@@ -1,0 +1,218 @@
+name: publish
+
+# Workflow riutilizzabile: costruisce il sito (docs/ + dati freschi) e lo
+# pubblica su GitHub Pages come artifact, senza committare i JSON nel repo.
+# Non ha trigger propri: lo chiamano export.yml, export-dashboard.yml e
+# publish-site.yml, che condividono il gruppo di concurrency export-push
+# (così restore → export → deploy è serializzato fra tutti i chiamanti).
+#
+# Il deploy parte solo se la variabile di repository PAGES_SOURCE vale
+# "actions" (Settings → Secrets and variables → Actions → Variables) e
+# Settings → Pages → Source è "GitHub Actions". Altrimenti è un dry-run:
+# build + upload dell'artifact, nessuna pubblicazione.
+#
+# Ogni deploy sostituisce l'intero sito, quindi i file che il run non
+# rigenera vengono ripresi dal sito live ("il sito live è lo stato").
+# Anche data/sst_cache.json viaggia così (pubblicato in docs/data/).
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "none = solo ridistribuzione | static = latest+wind | dashboard = dashboard_data | all"
+        type: string
+        required: true
+
+env:
+  SITE_DATA_URL: https://filippopetto-maker.github.io/meteo_locale/data
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      deploy: ${{ steps.plan.outputs.deploy }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plan
+        id: plan
+        run: |
+          case "${{ inputs.mode }}" in
+            none)      static=false; dashboard=false ;;
+            static)    static=true;  dashboard=false ;;
+            dashboard) static=false; dashboard=true  ;;
+            all)       static=true;  dashboard=true  ;;
+            *) echo "::error::mode non valido: ${{ inputs.mode }}"; exit 1 ;;
+          esac
+          echo "static=$static" >> "$GITHUB_OUTPUT"
+          echo "dashboard=$dashboard" >> "$GITHUB_OUTPUT"
+          if [ "${{ vars.PAGES_SOURCE }}" = "actions" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::PAGES_SOURCE != actions → dry-run (build + artifact, nessun deploy)"
+          fi
+
+      # I JSON ancora presenti nel checkout sono quelli committati dal vecchio
+      # flusso: li togliamo, così un file stantio non può finire online in
+      # silenzio. Ogni file deve arrivare o dall'export o dal sito live.
+      - name: Remove checked-out data files
+        run: rm -f docs/data/latest.json docs/data/wind_grid.json docs/data/dashboard_data.json
+
+      - name: Restore from live site
+        id: restore
+        run: |
+          fetch() {  # $1 = file sul sito, $2 = destinazione
+            tmp="$2.tmp"
+            if curl -fsSL --retry 3 --retry-delay 5 --max-time 60 \
+                 "$SITE_DATA_URL/$1?run=${{ github.run_id }}" -o "$tmp" \
+               && python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp"; then
+              mv "$tmp" "$2"
+              echo "ok: $1 ($(wc -c < "$2") byte)"
+              return 0
+            fi
+            rm -f "$tmp"
+            echo "::warning::restore fallito: $1"
+            return 1
+          }
+
+          need_static=${{ steps.plan.outputs.static }}
+          need_dashboard=${{ steps.plan.outputs.dashboard }}
+
+          if [ "$need_static" != "true" ]; then
+            fetch latest.json docs/data/latest.json \
+              && fetch wind_grid.json docs/data/wind_grid.json \
+              || need_static=true
+          fi
+          if [ "$need_dashboard" != "true" ]; then
+            fetch dashboard_data.json docs/data/dashboard_data.json || need_dashboard=true
+          fi
+          # SST: se manca (es. prima del primo deploy via Actions) resta la
+          # copia committata; sst.py la considera scaduta e rifà il fetch.
+          fetch sst_cache.json data/sst_cache.json || true
+
+          echo "static=$need_static" >> "$GITHUB_OUTPUT"
+          echo "dashboard=$need_dashboard" >> "$GITHUB_OUTPUT"
+          echo "Export da eseguire → static=$need_static dashboard=$need_dashboard"
+
+      - uses: actions/setup-python@v5
+        if: steps.restore.outputs.static == 'true' || steps.restore.outputs.dashboard == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        if: steps.restore.outputs.static == 'true' || steps.restore.outputs.dashboard == 'true'
+        run: pip install supabase pandas numpy scipy python-dotenv requests matplotlib
+
+      - name: Export static (latest.json, wind_grid.json)
+        if: steps.restore.outputs.static == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          for i in 1 2 3; do
+            python3 scripts/export_static.py && exit 0
+            echo "Attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
+          exit 1
+
+      - name: Export dashboard (dashboard_data.json)
+        if: steps.restore.outputs.dashboard == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          for i in 1 2 3; do
+            python3 scripts/export_static.py --dashboard-only && exit 0
+            echo "Attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
+          exit 1
+
+      - name: Publish SST cache alongside data
+        run: |
+          if [ -f data/sst_cache.json ]; then
+            cp data/sst_cache.json docs/data/sst_cache.json
+          fi
+
+      # Ultima barriera: se un file manca o è malformato il job fallisce e
+      # online resta la versione precedente del sito (come oggi quando
+      # l'export fallisce e non c'è nulla da committare).
+      - name: Validate site
+        run: |
+          ls -la docs/data
+          python3 - <<'EOF'
+          import json, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          d = Path("docs/data")
+          errors = []
+
+          def load(name):
+              p = d / name
+              if not p.is_file():
+                  errors.append(f"{name}: mancante")
+                  return None
+              try:
+                  return json.loads(p.read_text())
+              except Exception as exc:
+                  errors.append(f"{name}: JSON non valido ({exc})")
+                  return None
+
+          latest = load("latest.json")
+          if latest is not None:
+              if not latest.get("stations"):
+                  errors.append("latest.json: nessuna stazione")
+              gen = latest.get("generated_at")
+              if not gen:
+                  errors.append("latest.json: generated_at assente")
+              else:
+                  age_h = (datetime.now(timezone.utc)
+                           - datetime.fromisoformat(gen.replace("Z", "+00:00"))).total_seconds() / 3600
+                  print(f"latest.json generated_at={gen} (età {age_h:.1f} h)")
+                  if age_h > 3:
+                      print(f"::warning::latest.json vecchio di {age_h:.1f} h")
+
+          wind = load("wind_grid.json")
+          if wind is not None and not isinstance(wind, list):
+              errors.append("wind_grid.json: atteso un array")
+
+          dash = load("dashboard_data.json")
+          if dash is not None and "series" not in dash:
+              errors.append("dashboard_data.json: chiave 'series' assente")
+
+          for asset in ["index.html", "dashboard.html", "sw.js", "manifest.json",
+                        "js/app.js", "js/radar.js"]:
+              if not Path("docs", asset).is_file():
+                  errors.append(f"{asset}: mancante")
+
+          for e in errors:
+              print(f"::error::{e}")
+          sys.exit(1 if errors else 0)
+          EOF
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs
+          retention-days: 1
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
