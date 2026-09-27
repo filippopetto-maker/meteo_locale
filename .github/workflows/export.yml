@@ -8,7 +8,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Flusso storico: commit dei JSON su main, pubblicati da Pages "branch".
+  # Resta attivo finché la variabile PAGES_SOURCE non vale "actions".
   export:
+    if: vars.PAGES_SOURCE != 'actions'
     runs-on: ubuntu-latest
 
     steps:
@@ -54,3 +57,15 @@ jobs:
             sleep 10
           done
           exit 1
+
+  # Nuovo flusso: nessun commit, deploy su Pages come artifact (publish.yml).
+  publish:
+    if: vars.PAGES_SOURCE == 'actions'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      mode: static
+    secrets: inherit
