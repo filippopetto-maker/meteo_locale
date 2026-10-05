@@ -5,7 +5,7 @@ on:
 
 concurrency:
   group: export-push
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   # Flusso storico: commit dei JSON su main, pubblicati da Pages "branch".
@@ -13,6 +13,7 @@ jobs:
   export-dashboard:
     if: vars.PAGES_SOURCE != 'actions'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
