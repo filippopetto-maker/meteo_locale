@@ -1,0 +1,65 @@
+{
+  "test": "s9_toolchain",
+  "esito": "OK",
+  "domanda": "La catena '4 frame IR → campo di moto → estrapolazione' gira sul Mac da 8 GB, e in quanto tempo?",
+  "risposta": "Sì: LK + estrapolazione +30/+60 min in 0.1 s su [4, 80, 80], processo intero 72.6 s (incl. import e richiesta ERA5), picco RAM 327.4 MB; moto nubi fredde 64.9 km/h da 248°; ERA5 850–500 hPa 30.0 km/h da 269°",
+  "misure": {
+    "secondi": {
+      "caricamento": 0.66,
+      "moto_LK": 0.09,
+      "estrapolazione": 0.0,
+      "totale_processo": 72.6
+    },
+    "MB_scaricati": 0,
+    "MB_conservati": 0,
+    "picco_RAM_MB": 327.4,
+    "frame": [
+      "2019-07-15 12:00",
+      "2019-07-15 12:15",
+      "2019-07-15 12:30",
+      "2019-07-15 12:45"
+    ],
+    "shape_frame": [
+      4,
+      80,
+      80
+    ],
+    "moto_medio_nubi_fredde": {
+      "km_h": 64.9,
+      "da_gradi": 248,
+      "u_est_km_h": 60.2,
+      "v_nord_km_h": 24.4,
+      "velocita_mediana_km_h": 64.3,
+      "n_pixel": 325
+    },
+    "frac_nan_forecast": [
+      0.129,
+      0.233
+    ],
+    "era5": {
+      "secondi": 55.9,
+      "850hPa": {
+        "km_h": 11.0,
+        "da_gradi": 234
+      },
+      "700hPa": {
+        "km_h": 21.7,
+        "da_gradi": 270
+      },
+      "500hPa": {
+        "km_h": 59.6,
+        "da_gradi": 275
+      },
+      "media_850_500": {
+        "km_h": 30.0,
+        "da_gradi": 269
+      }
+    }
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-07T22:19:15+00:00",
+  "note": [
+    "Picco RAM = 'maximum resident set size' di /usr/bin/time -l sul processo figlio",
+    "Frecce da verificare a occhio nel PNG: il criterio 'coerenti' non è automatico"
+  ]
+}

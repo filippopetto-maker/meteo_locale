@@ -1,0 +1,83 @@
+{
+  "test": "s4_opera",
+  "esito": "OK",
+  "domanda": "Il composito OPERA copre davvero Spagna, Balcani e mare, sia nell'era ODYSSEY (2 km) sia in quella CIRRUS (1 km)?",
+  "risposta": "2019 ODYSSEY: spagna 96.2%, italia 45.7%, balcani 58.7%, lazio 38.6%, tirreno 23.8%, nord_africa 23.7% | 2025 CIRRUS: spagna 91.2%, italia 60.2%, balcani 73.9%, lazio 54.1%, tirreno 23.6%, nord_africa 20.4%",
+  "misure": {
+    "secondi": {
+      "2019 ODYSSEY": 0.34,
+      "2025 CIRRUS": 0.43
+    },
+    "MB_scaricati": 3.4,
+    "MB_conservati": 0,
+    "compositi": {
+      "2019 ODYSSEY": {
+        "file": "2019/07/15/OPERA/COMP/OPERA@20190715T1200@0@DBZH_QIND.h5",
+        "MB": 0.75,
+        "prodotto_odim": "COMP",
+        "quantita": [
+          "DBZH",
+          "QIND"
+        ],
+        "data_ora_odim": "20190715 120000",
+        "griglia": "1900×2200",
+        "risoluzione_m": [
+          2000.0,
+          2000.0
+        ],
+        "projdef": "+proj=laea +lat_0=55.0 +lon_0=10.0 +x_0=1950000.0 +y_0=-2100000.0 +units=m +ellps=WGS84",
+        "gain_offset_nodata_undetect": [
+          1.0,
+          0.0,
+          -9999000.0,
+          -8888000.0
+        ],
+        "dtype": "float64",
+        "copertura_pct": {
+          "spagna": 96.2,
+          "italia": 45.7,
+          "balcani": 58.7,
+          "lazio": 38.6,
+          "tirreno": 23.8,
+          "nord_africa": 23.7
+        }
+      },
+      "2025 CIRRUS": {
+        "file": "2025/07/15/OPERA/COMP/OPERA@20250715T1400@0@DBZH.h5",
+        "MB": 2.64,
+        "prodotto_odim": "MAX",
+        "quantita": [
+          "DBZH"
+        ],
+        "data_ora_odim": "20250715 140000",
+        "griglia": "3800×4400",
+        "risoluzione_m": [
+          1000.0,
+          1000.0
+        ],
+        "projdef": "+proj=laea +lat_0=55.0 +lon_0=10.0 +x_0=1950000.0 +y_0=-2100000.0 +units=m +ellps=WGS84",
+        "gain_offset_nodata_undetect": [
+          1.0,
+          0.0,
+          -9999000.0,
+          -8888000.0
+        ],
+        "dtype": "float64",
+        "copertura_pct": {
+          "spagna": 91.2,
+          "italia": 60.2,
+          "balcani": 73.9,
+          "lazio": 54.1,
+          "tirreno": 23.6,
+          "nord_africa": 20.4
+        }
+      }
+    }
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-07T22:11:20+00:00",
+  "note": [
+    "API EDR per 15/07/2025: HTTP 204; X-RateLimit-Limit 200 (remaining 45)",
+    "Storico solo via bucket S3 openradar-archive (anonimo); API EDR MeteoGate = cache 24 h"
+  ]
+}

@@ -1,0 +1,35 @@
+# Ambiente conda separato per ia_meteo (non tocca l'ambiente `meteo`).
+#
+# Su Mac Apple Silicon pysteps non è su conda-forge (osx-arm64) e il wheel pip
+# va compilato con OpenMP, che il clang di Apple non ha. Procedura verificata
+# il 07/10/2026:
+#   mamba env create -f ia_meteo/environment.yml        # fallisce solo sul pip di pysteps
+#   E=~/miniforge3/envs/ia_meteo
+#   CC=$E/bin/arm64-apple-darwin20.0.0-clang CFLAGS="-I$E/include" \
+#     LDFLAGS="-L$E/lib -Wl,-rpath,$E/lib" $E/bin/pip install pysteps
+name: ia_meteo
+channels: [conda-forge]
+dependencies:
+  - python=3.12
+  - satpy
+  - pyresample
+  - xarray
+  - zarr
+  - netcdf4
+  - h5netcdf
+  - h5py
+  - dask
+  - matplotlib
+  - pandas
+  - requests
+  - python-dotenv
+  - clang_osx-arm64   # per compilare pysteps (vedi sopra)
+  - llvm-openmp
+  - py-opencv         # richiesto da pysteps LK (morph_opening), non elencato nel brief
+  - pip
+  - pip:
+      - pysteps
+      - eumdac
+      - "cdsapi>=0.7.7"
+      - huggingface_hub
+      - earthaccess

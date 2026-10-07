@@ -1,0 +1,94 @@
+{
+  "test": "s3_li_flashes",
+  "esito": "OK",
+  "domanda": "I file LI si leggono, e possiamo usarli per trovare automaticamente le ore convettive?",
+  "risposta": "48/48 prodotti da 10 min letti (167.5 MB solo BODY); griglia sparsa su geostazionaria FCI 2 km; best_hour_utc 14:00 (36576 flash·pixel nel dominio)",
+  "misure": {
+    "secondi": {
+      "search": 2.52,
+      "download": 75.81,
+      "lettura": 6.47
+    },
+    "MB_scaricati": 167.5,
+    "MB_conservati": 0,
+    "n_prodotti": 48,
+    "struttura_file": {
+      "variabili": [
+        "auxiliary_dataset_identifier",
+        "auxiliary_dataset_status",
+        "mtg_geos_projection",
+        "accumulation_start_times",
+        "accumulation_offsets",
+        "x",
+        "y",
+        "flash_accumulation",
+        "l1b_missing_warning",
+        "l1b_geolocation_warning",
+        "l1b_radiometric_warning",
+        "average_flash_qa"
+      ],
+      "dimensioni": {
+        "auxiliary_dataset": 1,
+        "accumulations": 20,
+        "pixels": 152309
+      },
+      "griglia": "sparsa (pixels) su griglia geostazionaria FCI 5568×5568 (area satpy mtg_fci_fdss_2km), ≈2 km al nadir, ~3-4 km a 40-45°N",
+      "accumulazioni_per_file": 20,
+      "durata_file_s": "600",
+      "unita": "flashes/pixel"
+    },
+    "conteggi_per_ora_zona": {
+      "10": {
+        "dominio": 19406.4,
+        "spagna": 0.0,
+        "italia": 0.0,
+        "balcani": 2132.5
+      },
+      "11": {
+        "dominio": 34109.5,
+        "spagna": 5.1,
+        "italia": 0.0,
+        "balcani": 3979.3
+      },
+      "12": {
+        "dominio": 33386.3,
+        "spagna": 0.0,
+        "italia": 0.0,
+        "balcani": 5283.5
+      },
+      "13": {
+        "dominio": 32867.3,
+        "spagna": 5.0,
+        "italia": 15.1,
+        "balcani": 6593.2
+      },
+      "14": {
+        "dominio": 36576.3,
+        "spagna": 0.0,
+        "italia": 498.2,
+        "balcani": 8049.0
+      },
+      "15": {
+        "dominio": 30561.3,
+        "spagna": 4.8,
+        "italia": 30.1,
+        "balcani": 5977.3
+      },
+      "16": {
+        "dominio": 23922.5,
+        "spagna": 26.5,
+        "italia": 5.2,
+        "balcani": 3039.1
+      },
+      "17": {
+        "dominio": 24124.3,
+        "spagna": 30.1,
+        "italia": 0.0,
+        "balcani": 1009.9
+      }
+    }
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-07T22:03:22+00:00",
+  "best_hour_utc": 14
+}

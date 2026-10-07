@@ -1,0 +1,82 @@
+{
+  "test": "s1_seviri",
+  "esito": "OK",
+  "domanda": "L'archivio SEVIRI si scarica con le nostre chiavi, quanto pesa un disco, e satpy lo legge e ritaglia sul dominio?",
+  "risposta": "4 prodotti trovati in 1 h; 4/4 scaricati e letti; zip medio 185.2 MB, .nat 271.2 MB, download medio 17.2 s; Tb 217.8–327.0 K; ritaglio 0,05° 1.3 MB",
+  "misure": {
+    "secondi": {
+      "auth": 0.0,
+      "search": 5.42,
+      "download_tot": 68.8
+    },
+    "MB_scaricati": 740.6,
+    "MB_conservati": 5.2,
+    "prodotti": [
+      {
+        "id": "MSG4-SEVI-MSG15-0100-NA-20190715121242.256000000Z-NA",
+        "sensing_start": "2019-07-15 12:00:09.393000",
+        "sensing_end": "2019-07-15 12:12:42.256000",
+        "size_dichiarata_MB": 181.3,
+        "sec_download": 17.1,
+        "MB_zip": 185.7,
+        "MB_nat": 271.2,
+        "sec_lettura_ritaglio": 9.6,
+        "Tb_min_K": 217.8,
+        "Tb_max_K": 326.3,
+        "frac_nan": 0.0,
+        "crop": "crop_20190715T1200.nc",
+        "MB_crop": 1.3
+      },
+      {
+        "id": "MSG4-SEVI-MSG15-0100-NA-20190715122742.197000000Z-NA",
+        "sensing_start": "2019-07-15 12:15:09.333000",
+        "sensing_end": "2019-07-15 12:27:42.197000",
+        "size_dichiarata_MB": 181.1,
+        "sec_download": 17.4,
+        "MB_zip": 185.4,
+        "MB_nat": 271.2,
+        "sec_lettura_ritaglio": 1.0,
+        "Tb_min_K": 218.9,
+        "Tb_max_K": 326.4,
+        "frac_nan": 0.0,
+        "crop": "crop_20190715T1215.nc",
+        "MB_crop": 1.3
+      },
+      {
+        "id": "MSG4-SEVI-MSG15-0100-NA-20190715124243.344000000Z-NA",
+        "sensing_start": "2019-07-15 12:30:10.479000",
+        "sensing_end": "2019-07-15 12:42:43.344000",
+        "size_dichiarata_MB": 180.7,
+        "sec_download": 18.1,
+        "MB_zip": 185.0,
+        "MB_nat": 271.2,
+        "sec_lettura_ritaglio": 1.0,
+        "Tb_min_K": 220.2,
+        "Tb_max_K": 326.4,
+        "frac_nan": 0.0,
+        "crop": "crop_20190715T1230.nc",
+        "MB_crop": 1.3
+      },
+      {
+        "id": "MSG4-SEVI-MSG15-0100-NA-20190715125743.287000000Z-NA",
+        "sensing_start": "2019-07-15 12:45:10.421000",
+        "sensing_end": "2019-07-15 12:57:43.287000",
+        "size_dichiarata_MB": 180.2,
+        "sec_download": 16.2,
+        "MB_zip": 184.5,
+        "MB_nat": 271.2,
+        "sec_lettura_ritaglio": 1.0,
+        "Tb_min_K": 219.9,
+        "Tb_max_K": 327.0,
+        "frac_nan": 0.0,
+        "crop": "crop_20190715T1245.nc",
+        "MB_crop": 1.3
+      }
+    ],
+    "http": [
+      "nessun 429 osservato"
+    ]
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-07T21:57:04+00:00"
+}

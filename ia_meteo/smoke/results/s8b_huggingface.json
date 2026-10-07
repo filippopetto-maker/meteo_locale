@@ -1,0 +1,27 @@
+{
+  "test": "s8b_huggingface",
+  "esito": "OK",
+  "domanda": "Possiamo scrivere sul dataset privato Hugging Face?",
+  "risposta": "dataset privato Fil728/ia-meteo-events: creato=True, privato=True, upload+verifica+cancellazione riusciti; file rimasti: ['.gitattributes']",
+  "misure": {
+    "secondi": {
+      "totale": 2.65
+    },
+    "MB_scaricati": 0,
+    "MB_conservati": 0,
+    "passi": {
+      "utente": "Fil728",
+      "create_repo": "https://huggingface.co/datasets/Fil728/ia-meteo-events",
+      "privato": true,
+      "file_dopo_upload": [
+        ".gitattributes",
+        "smoke_test/s1_seviri.json"
+      ],
+      "file_dopo_delete": [
+        ".gitattributes"
+      ]
+    }
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-07T22:15:35+00:00"
+}

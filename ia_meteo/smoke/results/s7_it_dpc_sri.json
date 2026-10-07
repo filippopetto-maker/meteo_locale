@@ -1,0 +1,90 @@
+{
+  "test": "s7_it_dpc_sri",
+  "esito": "OK",
+  "domanda": "Si può leggere un pezzo dell'archivio IT-DPC-SRI senza scaricare i 51 GB?",
+  "risposta": "Sì: Zarr anonimo su EWC (s3 https://object-store.os-api.cci2.ecmwf.int), apertura lazy 2.07 s, timestep 2019-07-15T12:00 sul Lazio letto in 1.51 s trasferendo ~17.9 MB (1 chunk); Zenodo ha solo il tar.zst da 49.83 GB",
+  "misure": {
+    "secondi": {
+      "zenodo_api": 0.13,
+      "apertura_lazy": 2.07,
+      "lettura_timestep_lazio": 1.51
+    },
+    "MB_scaricati": 17.9,
+    "MB_conservati": 0,
+    "file_zenodo": [
+      {
+        "file": "italian-radar-dpc-sri.zarr.tar.zst",
+        "GB": 49.83
+      }
+    ],
+    "dataset": {
+      "variabili": [
+        "RR",
+        "crs"
+      ],
+      "variabile_usata": "RR",
+      "dims": {
+        "time": 1039785,
+        "y": 1400,
+        "x": 1200,
+        "missing_times": 15530
+      },
+      "coords": [
+        "lat",
+        "lon",
+        "missing_times",
+        "time",
+        "x",
+        "y"
+      ],
+      "chunks": [
+        [
+          1
+        ],
+        [
+          1400
+        ],
+        [
+          1200
+        ]
+      ],
+      "attrs_var": {
+        "grid_mapping": "crs",
+        "long_name": "Total precipitation rate",
+        "standard_name": "rainfall_flux",
+        "units": "kg m-2 h-1"
+      },
+      "periodo": [
+        "2010-01-01T00:00",
+        "2025-12-31T23:55"
+      ],
+      "timestep_letto": "2019-07-15T12:00",
+      "metodo_crop": "coordinate lat/lon 2D",
+      "shape_ritaglio": [
+        187,
+        222
+      ],
+      "chunk_zarr": [
+        1,
+        1400,
+        1200
+      ],
+      "compressore": "{'blocksize': 0, 'clevel': 9, 'cname': 'zstd', 'id': 'blosc', 'shuffle': 0}",
+      "n_chunk_toccati": 1,
+      "MB_chunk_dati": 0.17,
+      "MB_metadati_e_coordinate": 17.73,
+      "pioggia_mm_h": {
+        "max": 17.15,
+        "frac_pioggia>0.1": 0.241,
+        "frac_nan": 0.0
+      }
+    },
+    "metodo": "xarray.open_zarr + s3fs anonimo, endpoint https://object-store.os-api.cci2.ecmwf.int, s3://mlcast-source-datasets/IT-DPC-SRI/v0.1.0/italian-radar-dpc-sri.zarr"
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-07T22:14:22+00:00",
+  "note": [
+    "Pacchetto mlcast-datasets non necessario: il preprint dà percorso ed endpoint diretti",
+    "Il preprint conferma che l'Italia non partecipa al composito OPERA"
+  ]
+}

@@ -1,0 +1,7 @@
+data/
+smoke/raw/
+*.nc
+*.nat
+*.zip
+*.h5
+*.zarr/

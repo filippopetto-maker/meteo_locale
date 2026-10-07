@@ -1,0 +1,54 @@
+{
+  "test": "s8a_imerg",
+  "esito": "OK",
+  "domanda": "Il login Earthdata funziona e un file IMERG Final V07 si legge?",
+  "risposta": "login OK; 3B-HHR.MS.MRG.3IMERG.20230715-S120000-E122959.0720.V07B.HDF5: 7.86 MB, variabile 'precipitation' (mm/hr), 0.1°; V08 su CMR: 0 granuli, versioni collezione ['07']",
+  "misure": {
+    "secondi": {
+      "login": 1.44,
+      "ricerca": 0.54,
+      "download": 5.27
+    },
+    "MB_scaricati": 7.86,
+    "MB_conservati": 0,
+    "login_ok": true,
+    "granuli_15_07_2023_12UTC_per_versione": {
+      "07": 1,
+      "08": 0
+    },
+    "collezioni_GPM_3IMERGHH": [
+      "07"
+    ],
+    "file": "3B-HHR.MS.MRG.3IMERG.20230715-S120000-E122959.0720.V07B.HDF5",
+    "MB": 7.86,
+    "variabile": "precipitation",
+    "unita": "mm/hr",
+    "griglia_globale": {
+      "time": 1,
+      "lon": 3600,
+      "lat": 1800
+    },
+    "risoluzione_gradi": 0.1,
+    "shape_ritaglio": [
+      400,
+      200
+    ],
+    "max_mm_h": 9.06,
+    "frac_pioggia>0.1": 0.0104,
+    "frac_nan": 0.0,
+    "variabili_Grid": [
+      "time_bnds",
+      "lon_bnds",
+      "lat_bnds",
+      "precipitation",
+      "randomError",
+      "probabilityLiquidPrecipitation",
+      "precipitationQualityIndex"
+    ]
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-07T22:15:32+00:00",
+  "note": [
+    "https://gpm.nasa.gov/data/news/imerg-v08-transition-schedule (28/04/2026): V07 Final termina a settembre 2025; V08 Final prevista nell'estate 2026, retroprocessata dal 1998; Late/Early in modalità 'hybrid V07'"
+  ]
+}
