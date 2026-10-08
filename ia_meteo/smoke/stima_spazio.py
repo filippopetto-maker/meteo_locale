@@ -134,7 +134,14 @@ def main():
             "ore_download_con_worker": round((n_sev * SLOT_SEVIRI * (sev_dl_s + sev_rd_s) + n_fci * CICLI_FCI * fci_s) / 3600 / WORKER, 0),
         }
     picco_lavoro_gb = WORKER * (zip_mb + nat_mb) / 1000
-    catalogo_gb = ORE_ERA5_CATALOGO * CAMPI_CATALOGO * era5_campo_ora / 1000
+    s12 = read_result("s12_archivio_catalogo")
+    mese = (s12 or {}).get("misure", {}).get("catalogo") or {}
+    if mese.get("MB_file"):          # misurato: un mese reale di catalogo (S12)
+        catalogo_gb = 11 * 8 * mese["MB_file"] / 1000
+        catalogo_ore_cds = round(11 * 8 * mese["secondi_cds"] / 3600, 1)
+    else:                            # stima dai campi dell'evento (S10)
+        catalogo_gb = ORE_ERA5_CATALOGO * CAMPI_CATALOGO * era5_campo_ora / 1000
+        catalogo_ore_cds = None
     out = {
         "parametri": {"finestre": FINESTRE, "quota_fci": QUOTA_FCI, "quota_lazio": QUOTA_LAZIO,
                       "quota_cirrus_su_seviri": QUOTA_CIRRUS, "worker": WORKER,
@@ -147,6 +154,7 @@ def main():
         "scenari": scenari,
         "picco_disco_lavoro_GB": round(picco_lavoro_gb, 2),
         "catalogo_era5_fase1_GB": round(catalogo_gb, 1),
+        "catalogo_era5_fase1_ore_cds_in_sequenza": catalogo_ore_cds,
         "ambiente_conda_GB": 1.6,
     }
     (RESULTS / "stima_spazio.json").write_text(json.dumps(out, indent=2, ensure_ascii=False))

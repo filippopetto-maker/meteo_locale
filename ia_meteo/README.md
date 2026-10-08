@@ -23,7 +23,7 @@ Vive solo nel branch `ia-meteo` e non tocca la produzione di `meteo_locale`
 ia_meteo/
 ├── environment.yml   # ambiente conda ia_meteo (note di installazione su Apple Silicon in testa)
 ├── common.py         # DOMAIN_BBOX, TEST_BBOXES, helper .env, timer, dimensioni, write_result
-├── archivio.py       # archivio delle finestre su Hugging Face, budget Mac/HF, cache a tetto fisso
+├── archivio.py       # archivio su Hugging Face (finestre, catalogo), budget Mac/HF, cache a tetto fisso
 ├── finestra.py       # costruisce una finestra (tutte le fonti sulla griglia 0,05°) e la carica su HF
 ├── data/             # staging, lavoro e cache locali (ignorato da git, tetto 12 GB)
 ├── fonti/            # accesso alle fonti, consolidato dalla Fase 0 (base dei fetch_*.py della Fase 2)
@@ -34,7 +34,7 @@ ia_meteo/
 │   ├── itdpc.py      # IT-DPC-SRI lazy dall'European Weather Cloud
 │   └── imerg.py      # IMERG via earthaccess
 └── smoke/
-    ├── s1_seviri.py … s11_archivio_hf.py  # un test per fonte (S10: CAPE/CIN, S11: archivio HF)
+    ├── s1_seviri.py … s12_archivio_catalogo.py  # un test per fonte (S10 CAPE/CIN, S11-S12 archivio HF)
     ├── stima_spazio.py                  # spazio e tempi per i test reali, da misure
     ├── make_report.py                   # genera REPORT.md dai JSON
     ├── results/                         # un JSON per test
@@ -55,8 +55,12 @@ python make_report.py
 
 ## Spazio: Mac a tetto fisso, archivio su Hugging Face
 
-Il Mac ha al più ~20 GB liberi; l'archivio delle finestre sta sul dataset privato
-`<utente>/ia-meteo-events` (budget ~95 GB). Il flusso per ogni finestra è:
+Il Mac ha al più ~20 GB liberi; l'archivio sta sul dataset privato `<utente>/ia-meteo-events`
+(budget ~95 GB), diviso in sezioni: `finestre/` (Fase 2) e `catalogo/` (Fase 1, ERA5 mese per mese).
+Ogni pezzo si produce in locale, si carica con `archivio.carica(sezione, chiave, file)` (un commit che
+aggiorna anche `registro.json`), si verifica sul repo e si cancella dal Mac. `archivio.presente(sezione,
+chiave)` dice se un pezzo è già su HF: i lavori lunghi a sessioni lo usano per saltare il fatto e
+riprendere dopo un'interruzione. Il flusso per ogni finestra è:
 
 1. `finestra.py` scarica le fonti un prodotto alla volta (3 in parallelo), ritaglia sulla griglia
    0,05° e cancella subito il grezzo; scrive `data/staging/<id>/` (≈ 0,06–0,17 GB in int16);
@@ -79,6 +83,17 @@ Su HF i file cancellati continuano a occupare spazio nella cronologia finché no
 ```bash
 python finestra.py --id 20190715_06 --inizio 2019-07-15T06:00 --fine 2019-07-15T18:00 --carica
 python finestra.py --id 20220812_10 --inizio 2022-08-12T10:00 --fine 2022-08-12T22:00 --lazio --carica
+```
+
+Catalogo della Fase 1, un mese alla volta (sul Mac c'è al più un mese, ~50 MB):
+
+```python
+import archivio as ar
+from fonti import era5
+if not ar.presente("catalogo", ar.chiave_catalogo(2019, 7)):
+    f, misure = era5.catalogo_mese(2019, 7, ar.STAGING / "catalogo")
+    ar.carica_catalogo(f, 2019, 7, voce=misure)      # carica, verifica, cancella il file locale
+ds_path = ar.scarica_catalogo(2019, 7)               # in data/cache/catalogo/, cache LRU
 ```
 
 Credenziali: `.env` della root (`EUMETSAT_CONSUMER_KEY`, `EUMETSAT_CONSUMER_SECRET`, `HF_TOKEN`),

@@ -13,7 +13,7 @@ from common import RESULTS, SMOKE
 
 ORDINE = ["s1_seviri", "s2_fci", "s3_li_flashes", "s4_opera", "s5_openmeteo_env", "s6_era5_cds",
           "s7_it_dpc_sri", "s8a_imerg", "s8b_huggingface", "s9_toolchain", "s10_cape_cin",
-          "s11_archivio_hf"]
+          "s11_archivio_hf", "s12_archivio_catalogo"]
 
 QUOTA_EUMETSAT = ("Nessun HTTP 429 in oltre 200 download (SEVIRI, LI, entry FCI, richieste Range da 1 byte) "
                   "né header `X-RateLimit-*` sulle API Data Store. Data Tailor: quota disco utente 20 000 MB per "
@@ -229,7 +229,8 @@ def main():
               "ma costa ~50 s di elaborazione lato server per slot.", "", "**Spazio sul Mac** (i dati scaricati non restano: ogni slot si ritaglia e si cancella):", "",
               f"- Lavoro durante il download: ~{st['picco_disco_lavoro_GB']} GB ({p['worker']} worker × zip+.nat SEVIRI).",
               f"- Catalogo eventi ERA5 della Fase 1 (CAPE, CIN, precipitazione convettiva, orari, apr–nov 2015–2025): "
-              f"~{st['catalogo_era5_fase1_GB']} GB.",
+              f"~{st['catalogo_era5_fase1_GB']} GB (88 mesi; misurato su un mese reale in S12), da tenere su HF: sul Mac "
+              f"c'è al più un mese. Tempo CDS in sequenza ~{st.get('catalogo_era5_fase1_ore_cds_in_sequenza')} h.",
               f"- Ambiente conda: ~{st['ambiente_conda_GB']} GB (già installato).",
               f"- Dataset ritagliato: da {st['scenari']['150']['GB_conservati_int16']} GB (150 finestre, int16) a "
               f"{s300['GB_conservati_float32']} GB (300 finestre, float32) se resta tutto in locale; "
@@ -262,7 +263,16 @@ def main():
         L += ["", "Su HF i file eliminati restano nella cronologia: `archivio.compatta_cronologia()` la riduce a "
               "un commit. Il conteggio `used_storage` di HF si aggiorna in differita: durante S11 è rimasto a "
               f"{m['hf_dopo']['account_GB']} GB sia con le finestre caricate sia dopo la pulizia. Per questo "
-              "`controlla_budget` usa il massimo tra il valore HF e la somma delle finestre nel registro.", ""]
+              "`controlla_budget` usa il massimo tra il valore HF e la somma delle voci nel registro.", ""]
+    s12 = R.get("s12_archivio_catalogo")
+    if s12:
+        m = s12["misure"]
+        L += ["### Catalogo della Fase 1 sullo stesso archivio (S12)", "",
+              f"- Esito: **{s12['esito']}**. {s12['risposta']}.",
+              f"- Lettura: {m.get('lettura')}; dopo `prepara_cin`: {m.get('dopo_prepara_cin')}.",
+              f"- Cache LRU con tetto di prova {m.get('lru', {}).get('tetto_prova_GB')} GB: tolti in ordine "
+              f"{m.get('lru', {}).get('tolte_in_ordine')}.",
+              f"- Registro finale: {m.get('registro_finale')}.", ""]
 
     L += ["## 4. Problemi incontrati e differenze rispetto alla documentazione", ""]
     L += [f"- {n}" for n in NOTE_ESECUZIONE]

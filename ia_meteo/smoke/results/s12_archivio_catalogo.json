@@ -1,0 +1,98 @@
+{
+  "test": "s12_archivio_catalogo",
+  "esito": "OK",
+  "domanda": "Lo stesso archivio HF regge anche il catalogo ERA5 della Fase 1 (caricamento, verifica, ripresa a sessioni, cache a tetto fisso)?",
+  "risposta": "Sì: catalogo era5_2019_07 (744 ore, 21.2 MB, CDS 445.6 s) già su HF da una sessione precedente: ripreso senza nuova richiesta CDS; presente() lo riconosce; mini-finestra caricata e riscaricata identica (anche solo radar); LRU ha tolto prima catalogo/era5_2019_07.nc",
+  "misure": {
+    "secondi": {
+      "riscaricamento_catalogo": 4.1
+    },
+    "MB_scaricati": 23.0,
+    "MB_conservati": 0,
+    "gia_presente_prima": true,
+    "catalogo": {
+      "ore": 744,
+      "variabili": [
+        "cape",
+        "cin",
+        "cp"
+      ],
+      "MB_scaricati": 23.0,
+      "MB_file": 21.2,
+      "secondi_cds": 445.6,
+      "anno": 2019,
+      "mese": 7,
+      "GB": 0.0212,
+      "caricata_utc": "2026-10-08T12:35:43+00:00"
+    },
+    "presente_dopo": true,
+    "identico_dopo_riscaricamento": "già presente: confronto non fatto",
+    "lettura": {
+      "ore": 744,
+      "variabili": [
+        "cape",
+        "cin",
+        "cp"
+      ],
+      "primo_ultimo": [
+        "2019-07-01T00",
+        "2019-07-31T23"
+      ],
+      "cape_max": 9888.0,
+      "cin_frac_definita": 0.189
+    },
+    "dopo_prepara_cin": {
+      "cin_nan": 0,
+      "cin_max": 1000.0001831054688
+    },
+    "finestra": {
+      "upload": {
+        "sezione": "finestre",
+        "chiave": "prova_s12_20190715T12",
+        "GB": 0.0019,
+        "secondi_upload": 1.7,
+        "file": 5
+      },
+      "staging_cancellato": true,
+      "identica": true,
+      "solo_radar": {
+        "restituiti": [
+          "meta.json",
+          "radar.nc"
+        ],
+        "in_cache": [
+          "meta.json",
+          "radar.nc"
+        ]
+      },
+      "secondi": 65.7
+    },
+    "lru": {
+      "tetto_prova_GB": 0.005,
+      "tolte_in_ordine": [
+        "catalogo/era5_2019_07.nc"
+      ],
+      "cache_dopo_GB": 0.002
+    },
+    "registro_finale": {
+      "finestre": [],
+      "catalogo": [
+        "era5_2019_07"
+      ]
+    },
+    "spazio_hf": {
+      "account_GB": 0.034,
+      "repo": {
+        "dataset:Fil728/ia-meteo-events": 0.034
+      }
+    },
+    "spazio_locale": {
+      "data_GB": 0.0,
+      "cache_GB": 0.0,
+      "staging_GB": 0.0,
+      "disco_libero_GB": 21.92
+    }
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-08T12:47:23+00:00"
+}

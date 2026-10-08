@@ -69,6 +69,7 @@
     }
   },
   "picco_disco_lavoro_GB": 1.37,
-  "catalogo_era5_fase1_GB": 4.5,
+  "catalogo_era5_fase1_GB": 1.9,
+  "catalogo_era5_fase1_ore_cds_in_sequenza": 10.9,
   "ambiente_conda_GB": 1.6
 }

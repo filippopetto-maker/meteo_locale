@@ -40,6 +40,8 @@ LIVELLI = ["850", "700", "500", "300"]
 # campi fissi (una volta sola): quota del terreno e maschera terra/mare per la distanza dalla costa
 VAR_FISSE = ["geopotential", "land_sea_mask"]
 CIN_MANCANTE = 1000.0   # J/kg: soglia oltre la quale ERA5 non scrive la CIN
+# catalogo eventi della Fase 1: ore con CAPE alto e precipitazione convettiva (planning)
+VAR_CATALOGO = ["convective_available_potential_energy", "convective_inhibition", "convective_precipitation"]
 
 
 def area_cds(bb: dict = DOMAIN_BBOX) -> list:
@@ -67,14 +69,15 @@ def _apri(target: Path, cartella: Path):
 
 def richiesta(dataset: str, variabili: list[str], giorno: datetime, ore: list[int],
               lavoro: Path, bb: dict = DOMAIN_BBOX, livelli: list[str] | None = None,
-              anni: list[int] | None = None, quiet: bool = True):
-    """Una richiesta CDS per un giorno (o per lo stesso giorno di più anni) e un insieme di ore.
-    Ritorna (Dataset in memoria, MB scaricati). I file vengono cancellati."""
+              anni: list[int] | None = None, quiet: bool = True, giorni: list[int] | None = None):
+    """Una richiesta CDS per un giorno (o più giorni dello stesso mese con `giorni`, o lo stesso giorno
+    di più anni con `anni`) e un insieme di ore. Ritorna (Dataset in memoria, MB scaricati).
+    I file vengono cancellati."""
     import cdsapi
     lavoro.mkdir(parents=True, exist_ok=True)
     req = dict(product_type=["reanalysis"], variable=variabili,
                year=[str(a) for a in (anni or [giorno.year])], month=[f"{giorno.month:02d}"],
-               day=[f"{giorno.day:02d}"], time=[f"{h:02d}:00" for h in ore],
+               day=[f"{g:02d}" for g in (giorni or [giorno.day])], time=[f"{h:02d}:00" for h in ore],
                area=area_cds(bb), data_format="netcdf", download_format="unarchived")
     if livelli:
         req["pressure_level"] = livelli
@@ -116,3 +119,24 @@ def fetch_env(t0: datetime, t1: datetime, lavoro: Path, bb: dict = DOMAIN_BBOX, 
         parti.append(xr.merge([s, p], compat="override"))
     ds = xr.concat(parti, dim="time") if len(parti) > 1 else parti[0]
     return prepara_cin(ds), peso
+
+
+def catalogo_mese(anno: int, mese: int, lavoro: Path, bb: dict = DOMAIN_BBOX, quiet: bool = True) -> tuple[Path, dict]:
+    """Un mese di catalogo per la Fase 1 (VAR_CATALOGO, tutte le ore, dominio) in un netCDF compresso
+    `lavoro/era5_AAAA_MM.nc`. La CIN resta grezza (NaN = mancante): `prepara_cin` si applica in lettura.
+    Una richiesta CDS sola (744 campi per 31 giorni). Ritorna (file, misure)."""
+    import calendar
+    import time
+    giorni = list(range(1, calendar.monthrange(anno, mese)[1] + 1))
+    t0 = time.perf_counter()
+    ds, peso = richiesta(SINGLE, VAR_CATALOGO, datetime(anno, mese, 1), list(range(24)), lavoro, bb,
+                         quiet=quiet, giorni=giorni)
+    sec = round(time.perf_counter() - t0, 1)
+    for v in ds.variables:
+        ds[v].encoding = {}
+    out = lavoro / f"era5_{anno:04d}_{mese:02d}.nc"
+    ds.attrs |= {"fonte": f"{SINGLE} (Copernicus CDS)", "nota_cin": "NaN = CIN > 1000 J/kg o nessuna base "
+                 "della nube (ERA5 data documentation); usare fonti.era5.prepara_cin"}
+    ds.to_netcdf(out, encoding={v: {"dtype": "float32", "zlib": True, "complevel": 4} for v in ds.data_vars})
+    return out, {"ore": int(ds.sizes["time"]), "variabili": sorted(ds.data_vars), "MB_scaricati": round(peso, 1),
+                 "MB_file": round(mb(out), 1), "secondi_cds": sec}
