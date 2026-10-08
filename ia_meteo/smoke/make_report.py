@@ -1,8 +1,8 @@
 """Genera smoke/REPORT.md leggendo smoke/results/*.json (Fase 0).
 
-Le stime Fase 2 sono calcolate dalle misure dei JSON; le note su problemi e
-differenze rispetto alla documentazione sono raccolte durante l'esecuzione
-(07-08/10/2026) e stanno in NOTE_ESECUZIONE qui sotto.
+Le stime per i test reali vengono da results/stima_spazio.json (stima_spazio.py);
+le note su problemi e differenze rispetto alla documentazione sono raccolte durante
+l'esecuzione (07-08/10/2026) e stanno in NOTE_ESECUZIONE.
 """
 import json
 import sys
@@ -12,60 +12,57 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common import RESULTS, SMOKE
 
 ORDINE = ["s1_seviri", "s2_fci", "s3_li_flashes", "s4_opera", "s5_openmeteo_env", "s6_era5_cds",
-          "s7_it_dpc_sri", "s8a_imerg", "s8b_huggingface", "s9_toolchain"]
+          "s7_it_dpc_sri", "s8a_imerg", "s8b_huggingface", "s9_toolchain", "s10_cape_cin"]
 
-QUOTA_EUMETSAT = ("Nessun HTTP 429 in oltre 100 download (4 SEVIRI da 185 MB, 2×48 LI, 2×8 entry FCI, "
-                  "2×61 richieste Range da 1 byte) né header `X-RateLimit-*` sulle API Data Store "
-                  "(browse/download). Data Tailor: quota disco utente 20 000 MB per gli output "
-                  "delle customizzazioni (endpoint quota, 08/10/2026). Nessun limite giornaliero "
-                  "documentato trovato dall'API stessa: resta da leggere la pagina ufficiale dei limiti.")
+QUOTA_EUMETSAT = ("Nessun HTTP 429 in oltre 200 download (SEVIRI, LI, entry FCI, richieste Range da 1 byte) "
+                  "né header `X-RateLimit-*` sulle API Data Store. Data Tailor: quota disco utente 20 000 MB per "
+                  "gli output delle customizzazioni (endpoint quota, 08/10/2026); 3 customizzazioni SEVIRI in "
+                  "parallelo accettate (145 s in tutto). Un limite giornaliero ufficiale non è esposto dall'API.")
 
 NOTE_ESECUZIONE = [
+    "**Codice consolidato.** Tutte le soluzioni trovate stanno nel pacchetto `ia_meteo/fonti/` "
+    "(`eumetsat`, `opera`, `era5`, `openmeteo`, `itdpc`, `imerg`); gli smoke test lo usano, e "
+    "lo useranno i `fetch_*.py` della Fase 2. Dopo il consolidamento tutti i test sono stati rieseguiti "
+    "con gli stessi risultati (08/10/2026).",
     "**Ambiente (B2).** `pysteps` non esiste su conda-forge per osx-arm64: installato via pip. Il wheel "
-    "va compilato con OpenMP, che il clang di Apple non ha → aggiunti all'ambiente `clang_osx-arm64` e `llvm-openmp` "
-    "e `CC` puntato a quel clang (procedura in testa a `environment.yml`). "
-    "pysteps LK richiede anche OpenCV (`py-opencv`), non elencato nel brief. Aggiunto `h5py` per ODIM. "
-    "`pysteps.__version__` non esiste: versione letta da `importlib.metadata` (1.21.5).",
-    "**SEVIRI.** Lo zip di un disco pesa ~185 MB (il .nat dentro 271 MB), non ~116 MB come nel planning.",
+    "va compilato con OpenMP, che il clang di Apple non ha → aggiunti all'ambiente `clang_osx-arm64` e "
+    "`llvm-openmp` e `CC` puntato a quel clang (procedura in testa a `environment.yml`). "
+    "pysteps LK richiede anche OpenCV (`py-opencv`), non elencato nel brief. Aggiunto `h5py` per ODIM.",
+    "**SEVIRI.** Lo zip di un disco pesa ~185 MB (il .nat dentro 271 MB), non ~116 MB come nel planning. "
+    "Data Tailor su SEVIRI funziona (`HRSEVIRI`, `channel_5/6/9`, ROI dominio): 7,3 MB in ~55 s invece "
+    "di 185 MB, ma l'output è in **radianza** e in proiezione geostazionaria: la conversione in Tb "
+    "(calibrazione SEVIRI) va scritta e verificata contro satpy prima di usarlo.",
     "**LI AF.** In archivio i prodotti sono da 10 min (20 accumuli da 30 s), 1 BODY + 1 TRAIL; il BODY "
-    "pesa da ~0,3 MB (mattina) a ~4 MB (pomeriggio convettivo). Griglia sparsa sulla griglia FCI 2 km. "
-    "La prima geolocalizzazione (x/y decodificati in radianti + pyproj) dava una mappa specchiata "
-    "est-ovest; adottata la convenzione del reader satpy `li_l2_nc` (indici interi, origine SW, area "
-    "`mtg_fci_fdss_2km`). `flash_accumulation` somma flash×pixel, non flash distinti. "
-    "`area.get_lonlat()` sull'intera griglia 5568² esaurisce gli 8 GB (OOM): si geolocalizzano solo i pixel attivi.",
-    "**FCI.** Il prodotto ha 61 entry, non 41: 40 BODY + 1 TRAIL + 18 quicklook PNG/JPG + manifest + "
-    "EOPMetadata. Somma entry 1103 MB contro 973 MB dichiarati dalla ricerca (`size`). "
-    "Chunk numerati da sud (chunk 1) a nord (40); righe reali lette dai file confermano la stima "
-    "geometrica. `Product.open(entry=...)` di eumdac scarica le singole entry. "
-    "Il TRAIL non serve a satpy per leggere i BODY. Data Tailor: `FCIL1FDHSI_NATIVE` + `netcdf4` è "
-    "rifiutato (\"no suitable back-end has been found\"); `FCIL1FDHSI` + `netcdf4` con banda "
-    "`ir_105_effective_radiance` e ROI funziona (output in radianza, non Tb).",
-    "**OPERA.** L'API EDR MeteoGate (anonima, 200 richieste/h, header `X-RateLimit-*`) serve solo "
-    "la cache delle ultime 24 h: per il 15/07/2025 risponde 204. Lo storico è nel bucket S3 pubblico "
-    "`openradar-archive` (CloudFerro, `--no-sign-request`), stesso schema di chiavi della cache. "
-    "Nel 2019 il prodotto si chiama `DBZH_QIND` (DBZH + indice di qualità in due dataset ODIM 2.0, "
-    "`product=COMP`, 15 min, 2 km, 1900×2200); nel 2025 `DBZH` (`product=MAX`, 5 min, 1 km, 3800×4400). "
-    "Il composito si ferma a ~31,7°N (angolo SW del dominio LAEA). Il preprint IT-DPC-SRI conferma che "
-    "l'Italia non partecipa al composito OPERA.",
-    "**Open-Meteo.** L'ID documentato per GFS è `ncep_gfs_seamless`; `gfs_seamless` funziona comunque "
-    "(alias, stessi valori). `ecmwf_ifs` (HRES 9 km) nello storico restituisce solo superficie: CAPE, "
-    "CIN, LI, quota zero termico e livelli di pressione sono nulli sia nel 2019 sia nel 2024 "
-    "(controllo: `temperature_2m` 24/24). `ecmwf_ifs025`: CAPE e livelli di pressione sì, CIN/LI/"
-    "zero termico no; documentato 3-orario ma restituito orario (interpolato).",
-    "**CDS.** Nomi variabili del brief tutti presenti nel `form.json` dei due dataset. La richiesta "
-    "single-levels torna come zip di 2 netCDF (stepType diversi, per `convective_precipitation`) anche con "
-    "`download_format=unarchived`. Nomi brevi nel netCDF: cape, cin, kx, totalx, tcwv, deg0l, blh, sst, cp. "
-    "Il CDS avvisa che i Termini d'uso cambiano il 28/10/2026 (l'uso continuato vale come accettazione).",
-    "**IT-DPC-SRI.** Su Zenodo c'è un solo `italian-radar-dpc-sri.zarr.tar.zst` (49,8 GB): niente lettura "
-    "parziale da lì. Il preprint (§6.2) dà il percorso S3 anonimo sull'European Weather Cloud; "
-    "`mlcast-datasets` non serve. Chunk Zarr = 1 timestep × intera Italia (1400×1200), ~0,17 MB "
-    "compressi; la prima apertura costa ~18 MB (coordinate lat/lon 2D e asse tempo da 1 M valori). "
-    "Unità `kg m-2 h-1` (= mm/h).",
-    "**IMERG / HF.** La V08 di `GPM_3IMERGHH` non è ancora su CMR (0 granuli, collezione solo `07`). "
-    "Il dataset HF è stato creato sotto l'utente del token (`Fil728/ia-meteo-events`), privato, ora "
-    "contiene solo `.gitattributes`.",
-    "**Gemini.** Le tre ricerche di documentazione delegate a Gemini (OPERA, FCI, IT-DPC-SRI) sono "
-    "andate in timeout; la documentazione è stata letta direttamente.",
+    "pesa da ~0,3 MB (mattina) a ~4 MB (pomeriggio convettivo). La prima geolocalizzazione (x/y in "
+    "radianti + pyproj) dava una mappa specchiata est-ovest; adottata la convenzione del reader satpy "
+    "`li_l2_nc`. `flash_accumulation` somma flash×pixel, non flash distinti. `area.get_lonlat()` "
+    "sull'intera griglia 5568² esaurisce gli 8 GB: si geolocalizzano solo i pixel attivi.",
+    "**FCI.** 61 entry per ciclo, non 41: 40 BODY + 1 TRAIL + 18 quicklook + manifest + EOPMetadata. "
+    "Somma entry 1103 MB contro 973 MB dichiarati. Chunk numerati da sud (1) a nord (40); le righe "
+    "reali lette dai file confermano la stima geometrica. Il TRAIL non serve a satpy. Data Tailor: "
+    "`FCIL1FDHSI_NATIVE` + `netcdf4` rifiutato; `FCIL1FDHSI` + `netcdf4` + `ir_105_effective_radiance` "
+    "funziona (radianza, ~4–5 min lato server).",
+    "**OPERA.** L'API EDR MeteoGate (anonima, 200 richieste/h) serve solo la cache di 24 h (204 per il "
+    "2025; il 08/10 ha risposto 429 a limite esaurito). Lo storico è nel bucket S3 pubblico "
+    "`openradar-archive` (CloudFerro). 2019: `DBZH_QIND` (ODIM 2.0, DBZH e QIND in dataset separati, "
+    "15 min, 2 km); 2025: `DBZH` (5 min, 1 km). Il composito si ferma a ~31,7°N. L'Italia non partecipa "
+    "a OPERA (preprint IT-DPC-SRI). Sulla griglia comune si usa il massimo per cella (non la media).",
+    "**Open-Meteo.** ID GFS documentato `ncep_gfs_seamless` (`gfs_seamless` è un alias). `ecmwf_ifs` "
+    "storico: solo superficie (niente CAPE/CIN né livelli di pressione, anche nel 2024). `ecmwf_ifs025`: "
+    "CAPE e livelli sì, CIN/LI/zero termico no.",
+    "**ERA5 / CIN.** Documentazione ERA5: \"A missing value is assigned to CIN for values of CIN > 1000 "
+    "or where there is no cloud base\". In S10 la CIN manca nel 46% dei punti con CAPE > 500 J/kg (fino "
+    "a CAPE 4568 J/kg): il NaN non è \"niente inibizione\". Prima versione di `prepara_cin` riempiva con 0 "
+    "(errato, corretto): ora NaN → 1000 J/kg + maschera `cin_definita`. La CAPE ERA5 è la most-unstable "
+    "(particelle sotto 350 hPa). La single-levels torna come zip di 2 netCDF anche con "
+    "`download_format=unarchived`. Il CDS cambia i Termini d'uso il 28/10/2026.",
+    "**IT-DPC-SRI.** Su Zenodo c'è un solo tar.zst da 49,8 GB. Il preprint (§6.2) dà il percorso S3 "
+    "anonimo sull'European Weather Cloud; `mlcast-datasets` non serve. Chunk = 1 timestep × intera "
+    "Italia (~0,17 MB); la prima apertura costa ~18 MB di coordinate.",
+    "**IMERG / HF.** V08 di `GPM_3IMERGHH` non ancora su CMR. Dataset HF `Fil728/ia-meteo-events` "
+    "privato, contiene solo `.gitattributes`.",
+    "**Gemini.** Le tre ricerche di documentazione delegate a Gemini sono andate in timeout; la "
+    "documentazione è stata letta direttamente.",
 ]
 
 
@@ -80,19 +77,18 @@ def load():
 def fmt_s(m):
     s = m.get("secondi")
     if isinstance(s, dict):
-        tot = sum(v for v in s.values() if isinstance(v, (int, float)))
         if "totale_processo" in s:
-            tot = s["totale_processo"]
-        return f"{tot:.0f}"
+            return f"{s['totale_processo']:.0f}"
+        return f"{sum(v for v in s.values() if isinstance(v, (int, float))):.0f}"
     return str(s) if s is not None else "–"
 
 
 def main():
     R = load()
     L = ["# IA meteo — Fase 0: smoke test", "",
-         "Generato da `smoke/make_report.py` dai JSON in `smoke/results/`. "
-         "Esecuzione 07–08/10/2026 sul Mac (Apple Silicon, 8 GB), ambiente conda `ia_meteo`. "
-         "Nessuna conclusione sulle scelte del planning: solo misure.", "",
+         "Generato da `smoke/make_report.py` dai JSON in `smoke/results/`. Esecuzione 07–08/10/2026 "
+         "sul Mac (Apple Silicon, 8 GB), ambiente conda `ia_meteo`, codice delle fonti in `ia_meteo/fonti/`. "
+         "Nessuna conclusione sulle scelte del planning: solo misure e decisioni aperte.", "",
          "## 1. Tabella riassuntiva", "",
          "| Test | Esito | Tempo (s) | MB scaricati | Risposta |", "|:--|:--|--:|--:|:--|"]
     for t in ORDINE:
@@ -103,40 +99,46 @@ def main():
         m = r["misure"]
         L.append(f"| {t} | **{r['esito']}** | {fmt_s(m)} | {m.get('MB_scaricati', '–')} | "
                  f"{r['risposta'].replace('|', '/')} |")
-    L += ["", "Tempo = somma delle fasi misurate nello script (per S9 il processo intero, inclusa la "
-          "richiesta ERA5 di confronto).", ""]
+    L += ["", "Tempo = somma delle fasi misurate (S9: processo intero). Le richieste CDS ripetute possono "
+          "uscire dalla cache del CDS e risultare più veloci della prima esecuzione.", ""]
 
-    # 2. da verificare
-    s1, s2, s3, s4, s5, s6, s7, s8 = (R["s1_seviri"], R["s2_fci"], R["s3_li_flashes"], R["s4_opera"],
-                                      R["s5_openmeteo_env"], R["s6_era5_cds"], R["s7_it_dpc_sri"], R["s8a_imerg"])
-    L += ["## 2. Risposte ai \"da verificare\" del planning", ""]
-    L += ["### Quote e rate limit API EUMETSAT", "", QUOTA_EUMETSAT, ""]
+    s1, s2, s3, s4, s5, s6, s7, s8, s10 = (R[k] for k in ("s1_seviri", "s2_fci", "s3_li_flashes", "s4_opera",
+                                                           "s5_openmeteo_env", "s6_era5_cds", "s7_it_dpc_sri",
+                                                           "s8a_imerg", "s10_cape_cin"))
+    L += ["## 2. Risposte ai \"da verificare\" del planning", "",
+          "### Quote e rate limit API EUMETSAT", "", QUOTA_EUMETSAT, ""]
     if s2:
         m = s2["misure"]
         dt = m.get("data_tailor") or {}
         L += ["### FCI: download per chunk e Data Tailor", "",
               f"- **Download per chunk: sì.** Ciclo {m['ciclo']}. {m['elenco_entry']['n_entry']} entry "
-              f"({m['elenco_entry']['n_body']} BODY, {m['elenco_entry']['n_trail']} TRAIL, resto quicklook/metadati). "
-              f"Chunk usati {m['chunk_usati'][0]}–{m['chunk_usati'][-1]} + TRAIL = "
-              f"**{m['MB_chunk_necessari_con_trail']} MB** contro **{m['elenco_entry']['MB_disco_intero_somma_entry']} MB** "
-              f"del disco intero. Ritaglio ir_105: Tb {m['ritaglio'].get('Tb_min_K')}–{m['ritaglio'].get('Tb_max_K')} K, "
-              f"NaN {100 * m['ritaglio'].get('frac_nan', 0):.2f}% (sottile striscia sul bordo nord-ovest).",
-              f"- Righe reali (ir_105, contate da sud) dei chunk usati: "
-              + ", ".join(f"{k}: {v[0]}–{v[1]}" for k, v in m["righe_reali_chunk_ir105"].items()) + ".",
+              f"({m['elenco_entry']['n_body']} BODY, {m['elenco_entry']['n_trail']} TRAIL, {m['elenco_entry']['n_altri']} "
+              f"quicklook/metadati). Chunk {m['chunk_usati'][0]}–{m['chunk_usati'][-1]} = **{m['MB_chunk_necessari']} MB** "
+              f"contro **{m['elenco_entry']['MB_disco_intero_somma_entry']} MB** del disco intero. Ritaglio 3 canali "
+              f"(ir_105 {m['ritaglio']['ir_105']['min_K']}–{m['ritaglio']['ir_105']['max_K']} K), NaN "
+              f"{100 * m['ritaglio']['frac_nan']:.2f}% (sottile striscia sul bordo nord-ovest), "
+              f"{m['ritaglio']['MB_crop_3canali_compresso']} MB compresso.",
+              "- Righe reali (ir_105, da sud): " + ", ".join(f"{k}: {v[0]}–{v[1]}" for k, v in m["righe_reali_chunk_ir105"].items()) + ".",
               "- MB per chunk (1→40): " + ", ".join(f"{v}" for v in m["elenco_entry"]["MB_per_chunk"].values()) + ".",
-              f"- **Data Tailor su FCI: sì** (prodotto `FCIL1FDHSI`, formato `netcdf4`, ROI dominio, banda "
-              f"`ir_105_effective_radiance`): stato {dt.get('stato')}, {dt.get('secondi')} s lato server, "
-              f"output {dt.get('MB_output')} MB. `FCIL1FDHSI_NATIVE` è rifiutato.", ""]
+              f"- **Data Tailor su FCI: sì** (`FCIL1FDHSI`, `netcdf4`, ROI dominio, radianza ir_105): "
+              f"{dt.get('stato')}, {dt.get('secondi')} s lato server, {dt.get('MB_output')} MB.", ""]
+    if s1:
+        dt = s1["misure"].get("data_tailor") or {}
+        L += ["### Data Tailor su SEVIRI (non chiesto dal brief, utile per i volumi)", "",
+              f"- `HRSEVIRI`, canali 5/6/9 (WV 6,2, WV 7,3, IR 10,8), ROI dominio: {dt.get('stato')}, "
+              f"{dt.get('secondi')} s, **{dt.get('MB_output')} MB** contro ~185 MB dello zip. Output in radianza, "
+              f"griglia geostazionaria {dt.get('dims')}. Conversione in Tb da implementare.", ""]
     if s3:
         sf = s3["misure"].get("struttura_file") or {}
         L += ["### Risoluzione della griglia LI", "",
-              f"- {sf.get('griglia')}. Variabili: {', '.join(sf.get('variabili', []))}.",
-              f"- {sf.get('accumulazioni_per_file')} accumuli per file, durata file {sf.get('durata_file_s')} s, "
-              f"unità `{sf.get('unita')}`. best_hour_utc (dominio) = **{s3.get('best_hour_utc')}**.",
+              f"- {sf.get('griglia')}.",
+              f"- {sf.get('accumulazioni_per_file')} accumuli per file, durata {sf.get('durata_file_s')} s, unità "
+              f"`{sf.get('unita')}`. best_hour_utc = **{s3.get('best_hour_utc')}**. Sulla griglia 0,05° si "
+              f"conserva il {100 * (s3['misure'].get('rapporto_griglia_su_totale') or 0):.2f}% dei flash del dominio.",
               "", "| Ora UTC | dominio | spagna | italia | balcani |", "|:--|--:|--:|--:|--:|"]
         for h, r in s3["misure"]["conteggi_per_ora_zona"].items():
             L.append(f"| {h} | {r.get('dominio')} | {r.get('spagna')} | {r.get('italia')} | {r.get('balcani')} |")
-        L += ["", "Valori in flash×pixel per ora (somma di `flash_accumulation`).", ""]
+        L += ["", "Valori in flash×pixel per ora.", ""]
     if s4:
         c = s4["misure"]["compositi"]
         zone = list(next(iter(c.values()))["copertura_pct"])
@@ -153,84 +155,94 @@ def main():
               "temperature_850hPa", "relative_humidity_700hPa", "temperature_2m"]
         L += ["### CAPE/CIN/livelli di pressione nello storico (Open-Meteo Historical Forecast)", "",
               "Ore non nulle su 24, Roma Sud (41.73, 12.35):", "",
-              "| Modello giorno | " + " | ".join(v.replace("_", " ") for v in vs) + " |",
-              "|:--|" + "--:|" * len(vs)]
+              "| Modello giorno | " + " | ".join(v.replace("_", " ") for v in vs) + " |", "|:--|" + "--:|" * len(vs)]
         for k, r in tab.items():
             L.append(f"| {k} | " + " | ".join(str(r.get(v, "–")) for v in vs) + " |")
-        L += ["", "IFS HRES 9 km (`ecmwf_ifs`) nello storico non fornisce né CAPE/CIN né livelli di pressione "
-              "(nemmeno nel 2024); `temperature_2m` è l'unico controllo pieno.", ""]
+        L += [""]
     if s6:
-        rq = s6["misure"]["richieste"]
-        sl = rq.get("reanalysis-era5-single-levels", {})
-        pl = rq.get("reanalysis-era5-pressure-levels", {})
+        m = s6["misure"]
         L += ["### `total_column_water_vapour` in ERA5", "",
-              f"- Presente: **{'sì' if s6.get('tcwv_presente') else 'no'}** (variabile `tcwv`).",
-              f"- Single levels: {', '.join(sl.get('variabili', []))}; griglia "
-              f"{sl.get('dimensioni', {}).get('latitude')}×{sl.get('dimensioni', {}).get('longitude')}; "
-              f"coda {sl.get('secondi_in_coda')} s, elaborazione {sl.get('secondi_elaborazione')} s, totale "
-              f"{sl.get('secondi_totali')} s, {sl.get('MB')} MB.",
-              f"- Pressure levels: {', '.join(pl.get('variabili', []))} a {pl.get('pressure_level')} hPa; coda "
-              f"{pl.get('secondi_in_coda')} s, totale {pl.get('secondi_totali')} s, {pl.get('MB')} MB.", ""]
+              f"- Presente: **{'sì' if s6.get('tcwv_presente') else 'no'}** (`tcwv`). Variabili di `fonti.era5.fetch_env`: "
+              f"{', '.join(m.get('variabili', []))}; griglia {m.get('dimensioni')}.", ""]
+    if s10:
+        m = s10["misure"]
+        L += ["### CAPE e CIN per l'addestramento (S10)", "",
+              f"- {s10['risposta']}.",
+              f"- {m.get('nota_cin_era5')}",
+              "", "| Anno ora | CAPE max | CAPE>500 (% dominio) | CIN definita (% dominio) | CIN mancante dove CAPE>500 | CAPE max dove CIN manca |",
+              "|:--|--:|--:|--:|--:|--:|"]
+        for k, v in m["per_anno_ora"].items():
+            L.append(f"| {k} | {v['cape_max']:.0f} | {100 * v['cape_frac>500']:.0f} | {100 * v['cin_frac_definita']:.0f} | "
+                     f"{100 * v['cin_NaN_frac_dove_cape>500']:.0f}% | {v['cape_max_dove_cin_NaN']:.0f} |")
+        L += ["", "Disponibilità in tempo reale (Forecast API, ore non nulle nelle prossime 24 h su Roma Sud):", "",
+              "| Modello | CAPE | CIN |", "|:--|--:|--:|"]
+        for k, v in m["forecast_24h_ore_non_nulle_roma"].items():
+            L.append(f"| {k} | {v.get('cape', v.get('errore', '–'))} | {v.get('convective_inhibition', '–')} |")
+        L += ["", "Convenzioni, Roma Sud 15/07 12 UTC (ERA5 most-unstable, CIN positiva o mancante; GFS "
+              "Open-Meteo, CIN negativa):", "", "| Anno | ERA5 CAPE | GFS CAPE | ERA5 CIN | GFS CIN |", "|:--|--:|--:|--:|--:|"]
+        for a, v in m["roma_12utc_ERA5_vs_GFS"].items():
+            L.append(f"| {a} | {v.get('ERA5_cape')} | {v.get('GFS_cape')} | {v.get('ERA5_cin', '–') or 'mancante'} | {v.get('GFS_cin')} |")
+        L += [""]
     if s7:
         d = s7["misure"]["dataset"]
-        L += ["### Accesso lazy a IT-DPC-SRI", "",
-              f"- **Sì**: {s7['misure']['metodo']}.",
-              f"- Dims {d.get('dims')}; periodo {d.get('periodo')}; chunk {d.get('chunk_zarr')}; {d.get('compressore')}.",
-              f"- Timestep {d.get('timestep_letto')} sul Lazio ({d.get('shape_ritaglio')} pixel) in "
+        L += ["### Accesso lazy a IT-DPC-SRI", "", f"- **Sì**: {s7['misure']['metodo']}.",
+              f"- Dims {d.get('dims')}; periodo {d.get('periodo')}; chunk {d.get('chunk_zarr')}.",
+              f"- Timestep {d.get('timestep_letto')} sul Lazio ({d.get('shape_ritaglio')} px) in "
               f"{s7['misure']['secondi'].get('lettura_timestep_lazio')} s: {d.get('MB_chunk_dati')} MB di dati "
-              f"+ {d.get('MB_metadati_e_coordinate')} MB di coordinate/metadati (una tantum). "
-              f"Pioggia max {d.get('pioggia_mm_h', {}).get('max')} mm/h.", ""]
+              f"+ {d.get('MB_metadati_e_coordinate')} MB di coordinate (una tantum).", ""]
     if s8:
         m = s8["misure"]
-        L += ["### Stato IMERG V08", "",
-              f"- {s8['note'][0]}",
-              f"- CMR (08/10/2026): granuli 15/07/2023 12 UTC per versione {m.get('granuli_15_07_2023_12UTC_per_versione')}; "
-              f"versioni della collezione `GPM_3IMERGHH`: {m.get('collezioni_GPM_3IMERGHH')} → **V08 non ancora pubblicata**.",
-              f"- File V07 letto: `{m.get('file')}`, {m.get('MB')} MB, variabile `{m.get('variabile')}` "
-              f"({m.get('unita')}), {m.get('risoluzione_gradi')}°, ritaglio {m.get('shape_ritaglio')}.", ""]
+        L += ["### Stato IMERG V08", "", f"- {s8['note'][0]}",
+              f"- CMR (08/10/2026): granuli per versione {m.get('granuli_15_07_2023_12UTC_per_versione')}; versioni "
+              f"collezione {m.get('collezioni_GPM_3IMERGHH')} → **V08 non ancora pubblicata**.", ""]
 
-    # 3. stime Fase 2
-    L += ["## 3. Stime aggiornate per la Fase 2 (evento da 12 h)", ""]
-    if s1:
-        pr = [p for p in s1["misure"]["prodotti"] if "MB_zip" in p]
-        zip_mb = sum(p["MB_zip"] for p in pr) / len(pr)
-        dl_s = sum(p["sec_download"] for p in pr) / len(pr)
-        rd_s = sorted(p["sec_lettura_ritaglio"] for p in pr)[len(pr) // 2]
-        crop = pr[0]["MB_crop"]
-        n = 48
-        L += [f"- **SEVIRI** (48 slot da 15 min): scaricati {n * zip_mb / 1000:.1f} GB "
-              f"(zip {zip_mb:.0f} MB/slot; planning: ~116 MB e ~5,6 GB), conservati "
-              f"{n * crop:.0f} MB per canale a 0,05° ({crop} MB/slot float32). Tempo ≈ "
-              f"{n * (dl_s + rd_s) / 60:.0f} min in sequenza ({dl_s:.0f} s download + {rd_s:.0f} s lettura per slot). "
-              "Picco disco: 1 zip + 1 .nat ≈ 0,46 GB se si cancella slot per slot."]
-    if s2:
-        m = s2["misure"]
-        n = 72
-        full = m["elenco_entry"]["MB_disco_intero_somma_entry"]
-        part = m["MB_chunk_necessari_con_trail"]
-        dl = m["secondi"].get("download_chunk", 0)
-        rd = m["secondi"].get("lettura_ritaglio", 0)
-        crop = m["ritaglio"].get("MB_crop", 0)
-        L += [f"- **FCI** (72 cicli da 10 min): disco intero {n * full / 1000:.0f} GB; solo chunk {m['chunk_usati'][0]}–"
-              f"{m['chunk_usati'][-1]} + TRAIL **{n * part / 1000:.1f} GB**; conservati {n * crop:.0f} MB per canale "
-              f"a 0,05°. Tempo ≈ {n * (dl + rd) / 60:.0f} min in sequenza ({dl:.0f} s download + {rd:.0f} s lettura per ciclo, "
-              f"misurati qui). Picco disco cancellando ciclo per ciclo ≈ {part:.0f} MB (sotto i 14 GB di un runner GitHub "
-              f"Actions). Con Data Tailor: ~{m['data_tailor'].get('MB_output')} MB/ciclo ma "
-              f"~{m['data_tailor'].get('secondi', 0) / 60:.0f} min/ciclo lato server (un canale, in radianza)."]
-    if s3:
-        L += [f"- **LI AF**: {s3['misure']['MB_scaricati']} MB per 8 h nel giorno di prova (solo BODY), "
-              f"{s3['misure']['secondi'].get('download', 0) + s3['misure']['secondi'].get('lettura', 0):.0f} s."]
-    L += ["- Rete: misure prese da una connessione domestica; i tempi su GitHub Actions saranno diversi.", ""]
+    # 3. stima di spazio
+    st = json.loads((RESULTS / "stima_spazio.json").read_text()) if (RESULTS / "stima_spazio.json").exists() else None
+    if st:
+        p, fr = st["parametri"], st["MB_per_frame_compresso"]
+        L += ["## 3. Spazio e tempi per i test reali (da `stima_spazio.py`)", "",
+              f"Parametri del planning: finestre da 12 h, {p['finestre'][0]}–{p['finestre'][1]} finestre, griglia 0,05°, "
+              f"canali IR 10,8 + WV 6,2/7,3. Ipotesi esplicite: {100 * p['quota_fci']:.0f}% finestre FCI (2025), "
+              f"{100 * p['quota_lazio']:.0f}% laziali con IT-DPC-SRI, {p['worker']} download in parallelo.", "",
+              "**Peso compresso di un frame sulla griglia comune** (MB): "
+              + ", ".join(f"{k} {v}" for k, v in fr.items()) + ".", "",
+              "| Per finestra da 12 h | conservati float32 (MB) | conservati int16 (MB) |", "|:--|--:|--:|"]
+        for k in st["MB_per_finestra_float32"]:
+            L.append(f"| {k} | {st['MB_per_finestra_float32'][k]} | {st['MB_per_finestra_int16'][k]} |")
+        dl = st["MB_scaricati_per_finestra"]
+        L += ["", f"Scaricati per finestra: SEVIRI disco intero {dl['seviri_disco_intero']} MB "
+              f"(planning: ~5 600), SEVIRI via Data Tailor {dl['seviri_data_tailor']} MB, FCI solo chunk "
+              f"{dl['fci_chunk']} MB, FCI disco intero {dl['fci_disco_intero']} MB.", "",
+              "| Scenario | finestre SEVIRI / FCI / Lazio | conservati float32 | conservati int16 | scaricati (rete) | "
+              "scaricati con Data Tailor SEVIRI | ore di download (3 worker) |", "|:--|:--|--:|--:|--:|--:|--:|"]
+        for n, s in st["scenari"].items():
+            f = s["finestre"]
+            L.append(f"| {n} finestre | {f['seviri']} / {f['fci']} / {f['lazio']} | {s['GB_conservati_float32']} GB | "
+                     f"{s['GB_conservati_int16']} GB | {s['GB_scaricati_disco_intero_seviri_chunk_fci']:.0f} GB | "
+                     f"{s['GB_scaricati_con_data_tailor_seviri']:.0f} GB | {s['ore_download_con_worker']:.0f} h |")
+        s300 = st["scenari"]["300"]
+        L += ["", f"Le ore con {p['worker']} worker presuppongono che la linea regga {p['worker']} download "
+              f"insieme (~9 MB/s ciascuno misurati qui); in sequenza sono "
+              f"{st['scenari']['150']['ore_download_sequenziali']:.0f} h (150) e "
+              f"{s300['ore_download_sequenziali']:.0f} h (300). Il Data Tailor SEVIRI riduce la rete di ~25 volte "
+              "ma costa ~50 s di elaborazione lato server per slot.", "**Spazio sul Mac** (i dati scaricati non restano: ogni slot si ritaglia e si cancella):", "",
+              f"- Lavoro durante il download: ~{st['picco_disco_lavoro_GB']} GB ({p['worker']} worker × zip+.nat SEVIRI).",
+              f"- Catalogo eventi ERA5 della Fase 1 (CAPE, CIN, precipitazione convettiva, orari, apr–nov 2015–2025): "
+              f"~{st['catalogo_era5_fase1_GB']} GB.",
+              f"- Ambiente conda: ~{st['ambiente_conda_GB']} GB (già installato).",
+              f"- Dataset ritagliato: da {st['scenari']['150']['GB_conservati_int16']} GB (150 finestre, int16) a "
+              f"{s300['GB_conservati_float32']} GB (300 finestre, float32) se resta tutto in locale; "
+              "~0 se ogni finestra va su Hugging Face (privato, limite 100 GB) e si cancella dal Mac.",
+              "", ""]
 
-    # 4. problemi
     L += ["## 4. Problemi incontrati e differenze rispetto alla documentazione", ""]
     L += [f"- {n}" for n in NOTE_ESECUZIONE]
     err = [(t, e) for t in ORDINE if R[t] for e in R[t].get("errori", [])]
     if err:
         L += ["", "Errori registrati nei JSON:", ""] + [f"- `{t}`: {e[:300]}" for t, e in err]
     L += ["", "## Anteprime", ""]
-    for p in sorted((SMOKE / "previews").glob("*.png")):
-        L.append(f"![{p.stem}](previews/{p.name})")
+    for p_ in sorted((SMOKE / "previews").glob("*.png")):
+        L.append(f"![{p_.stem}](previews/{p_.name})")
     (SMOKE / "REPORT.md").write_text("\n".join(L) + "\n")
     print("scritto", SMOKE / "REPORT.md")
 

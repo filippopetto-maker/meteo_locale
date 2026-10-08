@@ -2,12 +2,13 @@
   "test": "s3_li_flashes",
   "esito": "OK",
   "domanda": "I file LI si leggono, e possiamo usarli per trovare automaticamente le ore convettive?",
-  "risposta": "48/48 prodotti da 10 min letti (167.5 MB solo BODY); griglia sparsa su geostazionaria FCI 2 km; best_hour_utc 14:00 (36576 flash·pixel nel dominio)",
+  "risposta": "48/48 prodotti da 10 min letti (167.5 MB solo BODY); griglia sparsa su geostazionaria FCI 2 km; best_hour_utc 14:00 (36576 flash·pixel nel dominio); griglia 0,05° conserva il 100.00% del totale",
   "misure": {
     "secondi": {
-      "search": 2.52,
-      "download": 75.81,
-      "lettura": 6.47
+      "search": 11.15,
+      "download": 83.24,
+      "lettura": 9.97,
+      "griglia_0.05": 1.1
     },
     "MB_scaricati": 167.5,
     "MB_conservati": 0,
@@ -86,9 +87,10 @@
         "italia": 0.0,
         "balcani": 1009.9
       }
-    }
+    },
+    "rapporto_griglia_su_totale": 1.0
   },
   "errori": [],
-  "timestamp_utc": "2026-10-07T22:03:22+00:00",
+  "timestamp_utc": "2026-10-08T10:22:06+00:00",
   "best_hour_utc": 14
 }

@@ -1,0 +1,322 @@
+{
+  "test": "s10_cape_cin",
+  "esito": "OK",
+  "domanda": "CAPE e CIN sono disponibili per tutti gli anni di training e test (2015–2025) sul dominio, e in tempo reale per l'inferenza?",
+  "risposta": "ERA5: CAPE e CIN presenti in tutti gli anni 2015–2025 (11/11); CIN definita in media sul 12% del dominio (NaN altrove, CAPE max dove CIN è NaN = 4568 J/kg; CIN mancante nel 46% dei punti con CAPE > 500); evento 12 h: 8.2 MB compressi in 3.8 s; CIN in tempo reale da: ncep_gfs_seamless, ecmwf_ifs, icon_seamless, italia_meteo_arpae_icon_2i",
+  "misure": {
+    "secondi": {
+      "anni_2015_2025": 4.4,
+      "evento_12h_fetch_env": 3.8
+    },
+    "MB_scaricati": 8.93,
+    "MB_conservati": 0,
+    "per_anno_ora": {
+      "2015-07-15T00": {
+        "cape_max": 4338.0,
+        "cape_frac>500": 0.183,
+        "cin_frac_definita": 0.116,
+        "cin_mediana_definita": 724.3,
+        "cin_max": 1000.0,
+        "cape_max_dove_cin_NaN": 4132.4,
+        "cape_frac>0_dove_cin_NaN": 0.559,
+        "cin_NaN_frac_dove_cape>500": 0.539
+      },
+      "2015-07-15T12": {
+        "cape_max": 4095.0,
+        "cape_frac>500": 0.144,
+        "cin_frac_definita": 0.147,
+        "cin_mediana_definita": 600.6,
+        "cin_max": 1000.0,
+        "cape_max_dove_cin_NaN": 3016.5,
+        "cape_frac>0_dove_cin_NaN": 0.498,
+        "cin_NaN_frac_dove_cape>500": 0.445
+      },
+      "2016-07-15T00": {
+        "cape_max": 3385.0,
+        "cape_frac>500": 0.07,
+        "cin_frac_definita": 0.098,
+        "cin_mediana_definita": 627.3,
+        "cin_max": 998.0,
+        "cape_max_dove_cin_NaN": 1764.5,
+        "cape_frac>0_dove_cin_NaN": 0.383,
+        "cin_NaN_frac_dove_cape>500": 0.255
+      },
+      "2016-07-15T12": {
+        "cape_max": 4118.0,
+        "cape_frac>500": 0.069,
+        "cin_frac_definita": 0.132,
+        "cin_mediana_definita": 183.6,
+        "cin_max": 989.0,
+        "cape_max_dove_cin_NaN": 1979.0,
+        "cape_frac>0_dove_cin_NaN": 0.326,
+        "cin_NaN_frac_dove_cape>500": 0.157
+      },
+      "2017-07-15T00": {
+        "cape_max": 3840.0,
+        "cape_frac>500": 0.136,
+        "cin_frac_definita": 0.105,
+        "cin_mediana_definita": 628.0,
+        "cin_max": 997.0,
+        "cape_max_dove_cin_NaN": 3417.2,
+        "cape_frac>0_dove_cin_NaN": 0.541,
+        "cin_NaN_frac_dove_cape>500": 0.447
+      },
+      "2017-07-15T12": {
+        "cape_max": 3481.0,
+        "cape_frac>500": 0.123,
+        "cin_frac_definita": 0.16,
+        "cin_mediana_definita": 498.9,
+        "cin_max": 994.0,
+        "cape_max_dove_cin_NaN": 2290.0,
+        "cape_frac>0_dove_cin_NaN": 0.439,
+        "cin_NaN_frac_dove_cape>500": 0.39
+      },
+      "2018-07-15T00": {
+        "cape_max": 2702.0,
+        "cape_frac>500": 0.163,
+        "cin_frac_definita": 0.177,
+        "cin_mediana_definita": 305.6,
+        "cin_max": 990.0,
+        "cape_max_dove_cin_NaN": 1759.5,
+        "cape_frac>0_dove_cin_NaN": 0.576,
+        "cin_NaN_frac_dove_cape>500": 0.428
+      },
+      "2018-07-15T12": {
+        "cape_max": 3378.0,
+        "cape_frac>500": 0.187,
+        "cin_frac_definita": 0.245,
+        "cin_mediana_definita": 128.0,
+        "cin_max": 998.0,
+        "cape_max_dove_cin_NaN": 2445.0,
+        "cape_frac>0_dove_cin_NaN": 0.434,
+        "cin_NaN_frac_dove_cape>500": 0.313
+      },
+      "2019-07-15T00": {
+        "cape_max": 3354.0,
+        "cape_frac>500": 0.168,
+        "cin_frac_definita": 0.164,
+        "cin_mediana_definita": 290.1,
+        "cin_max": 993.0,
+        "cape_max_dove_cin_NaN": 3353.5,
+        "cape_frac>0_dove_cin_NaN": 0.546,
+        "cin_NaN_frac_dove_cape>500": 0.383
+      },
+      "2019-07-15T12": {
+        "cape_max": 3370.0,
+        "cape_frac>500": 0.13,
+        "cin_frac_definita": 0.176,
+        "cin_mediana_definita": 130.2,
+        "cin_max": 998.0,
+        "cape_max_dove_cin_NaN": 3370.2,
+        "cape_frac>0_dove_cin_NaN": 0.446,
+        "cin_NaN_frac_dove_cape>500": 0.384
+      },
+      "2020-07-15T00": {
+        "cape_max": 2282.0,
+        "cape_frac>500": 0.11,
+        "cin_frac_definita": 0.157,
+        "cin_mediana_definita": 502.3,
+        "cin_max": 1000.0,
+        "cape_max_dove_cin_NaN": 1522.6,
+        "cape_frac>0_dove_cin_NaN": 0.531,
+        "cin_NaN_frac_dove_cape>500": 0.163
+      },
+      "2020-07-15T12": {
+        "cape_max": 2702.0,
+        "cape_frac>500": 0.076,
+        "cin_frac_definita": 0.162,
+        "cin_mediana_definita": 271.9,
+        "cin_max": 993.0,
+        "cape_max_dove_cin_NaN": 1495.8,
+        "cape_frac>0_dove_cin_NaN": 0.478,
+        "cin_NaN_frac_dove_cape>500": 0.166
+      },
+      "2021-07-15T00": {
+        "cape_max": 3614.0,
+        "cape_frac>500": 0.064,
+        "cin_frac_definita": 0.059,
+        "cin_mediana_definita": 252.4,
+        "cin_max": 986.0,
+        "cape_max_dove_cin_NaN": 2614.0,
+        "cape_frac>0_dove_cin_NaN": 0.466,
+        "cin_NaN_frac_dove_cape>500": 0.579
+      },
+      "2021-07-15T12": {
+        "cape_max": 4916.0,
+        "cape_frac>500": 0.052,
+        "cin_frac_definita": 0.079,
+        "cin_mediana_definita": 178.3,
+        "cin_max": 991.0,
+        "cape_max_dove_cin_NaN": 2703.5,
+        "cape_frac>0_dove_cin_NaN": 0.412,
+        "cin_NaN_frac_dove_cape>500": 0.232
+      },
+      "2022-07-15T00": {
+        "cape_max": 2987.0,
+        "cape_frac>500": 0.051,
+        "cin_frac_definita": 0.056,
+        "cin_mediana_definita": 623.3,
+        "cin_max": 991.0,
+        "cape_max_dove_cin_NaN": 2987.0,
+        "cape_frac>0_dove_cin_NaN": 0.323,
+        "cin_NaN_frac_dove_cape>500": 0.417
+      },
+      "2022-07-15T12": {
+        "cape_max": 3289.0,
+        "cape_frac>500": 0.064,
+        "cin_frac_definita": 0.045,
+        "cin_mediana_definita": 623.9,
+        "cin_max": 998.0,
+        "cape_max_dove_cin_NaN": 3289.2,
+        "cape_frac>0_dove_cin_NaN": 0.289,
+        "cin_NaN_frac_dove_cape>500": 0.646
+      },
+      "2023-07-15T00": {
+        "cape_max": 3690.0,
+        "cape_frac>500": 0.158,
+        "cin_frac_definita": 0.065,
+        "cin_mediana_definita": 606.9,
+        "cin_max": 998.0,
+        "cape_max_dove_cin_NaN": 3689.5,
+        "cape_frac>0_dove_cin_NaN": 0.536,
+        "cin_NaN_frac_dove_cape>500": 0.781
+      },
+      "2023-07-15T12": {
+        "cape_max": 3722.0,
+        "cape_frac>500": 0.12,
+        "cin_frac_definita": 0.053,
+        "cin_mediana_definita": 448.5,
+        "cin_max": 995.0,
+        "cape_max_dove_cin_NaN": 3721.8,
+        "cape_frac>0_dove_cin_NaN": 0.517,
+        "cin_NaN_frac_dove_cape>500": 0.847
+      },
+      "2024-07-15T00": {
+        "cape_max": 4289.0,
+        "cape_frac>500": 0.211,
+        "cin_frac_definita": 0.083,
+        "cin_mediana_definita": 618.8,
+        "cin_max": 1000.0,
+        "cape_max_dove_cin_NaN": 4289.2,
+        "cape_frac>0_dove_cin_NaN": 0.483,
+        "cin_NaN_frac_dove_cape>500": 0.77
+      },
+      "2024-07-15T12": {
+        "cape_max": 4914.0,
+        "cape_frac>500": 0.212,
+        "cin_frac_definita": 0.14,
+        "cin_mediana_definita": 475.6,
+        "cin_max": 1000.0,
+        "cape_max_dove_cin_NaN": 4568.0,
+        "cape_frac>0_dove_cin_NaN": 0.518,
+        "cin_NaN_frac_dove_cape>500": 0.588
+      },
+      "2025-07-15T00": {
+        "cape_max": 3319.0,
+        "cape_frac>500": 0.127,
+        "cin_frac_definita": 0.104,
+        "cin_mediana_definita": 495.8,
+        "cin_max": 997.0,
+        "cape_max_dove_cin_NaN": 2938.8,
+        "cape_frac>0_dove_cin_NaN": 0.529,
+        "cin_NaN_frac_dove_cape>500": 0.604
+      },
+      "2025-07-15T12": {
+        "cape_max": 2778.0,
+        "cape_frac>500": 0.112,
+        "cin_frac_definita": 0.14,
+        "cin_mediana_definita": 231.9,
+        "cin_max": 998.0,
+        "cape_max_dove_cin_NaN": 2777.8,
+        "cape_frac>0_dove_cin_NaN": 0.512,
+        "cin_NaN_frac_dove_cape>500": 0.521
+      }
+    },
+    "MB_anni": 0.49,
+    "evento_12h": {
+      "ore": 13,
+      "variabili": [
+        "blh",
+        "cape",
+        "cin",
+        "cin_definita",
+        "cp",
+        "deg0l",
+        "kx",
+        "r",
+        "sst",
+        "t",
+        "tcwv",
+        "totalx",
+        "u",
+        "u10",
+        "v",
+        "v10"
+      ],
+      "MB_scaricati": 8.44,
+      "MB_netcdf_compresso": 8.2,
+      "cin_frac_definita_media": 0.169
+    },
+    "forecast_24h_ore_non_nulle_roma": {
+      "ncep_gfs_seamless": {
+        "cape": 24,
+        "convective_inhibition": 24
+      },
+      "ecmwf_ifs025": {
+        "cape": 24,
+        "convective_inhibition": 0
+      },
+      "ecmwf_ifs": {
+        "cape": 24,
+        "convective_inhibition": 24
+      },
+      "icon_seamless": {
+        "cape": 24,
+        "convective_inhibition": 24
+      },
+      "meteofrance_seamless": {
+        "cape": 24,
+        "convective_inhibition": 0
+      },
+      "italia_meteo_arpae_icon_2i": {
+        "cape": 24,
+        "convective_inhibition": 24
+      }
+    },
+    "roma_12utc_ERA5_vs_GFS": {
+      "2021": {
+        "ERA5_cape": 3.8,
+        "GFS_cape": 20.0,
+        "ERA5_cin": null,
+        "GFS_cin": 0.0
+      },
+      "2022": {
+        "ERA5_cape": 1194.5,
+        "GFS_cape": 90.0,
+        "ERA5_cin": 983.3,
+        "GFS_cin": -41.0
+      },
+      "2023": {
+        "ERA5_cape": 835.8,
+        "GFS_cape": 460.0,
+        "ERA5_cin": null,
+        "GFS_cin": -167.0
+      },
+      "2024": {
+        "ERA5_cape": 801.2,
+        "GFS_cape": 0.0,
+        "ERA5_cin": null,
+        "GFS_cin": -14.0
+      },
+      "2025": {
+        "ERA5_cape": 130.8,
+        "GFS_cape": 0.0,
+        "ERA5_cin": null,
+        "GFS_cin": -11.0
+      }
+    },
+    "nota_cin_era5": "ERA5 data documentation: 'A missing value is assigned to CIN for values of CIN > 1000 or where there is no cloud base'. Trattamento: NaN → 1000 J/kg + maschera cin_definita (fonti.era5.prepara_cin)."
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-08T10:35:56+00:00"
+}

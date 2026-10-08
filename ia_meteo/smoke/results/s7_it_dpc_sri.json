@@ -2,12 +2,12 @@
   "test": "s7_it_dpc_sri",
   "esito": "OK",
   "domanda": "Si può leggere un pezzo dell'archivio IT-DPC-SRI senza scaricare i 51 GB?",
-  "risposta": "Sì: Zarr anonimo su EWC (s3 https://object-store.os-api.cci2.ecmwf.int), apertura lazy 2.07 s, timestep 2019-07-15T12:00 sul Lazio letto in 1.51 s trasferendo ~17.9 MB (1 chunk); Zenodo ha solo il tar.zst da 49.83 GB",
+  "risposta": "Sì: Zarr anonimo su EWC (https://object-store.os-api.cci2.ecmwf.int), apertura lazy 3.18 s, timestep 2019-07-15T12:00 sul Lazio letto in 2.96 s (0.17 MB di dati + 17.73 MB di coordinate una tantum); Zenodo ha solo il tar.zst da 49.83 GB",
   "misure": {
     "secondi": {
-      "zenodo_api": 0.13,
-      "apertura_lazy": 2.07,
-      "lettura_timestep_lazio": 1.51
+      "apertura_lazy": 3.18,
+      "finestra_lazio_da_latlon": 3.52,
+      "lettura_timestep_lazio": 2.96
     },
     "MB_scaricati": 17.9,
     "MB_conservati": 0,
@@ -29,25 +29,6 @@
         "x": 1200,
         "missing_times": 15530
       },
-      "coords": [
-        "lat",
-        "lon",
-        "missing_times",
-        "time",
-        "x",
-        "y"
-      ],
-      "chunks": [
-        [
-          1
-        ],
-        [
-          1400
-        ],
-        [
-          1200
-        ]
-      ],
       "attrs_var": {
         "grid_mapping": "crs",
         "long_name": "Total precipitation rate",
@@ -59,7 +40,6 @@
         "2025-12-31T23:55"
       ],
       "timestep_letto": "2019-07-15T12:00",
-      "metodo_crop": "coordinate lat/lon 2D",
       "shape_ritaglio": [
         187,
         222
@@ -82,7 +62,7 @@
     "metodo": "xarray.open_zarr + s3fs anonimo, endpoint https://object-store.os-api.cci2.ecmwf.int, s3://mlcast-source-datasets/IT-DPC-SRI/v0.1.0/italian-radar-dpc-sri.zarr"
   },
   "errori": [],
-  "timestamp_utc": "2026-10-07T22:14:22+00:00",
+  "timestamp_utc": "2026-10-08T10:30:24+00:00",
   "note": [
     "Pacchetto mlcast-datasets non necessario: il preprint dà percorso ed endpoint diretti",
     "Il preprint conferma che l'Italia non partecipa al composito OPERA"

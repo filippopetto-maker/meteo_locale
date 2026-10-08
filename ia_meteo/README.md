@@ -23,8 +23,16 @@ Vive solo nel branch `ia-meteo` e non tocca la produzione di `meteo_locale`
 ia_meteo/
 ├── environment.yml   # ambiente conda ia_meteo (note di installazione su Apple Silicon in testa)
 ├── common.py         # DOMAIN_BBOX, TEST_BBOXES, helper .env, timer, dimensioni, write_result
+├── fonti/            # accesso alle fonti, consolidato dalla Fase 0 (base dei fetch_*.py della Fase 2)
+│   ├── eumetsat.py   # SEVIRI, FCI per chunk, LI, Data Tailor
+│   ├── opera.py      # compositi OPERA dal bucket S3 storico, lettore ODIM 2.0/2.4, griglia comune
+│   ├── era5.py       # fetch_env (ramo ambiente, CAPE/CIN), trattamento CIN mancante
+│   ├── openmeteo.py  # Historical Forecast / Forecast API
+│   ├── itdpc.py      # IT-DPC-SRI lazy dall'European Weather Cloud
+│   └── imerg.py      # IMERG via earthaccess
 └── smoke/
-    ├── s1_seviri.py … s9_toolchain.py   # un test per fonte
+    ├── s1_seviri.py … s10_cape_cin.py   # un test per fonte (S10: CAPE e CIN)
+    ├── stima_spazio.py                  # spazio e tempi per i test reali, da misure
     ├── make_report.py                   # genera REPORT.md dai JSON
     ├── results/                         # un JSON per test
     ├── previews/                        # PNG piccoli
@@ -37,7 +45,8 @@ ia_meteo/
 conda activate ia_meteo
 cd ia_meteo/smoke
 python s3_li_flashes.py      # S3 prima di S2/S4: scrive best_hour_utc
-python s1_seviri.py          # S1 prima di S9: produce i ritagli in raw/s1
+python s1_seviri.py          # S1 prima di S9 e di stima_spazio: produce i ritagli in raw/s1
+python stima_spazio.py       # dopo S1, S2, S10
 python make_report.py
 ```
 

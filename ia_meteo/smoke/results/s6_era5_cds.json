@@ -2,95 +2,54 @@
   "test": "s6_era5_cds",
   "esito": "OK",
   "domanda": "La richiesta CDS funziona e contiene tutte le variabili convettive del ramo ambiente?",
-  "risposta": "single-levels: completata, 9/9 var, griglia 81×161, 39.3 s; pressure-levels: completata, 4/4 var, griglia 81×161, 64.4 s",
+  "risposta": "15/15 variabili (cape, cin, kx, totalx, tcwv, deg0l, blh, sst, cp, u10, v10, u, v, t, r), griglia 81×161, 9.5 s totali (nessuna coda: risultato già in cache CDS), 0.86 MB",
   "misure": {
     "secondi": {
-      "reanalysis-era5-single-levels": 39.3,
-      "reanalysis-era5-pressure-levels": 64.4
+      "totale": 9.5
     },
-    "MB_scaricati": 0.777,
+    "secondi_in_coda_per_richiesta": [],
+    "log_stati": [
+      "+1s status has been updated to successful",
+      "+1s status has been updated to successful",
+      "+9s status has been updated to successful",
+      "+9s status has been updated to successful"
+    ],
+    "MB_scaricati": 0.857,
     "MB_conservati": 0,
-    "richieste": {
-      "reanalysis-era5-single-levels": {
-        "secondi_totali": 39.3,
-        "secondi_in_coda": 27.4,
-        "secondi_elaborazione": 11.5,
-        "log_stati": [
-          "+0s [2026-10-06T00:00:00Z] The [CDS Terms of Use](https://cds.climate.copernicus.eu/disclaimer-privacy) will be updated on 28 October 2026. Continued use of Copernicus Products and Services through the CD",
-          "+0s [2026-10-06T00:00:00Z] The [CDS Terms of Use](https://cds.climate.copernicus.eu/disclaimer-privacy) will be updated on 28 October 2026. Continued use of Copernicus Products and Services through the CD",
-          "+2s Request ID is 2692ce49-edca-49af-bd3b-310c156cf039",
-          "+2s Request ID is 2692ce49-edca-49af-bd3b-310c156cf039",
-          "+3s status has been updated to accepted",
-          "+3s status has been updated to accepted",
-          "+27s status has been updated to running",
-          "+27s status has been updated to running",
-          "+39s status has been updated to successful",
-          "+39s status has been updated to successful",
-          "+39s Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-10-07/b069b4139e030c99223b1790c631b555.zip"
-        ],
-        "MB": 0.293,
-        "nota": "risposta zip con 2 netCDF nonostante download_format=unarchived",
-        "variabili": [
-          "cp",
-          "cape",
-          "cin",
-          "kx",
-          "totalx",
-          "tcwv",
-          "deg0l",
-          "blh",
-          "sst"
-        ],
-        "dimensioni": {
-          "valid_time": 1,
-          "latitude": 81,
-          "longitude": 161
-        },
-        "n_variabili_attese": 9,
-        "stato": "completata"
-      },
-      "reanalysis-era5-pressure-levels": {
-        "secondi_totali": 64.4,
-        "secondi_in_coda": 38.8,
-        "secondi_elaborazione": 20.2,
-        "log_stati": [
-          "+0s [2026-10-06T00:00:00Z] The [CDS Terms of Use](https://cds.climate.copernicus.eu/disclaimer-privacy) will be updated on 28 October 2026. Continued use of Copernicus Products and Services through the CD",
-          "+0s [2026-10-06T00:00:00Z] The [CDS Terms of Use](https://cds.climate.copernicus.eu/disclaimer-privacy) will be updated on 28 October 2026. Continued use of Copernicus Products and Services through the CD",
-          "+2s Request ID is d4467dae-8204-422b-ae46-314ecf2a6e67",
-          "+2s Request ID is d4467dae-8204-422b-ae46-314ecf2a6e67",
-          "+2s status has been updated to accepted",
-          "+2s status has been updated to accepted",
-          "+39s status has been updated to running",
-          "+39s status has been updated to running",
-          "+59s status has been updated to successful",
-          "+59s status has been updated to successful",
-          "+63s Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-10-07/538797a54ac21fcf3e4e9017fdea2a78.nc"
-        ],
-        "MB": 0.484,
-        "pressure_level": [
-          850.0,
-          700.0,
-          500.0,
-          300.0
-        ],
-        "variabili": [
-          "u",
-          "v",
-          "t",
-          "r"
-        ],
-        "dimensioni": {
-          "valid_time": 1,
-          "pressure_level": 4,
-          "latitude": 81,
-          "longitude": 161
-        },
-        "n_variabili_attese": 4,
-        "stato": "completata"
-      }
-    }
+    "variabili": [
+      "blh",
+      "cape",
+      "cin",
+      "cin_definita",
+      "cp",
+      "deg0l",
+      "kx",
+      "r",
+      "sst",
+      "t",
+      "tcwv",
+      "totalx",
+      "u",
+      "u10",
+      "v",
+      "v10"
+    ],
+    "dimensioni": {
+      "time": 1,
+      "latitude": 81,
+      "longitude": 161,
+      "pressure_level": 4
+    },
+    "pressure_level": [
+      850.0,
+      700.0,
+      500.0,
+      300.0
+    ],
+    "cape_max": 3370.2,
+    "cin_frac_definita": 0.176
   },
   "errori": [],
-  "timestamp_utc": "2026-10-07T22:00:42+00:00",
+  "timestamp_utc": "2026-10-08T10:29:25+00:00",
   "tcwv_presente": true
 }

@@ -1,0 +1,74 @@
+{
+  "parametri": {
+    "finestre": [
+      150,
+      300
+    ],
+    "quota_fci": 0.15,
+    "quota_lazio": 0.15,
+    "quota_cirrus_su_seviri": 0.1,
+    "worker": 3,
+    "slot_seviri": 48,
+    "cicli_fci": 72
+  },
+  "MB_per_frame_compresso": {
+    "seviri_3canali_f32": 1.857,
+    "seviri_3canali_i16": 1.016,
+    "opera_2019_f32": 0.058,
+    "opera_2025_f32": 0.062,
+    "li_10min_f32": 0.05,
+    "imerg_30min": 0.028,
+    "itdpc_lazio_5min": 0.057
+  },
+  "MB_per_finestra_float32": {
+    "seviri": 100.8,
+    "seviri_cirrus": 106.9,
+    "fci": 170.4,
+    "lazio_extra": 8.2
+  },
+  "MB_per_finestra_int16": {
+    "seviri": 60.4,
+    "seviri_cirrus": 66.6,
+    "fci": 102.9,
+    "lazio_extra": 8.2
+  },
+  "MB_scaricati_per_finestra": {
+    "seviri_disco_intero": 8887,
+    "seviri_data_tailor": 350,
+    "fci_chunk": 12895,
+    "fci_disco_intero": 79394
+  },
+  "scenari": {
+    "150": {
+      "finestre": {
+        "seviri": 128,
+        "di_cui_opera_cirrus": 13,
+        "fci": 22,
+        "lazio": 22
+      },
+      "GB_conservati_float32": 16.9,
+      "GB_conservati_int16": 10.3,
+      "GB_scaricati_disco_intero_seviri_chunk_fci": 1421.0,
+      "GB_scaricati_con_data_tailor_seviri": 329.0,
+      "ore_download_sequenziali": 59.0,
+      "ore_download_con_worker": 20.0
+    },
+    "300": {
+      "finestre": {
+        "seviri": 255,
+        "di_cui_opera_cirrus": 26,
+        "fci": 45,
+        "lazio": 45
+      },
+      "GB_conservati_float32": 33.9,
+      "GB_conservati_int16": 20.6,
+      "GB_scaricati_disco_intero_seviri_chunk_fci": 2847.0,
+      "GB_scaricati_con_data_tailor_seviri": 670.0,
+      "ore_download_sequenziali": 119.0,
+      "ore_download_con_worker": 40.0
+    }
+  },
+  "picco_disco_lavoro_GB": 1.37,
+  "catalogo_era5_fase1_GB": 4.5,
+  "ambiente_conda_GB": 1.6
+}

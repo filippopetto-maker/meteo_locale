@@ -5,7 +5,7 @@
   "risposta": "dataset privato Fil728/ia-meteo-events: creato=True, privato=True, upload+verifica+cancellazione riusciti; file rimasti: ['.gitattributes']",
   "misure": {
     "secondi": {
-      "totale": 2.65
+      "totale": 1.81
     },
     "MB_scaricati": 0,
     "MB_conservati": 0,
@@ -23,5 +23,5 @@
     }
   },
   "errori": [],
-  "timestamp_utc": "2026-10-07T22:15:35+00:00"
+  "timestamp_utc": "2026-10-08T10:30:43+00:00"
 }

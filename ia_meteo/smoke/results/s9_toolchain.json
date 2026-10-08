@@ -2,17 +2,17 @@
   "test": "s9_toolchain",
   "esito": "OK",
   "domanda": "La catena '4 frame IR → campo di moto → estrapolazione' gira sul Mac da 8 GB, e in quanto tempo?",
-  "risposta": "Sì: LK + estrapolazione +30/+60 min in 0.1 s su [4, 80, 80], processo intero 72.6 s (incl. import e richiesta ERA5), picco RAM 327.4 MB; moto nubi fredde 64.9 km/h da 248°; ERA5 850–500 hPa 30.0 km/h da 269°",
+  "risposta": "Sì: LK + estrapolazione +30/+60 min in 0.1 s su [4, 80, 80], processo intero 19.8 s (incl. import e richiesta ERA5), picco RAM 340.3 MB; moto nubi fredde 64.9 km/h da 248°; ERA5 850–500 hPa 30.0 km/h da 269°",
   "misure": {
     "secondi": {
-      "caricamento": 0.66,
-      "moto_LK": 0.09,
+      "caricamento": 0.5,
+      "moto_LK": 0.1,
       "estrapolazione": 0.0,
-      "totale_processo": 72.6
+      "totale_processo": 19.8
     },
     "MB_scaricati": 0,
     "MB_conservati": 0,
-    "picco_RAM_MB": 327.4,
+    "picco_RAM_MB": 340.3,
     "frame": [
       "2019-07-15 12:00",
       "2019-07-15 12:15",
@@ -37,7 +37,7 @@
       0.233
     ],
     "era5": {
-      "secondi": 55.9,
+      "secondi": 0.7,
       "850hPa": {
         "km_h": 11.0,
         "da_gradi": 234
@@ -57,7 +57,7 @@
     }
   },
   "errori": [],
-  "timestamp_utc": "2026-10-07T22:19:15+00:00",
+  "timestamp_utc": "2026-10-08T10:36:29+00:00",
   "note": [
     "Picco RAM = 'maximum resident set size' di /usr/bin/time -l sul processo figlio",
     "Frecce da verificare a occhio nel PNG: il criterio 'coerenti' non è automatico"

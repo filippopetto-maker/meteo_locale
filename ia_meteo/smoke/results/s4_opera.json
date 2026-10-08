@@ -5,8 +5,10 @@
   "risposta": "2019 ODYSSEY: spagna 96.2%, italia 45.7%, balcani 58.7%, lazio 38.6%, tirreno 23.8%, nord_africa 23.7% | 2025 CIRRUS: spagna 91.2%, italia 60.2%, balcani 73.9%, lazio 54.1%, tirreno 23.6%, nord_africa 20.4%",
   "misure": {
     "secondi": {
-      "2019 ODYSSEY": 0.34,
-      "2025 CIRRUS": 0.43
+      "2019 ODYSSEY": 3.84,
+      "2019 ODYSSEY griglia_0.05": 1.29,
+      "2025 CIRRUS": 0.79,
+      "2025 CIRRUS griglia_0.05": 4.77
     },
     "MB_scaricati": 3.4,
     "MB_conservati": 0,
@@ -32,7 +34,6 @@
           -9999000.0,
           -8888000.0
         ],
-        "dtype": "float64",
         "copertura_pct": {
           "spagna": 96.2,
           "italia": 45.7,
@@ -40,6 +41,11 @@
           "lazio": 38.6,
           "tirreno": 23.8,
           "nord_africa": 23.7
+        },
+        "griglia_0.05": {
+          "frac_coperta": 0.507,
+          "max_dBZ": 70.0,
+          "frac_eco>=35dBZ": 0.0128
         }
       },
       "2025 CIRRUS": {
@@ -62,7 +68,6 @@
           -9999000.0,
           -8888000.0
         ],
-        "dtype": "float64",
         "copertura_pct": {
           "spagna": 91.2,
           "italia": 60.2,
@@ -70,14 +75,19 @@
           "lazio": 54.1,
           "tirreno": 23.6,
           "nord_africa": 20.4
+        },
+        "griglia_0.05": {
+          "frac_coperta": 0.515,
+          "max_dBZ": 70.5,
+          "frac_eco>=35dBZ": 0.013
         }
       }
     }
   },
   "errori": [],
-  "timestamp_utc": "2026-10-07T22:11:20+00:00",
+  "timestamp_utc": "2026-10-08T10:26:50+00:00",
   "note": [
-    "API EDR per 15/07/2025: HTTP 204; X-RateLimit-Limit 200 (remaining 45)",
+    "API EDR per 15/07/2025: HTTP 429; X-RateLimit-Limit 200 (remaining 0)",
     "Storico solo via bucket S3 openradar-archive (anonimo); API EDR MeteoGate = cache 24 h"
   ]
 }

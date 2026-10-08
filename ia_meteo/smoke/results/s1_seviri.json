@@ -2,81 +2,140 @@
   "test": "s1_seviri",
   "esito": "OK",
   "domanda": "L'archivio SEVIRI si scarica con le nostre chiavi, quanto pesa un disco, e satpy lo legge e ritaglia sul dominio?",
-  "risposta": "4 prodotti trovati in 1 h; 4/4 scaricati e letti; zip medio 185.2 MB, .nat 271.2 MB, download medio 17.2 s; Tb 217.8–327.0 K; ritaglio 0,05° 1.3 MB",
+  "risposta": "4 prodotti in 1 h; 4/4 scaricati e letti; zip medio 185.2 MB, .nat 271.2 MB, download medio 23.5 s; IR_108 217.8–327.0 K; ritaglio 3 canali 0,05° compresso 1.82 MB; Data Tailor: DONE (55.6 s, 7.3 MB)",
   "misure": {
     "secondi": {
-      "auth": 0.0,
-      "search": 5.42,
-      "download_tot": 68.8
+      "search": 5.84,
+      "data_tailor": 101.03,
+      "download_tot": 94.0
     },
     "MB_scaricati": 740.6,
-    "MB_conservati": 5.2,
+    "MB_conservati": 7.31,
     "prodotti": [
       {
         "id": "MSG4-SEVI-MSG15-0100-NA-20190715121242.256000000Z-NA",
         "sensing_start": "2019-07-15 12:00:09.393000",
-        "sensing_end": "2019-07-15 12:12:42.256000",
         "size_dichiarata_MB": 181.3,
-        "sec_download": 17.1,
+        "sec_download": 16.8,
         "MB_zip": 185.7,
         "MB_nat": 271.2,
-        "sec_lettura_ritaglio": 9.6,
-        "Tb_min_K": 217.8,
-        "Tb_max_K": 326.3,
+        "sec_lettura_ritaglio": 6.8,
+        "IR_108_min_max_K": [
+          217.8,
+          326.3
+        ],
+        "WV_062_min_max_K": [
+          218.5,
+          253.9
+        ],
+        "WV_073_min_max_K": [
+          218.6,
+          270.0
+        ],
         "frac_nan": 0.0,
         "crop": "crop_20190715T1200.nc",
-        "MB_crop": 1.3
+        "MB_crop": 1.82
       },
       {
         "id": "MSG4-SEVI-MSG15-0100-NA-20190715122742.197000000Z-NA",
         "sensing_start": "2019-07-15 12:15:09.333000",
-        "sensing_end": "2019-07-15 12:27:42.197000",
         "size_dichiarata_MB": 181.1,
-        "sec_download": 17.4,
+        "sec_download": 39.3,
         "MB_zip": 185.4,
         "MB_nat": 271.2,
-        "sec_lettura_ritaglio": 1.0,
-        "Tb_min_K": 218.9,
-        "Tb_max_K": 326.4,
+        "sec_lettura_ritaglio": 1.4,
+        "IR_108_min_max_K": [
+          218.9,
+          326.4
+        ],
+        "WV_062_min_max_K": [
+          220.2,
+          253.8
+        ],
+        "WV_073_min_max_K": [
+          219.3,
+          269.9
+        ],
         "frac_nan": 0.0,
         "crop": "crop_20190715T1215.nc",
-        "MB_crop": 1.3
+        "MB_crop": 1.83
       },
       {
         "id": "MSG4-SEVI-MSG15-0100-NA-20190715124243.344000000Z-NA",
         "sensing_start": "2019-07-15 12:30:10.479000",
-        "sensing_end": "2019-07-15 12:42:43.344000",
         "size_dichiarata_MB": 180.7,
-        "sec_download": 18.1,
+        "sec_download": 19.8,
         "MB_zip": 185.0,
         "MB_nat": 271.2,
-        "sec_lettura_ritaglio": 1.0,
-        "Tb_min_K": 220.2,
-        "Tb_max_K": 326.4,
+        "sec_lettura_ritaglio": 1.5,
+        "IR_108_min_max_K": [
+          220.2,
+          326.4
+        ],
+        "WV_062_min_max_K": [
+          220.4,
+          254.0
+        ],
+        "WV_073_min_max_K": [
+          220.5,
+          270.0
+        ],
         "frac_nan": 0.0,
         "crop": "crop_20190715T1230.nc",
-        "MB_crop": 1.3
+        "MB_crop": 1.83
       },
       {
         "id": "MSG4-SEVI-MSG15-0100-NA-20190715125743.287000000Z-NA",
         "sensing_start": "2019-07-15 12:45:10.421000",
-        "sensing_end": "2019-07-15 12:57:43.287000",
         "size_dichiarata_MB": 180.2,
-        "sec_download": 16.2,
+        "sec_download": 18.1,
         "MB_zip": 184.5,
         "MB_nat": 271.2,
-        "sec_lettura_ritaglio": 1.0,
-        "Tb_min_K": 219.9,
-        "Tb_max_K": 327.0,
+        "sec_lettura_ritaglio": 1.4,
+        "IR_108_min_max_K": [
+          219.9,
+          327.0
+        ],
+        "WV_062_min_max_K": [
+          220.2,
+          254.0
+        ],
+        "WV_073_min_max_K": [
+          220.0,
+          270.1
+        ],
         "frac_nan": 0.0,
         "crop": "crop_20190715T1245.nc",
-        "MB_crop": 1.3
+        "MB_crop": 1.83
       }
     ],
+    "canali": [
+      "IR_108",
+      "WV_062",
+      "WV_073"
+    ],
+    "data_tailor": {
+      "stato": "DONE",
+      "secondi": 55.6,
+      "file": [
+        "HRSEVIRI_20190715T120009Z_20190715T121242Z_epct_dedd4b53_FC.nc"
+      ],
+      "MB_output": 7.3,
+      "variabili": [
+        "geostationary",
+        "channel_5",
+        "channel_6",
+        "channel_9"
+      ],
+      "dims": {
+        "y": 507,
+        "x": 1193
+      }
+    },
     "http": [
       "nessun 429 osservato"
     ]
   },
   "errori": [],
-  "timestamp_utc": "2026-10-07T21:57:04+00:00"
+  "timestamp_utc": "2026-10-08T10:20:53+00:00"
 }
