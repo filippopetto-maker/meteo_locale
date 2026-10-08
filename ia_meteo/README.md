@@ -12,7 +12,7 @@ Vive solo nel branch `ia-meteo` e non tocca la produzione di `meteo_locale`
 | Fase | Contenuto | Stato |
 |:--|:--|:--|
 | 0 | Ambiente + smoke test delle fonti | in corso: test eseguiti, vedi [`smoke/REPORT.md`](smoke/REPORT.md) |
-| 1 | Selezione eventi | da fare |
+| 1 | Selezione eventi | in corso: catalogo ERA5 con CAPE dello strato rimescolato (`catalogo.py`), selezione in bozza (`selezione.py`) |
 | 2 | Download e preparazione dataset | da fare |
 | 3 | Baseline (pySTEPS) | da fare |
 | 4 | Fine-tuning e test sul Lazio | da fare |
@@ -25,6 +25,9 @@ ia_meteo/
 ├── common.py         # DOMAIN_BBOX, TEST_BBOXES, helper .env, timer, dimensioni, write_result
 ├── archivio.py       # archivio su Hugging Face (finestre, catalogo), budget Mac/HF, cache a tetto fisso
 ├── finestra.py       # costruisce una finestra (tutte le fonti sulla griglia 0,05°) e la carica su HF
+├── indici.py         # CAPE/CIN dello strato rimescolato vettoriale (validata contro MetPy in S14)
+├── catalogo.py       # Fase 1: ERA5 mese per mese, ML-CAPE, tabella dei candidati, su HF
+├── selezione.py      # Fase 1: sceglie i periodi da 12 h dai candidati (soglie provvisorie)
 ├── data/             # staging, lavoro e cache locali (ignorato da git, tetto 12 GB)
 ├── fonti/            # accesso alle fonti, consolidato dalla Fase 0 (base dei fetch_*.py della Fase 2)
 │   ├── eumetsat.py   # SEVIRI, FCI per chunk, LI, Data Tailor
@@ -34,7 +37,7 @@ ia_meteo/
 │   ├── itdpc.py      # IT-DPC-SRI lazy dall'European Weather Cloud
 │   └── imerg.py      # IMERG via earthaccess
 └── smoke/
-    ├── s1_seviri.py … s12_archivio_catalogo.py  # un test per fonte (S10 CAPE/CIN, S11-S12 archivio HF)
+    ├── s1_seviri.py … s14_mlcape.py      # S10 CAPE/CIN, S11-S12 archivio HF, S13 CAPE estrema, S14 ML-CAPE
     ├── stima_spazio.py                  # spazio e tempi per i test reali, da misure
     ├── make_report.py                   # genera REPORT.md dai JSON
     ├── results/                         # un JSON per test
@@ -85,7 +88,23 @@ python finestra.py --id 20190715_06 --inizio 2019-07-15T06:00 --fine 2019-07-15T
 python finestra.py --id 20220812_10 --inizio 2022-08-12T10:00 --fine 2022-08-12T22:00 --lazio --carica
 ```
 
-Catalogo della Fase 1, un mese alla volta (sul Mac c'è al più un mese, ~50 MB):
+## Fase 1: catalogo e selezione
+
+La selezione usa la CAPE dello **strato rimescolato** (100 hPa), calcolata da noi dai profili ERA5:
+la CAPE ERA5 è "most unstable" e può esplodere per uno strato umido sottile al suolo (S13: 9888 J/kg
+contro 2707 rimescolata, nessuna eco radar). `indici.ml_cape_cin` la calcola su tutto il dominio in
+~0,5 s per istante (MetPy: ~6 ms per colonna), con errore mediano del 3% rispetto a MetPy (S14).
+
+```bash
+caffeinate -i python catalogo.py --parallelo 2     # aprile–novembre 2015–2025, riprende da dove si era fermato
+python selezione.py --n 300                         # bozza di events_candidati.parquet in data/
+```
+
+Un mese costa ~30 min (quasi tutta coda CDS), ~370 MB scaricati e poi cancellati, ~32 MB su HF
+(`catalogo/era5_AAAA_MM.nc` con CAPE/CIN/cp orari e ML-CAPE/ML-CIN ogni 3 h, più
+`catalogo/candidati_AAAA_MM.parquet` con le statistiche per riquadro 5°×5°).
+
+Catalogo della Fase 1 senza CAPE rimescolata (solo CAPE/CIN/cp orari), un mese alla volta (sul Mac c'è al più un mese, ~50 MB):
 
 ```python
 import archivio as ar

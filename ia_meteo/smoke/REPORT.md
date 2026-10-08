@@ -20,6 +20,7 @@ Generato da `smoke/make_report.py` dai JSON in `smoke/results/`. Esecuzione 07�
 | s11_archivio_hf | **OK** | 218 | 1333.2 | Sì: 2 finestre di prova costruite, caricate (1 commit ciascuna), verificate, cancellate dal Mac e riscaricate identiche; MB per finestra {'prova_20190715T12': 6.45, 'prova_20250715T14': 4.55}; spazio HF account 0.011 → 0.011 → 0.011 GB dopo pulizia e compattazione |
 | s12_archivio_catalogo | **OK** | 4 | 23.0 | Sì: catalogo era5_2019_07 (744 ore, 21.2 MB, CDS 445.6 s) già su HF da una sessione precedente: ripreso senza nuova richiesta CDS; presente() lo riconosce; mini-finestra caricata e riscaricata identica (anche solo radar); LRU ha tolto prima catalogo/era5_2019_07.nc |
 | s13_cape_estremo | **OK** | 0 | 34 | Punto max 18 UTC: CAPE ERA5 9888.0, MetPy dal profilo ERA5 MU 7593.0 / ML100 2721.0 / SB 7593.0 J/kg, Td 2 m 27.1 °C; Zagabria 12 UTC: ERA5 449.0 (MetPy MU 2238.0) contro osservato MU 771.0 / ML100 63.0 J/kg, Td superficie 15.2 °C; radar OPERA 15–21 UTC entro 1° dal punto: max 2.5 dBZ |
+| s14_mlcape | **OK** | 70 | 2.38 | Errore relativo CAPE mediano 3.1% (p95 10.2%), r = 0.99949, CIN errore mediano 0.7 J/kg; dominio intero (13 041 colonne) in 0.49 s per ora contro metpy 151 colonne: 0.9 s; punto S13 18 UTC: [(2707, 2764)] |
 
 Tempo = somma delle fasi misurate (S9: processo intero). Le richieste CDS ripetute possono uscire dalla cache del CDS e risultare più veloci della prima esecuzione.
 
@@ -150,6 +151,11 @@ Convenzioni, Roma Sud 15/07 12 UTC (ERA5 most-unstable, CIN positiva o mancante;
 
 Radar OPERA entro 1° dal punto: 15:00 max -32.0 dBZ, 16:00 max -32.0 dBZ, 17:00 max -32.0 dBZ, 18:00 max 2.5 dBZ, 19:00 max -32.0 dBZ, 20:00 max -32.0 dBZ, 21:00 max -32.0 dBZ.
 
+### CAPE dello strato rimescolato vettoriale (S14)
+
+- Errore relativo CAPE mediano 3.1% (p95 10.2%), r = 0.99949, CIN errore mediano 0.7 J/kg; dominio intero (13 041 colonne) in 0.49 s per ora contro metpy 151 colonne: 0.9 s; punto S13 18 UTC: [(2707, 2764)].
+- Concordanza sul segno (CAPE > 0): 99.0%; errore CAPE assoluto mediano 11.2 J/kg (p95 31.5); CIN p95 9.4 J/kg. Leggera sovrastima sistematica (~2–3%).
+
 ### Accesso lazy a IT-DPC-SRI
 
 - **Sì**: xarray.open_zarr + s3fs anonimo, endpoint https://object-store.os-api.cci2.ecmwf.int, s3://mlcast-source-datasets/IT-DPC-SRI/v0.1.0/italian-radar-dpc-sri.zarr.
@@ -234,6 +240,7 @@ Su HF i file eliminati restano nella cronologia: `archivio.compatta_cronologia()
 
 ![s10_cape_cin](previews/s10_cape_cin.png)
 ![s13_cape_estremo_profili](previews/s13_cape_estremo_profili.png)
+![s14_mlcape](previews/s14_mlcape.png)
 ![s1_seviri_ir108](previews/s1_seviri_ir108.png)
 ![s2_fci_ir105](previews/s2_fci_ir105.png)
 ![s3_li_flashes](previews/s3_li_flashes.png)

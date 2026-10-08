@@ -40,6 +40,10 @@ LIVELLI = ["850", "700", "500", "300"]
 # campi fissi (una volta sola): quota del terreno e maschera terra/mare per la distanza dalla costa
 VAR_FISSE = ["geopotential", "land_sea_mask"]
 CIN_MANCANTE = 1000.0   # J/kg: soglia oltre la quale ERA5 non scrive la CIN
+# profili per la CAPE dello strato rimescolato (indici.ml_cape_cin): superficie + 23 livelli fino a 150 hPa
+VAR_SUPERFICIE_ML = ["2m_temperature", "2m_dewpoint_temperature", "surface_pressure"]
+LIVELLI_ML = ["1000", "975", "950", "925", "900", "875", "850", "825", "800", "775", "750", "700", "650",
+              "600", "550", "500", "450", "400", "350", "300", "250", "200", "150"]
 # catalogo eventi della Fase 1: ore con CAPE alto e precipitazione convettiva (planning)
 VAR_CATALOGO = ["convective_available_potential_energy", "convective_inhibition", "convective_precipitation"]
 

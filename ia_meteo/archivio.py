@@ -39,7 +39,7 @@ DATA = ROOT / "data"                 # ignorato da git (ia_meteo/.gitignore)
 STAGING = DATA / "staging"
 CACHE = DATA / "cache"
 NOME_REPO = "ia-meteo-events"
-SEZIONI = ("finestre", "catalogo")
+SEZIONI = ("finestre", "catalogo", "conferme")
 
 BUDGET_HF_GB = 95.0                  # spazio privato HF che ci concediamo (account intero)
 LIMITE_LOCALE_GB = 12.0              # tetto per data/ (staging + lavoro + cache) sul Mac
@@ -105,13 +105,14 @@ def spazio_locale_gb() -> dict:
 
 
 # ---------------------------------------------------------------- registro
-def registro(a=None) -> dict:
+def registro(a=None, revision: str | None = None) -> dict:
     """Indice dei pezzi caricati, per sezione (registro.json sul dataset; vuoto se non esiste)."""
     from huggingface_hub import hf_hub_download
     from huggingface_hub.errors import EntryNotFoundError
     a = a or api()
     try:
-        p = hf_hub_download(repo_id(a), "registro.json", repo_type="dataset", local_dir=DATA / "meta")
+        p = hf_hub_download(repo_id(a), "registro.json", repo_type="dataset", local_dir=DATA / "meta",
+                            revision=revision)
         reg = json.loads(Path(p).read_text())
     except EntryNotFoundError:
         reg = {}
@@ -149,6 +150,29 @@ def controlla_budget(gb_nuovi: float = STIMA_FINESTRA_GB, hf: bool = True, a=Non
 
 
 # ---------------------------------------------------------------- caricamento generico
+def _commit_con_registro(a, rid, ops, modifica, messaggio, tentativi=6):
+    """Commit dei file + registro.json aggiornato con `modifica(reg)`, con controllo ottimistico:
+    il commit dichiara la versione del repo su cui si basa (parent_commit); se nel frattempo un altro
+    processo ha scritto (es. catalogo.py e conferma.py insieme), si rilegge il registro e si riprova."""
+    from huggingface_hub import CommitOperationAdd
+    from huggingface_hub.errors import HfHubHTTPError
+    for i in range(tentativi):
+        base = a.repo_info(rid, repo_type="dataset").sha
+        reg = registro(a, revision=base)
+        modifica(reg)
+        reg["aggiornato_utc"] = _ora()
+        op_reg = CommitOperationAdd(path_in_repo="registro.json",
+                                    path_or_fileobj=json.dumps(reg, indent=1, ensure_ascii=False).encode())
+        try:
+            return a.create_commit(rid, list(ops) + [op_reg], commit_message=messaggio, repo_type="dataset",
+                                   parent_commit=base)
+        except HfHubHTTPError as e:
+            if getattr(e.response, "status_code", None) not in (409, 412) or i == tentativi - 1:
+                raise
+            time.sleep(2 + 3 * i)
+
+
+
 def carica(sezione: str, chiave: str, file: dict[str, Path], voce: dict | None = None,
            cancella_locale: bool = True, a=None) -> dict:
     """Carica `file` ({percorso nel repo: file locale}) con un solo commit che registra la voce
@@ -161,14 +185,11 @@ def carica(sezione: str, chiave: str, file: dict[str, Path], voce: dict | None =
     attesi = {p: f.stat().st_size for p, f in file.items()}
     gb = sum(attesi.values()) / 1e9
     controlla_budget(gb, a=a)
-    reg = registro(a)
-    reg[sezione][chiave] = (voce or {}) | {"file": attesi, "GB": round(gb, 4), "caricata_utc": _ora()}
-    reg["aggiornato_utc"] = reg[sezione][chiave]["caricata_utc"]
-    ops = [CommitOperationAdd(path_in_repo=p, path_or_fileobj=str(f)) for p, f in file.items()]
-    ops.append(CommitOperationAdd(path_in_repo="registro.json",
-                                  path_or_fileobj=json.dumps(reg, indent=1, ensure_ascii=False).encode()))
+    ops_file = [CommitOperationAdd(path_in_repo=p, path_or_fileobj=str(f)) for p, f in file.items()]
     t0 = time.perf_counter()
-    a.create_commit(rid, ops, commit_message=f"{sezione} {chiave}", repo_type="dataset")
+    _commit_con_registro(a, rid, ops_file, lambda reg: reg[sezione].__setitem__(
+        chiave, (voce or {}) | {"file": attesi, "GB": round(gb, 4), "caricata_utc": _ora()}),
+        f"{sezione} {chiave}")
     sec = round(time.perf_counter() - t0, 1)
     remoti = {e.path: e.size for e in a.get_paths_info(rid, list(attesi), repo_type="dataset")}
     if remoti != attesi:
@@ -228,14 +249,12 @@ def elimina(sezione: str, chiave: str, a=None) -> None:
     """Toglie i file di una voce dal dataset e dal registro (lo spazio si libera con compatta_cronologia)."""
     from huggingface_hub import CommitOperationAdd, CommitOperationDelete
     a = a or api()
-    reg = registro(a)
-    voce = reg[sezione].pop(chiave, None)
+    voce = registro(a)[sezione].get(chiave)
     if voce is None:
         return
-    reg["aggiornato_utc"] = _ora()
     ops = [CommitOperationDelete(path_in_repo=p) for p in voce["file"]]
-    ops.append(CommitOperationAdd(path_in_repo="registro.json", path_or_fileobj=json.dumps(reg, indent=1).encode()))
-    a.create_commit(repo_id(a), ops, commit_message=f"elimina {sezione} {chiave}", repo_type="dataset")
+    _commit_con_registro(a, repo_id(a), ops, lambda reg: reg[sezione].pop(chiave, None),
+                         f"elimina {sezione} {chiave}")
 
 
 def compatta_cronologia(a=None) -> None:

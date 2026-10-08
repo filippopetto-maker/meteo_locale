@@ -23,6 +23,7 @@ dependencies:
   - pandas
   - requests
   - python-dotenv
+  - pyarrow
   - clang_osx-arm64   # per compilare pysteps (vedi sopra)
   - llvm-openmp
   - py-opencv         # richiesto da pysteps LK (morph_opening), non elencato nel brief

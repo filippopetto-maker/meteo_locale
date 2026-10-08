@@ -13,7 +13,8 @@ from common import RESULTS, SMOKE
 
 ORDINE = ["s1_seviri", "s2_fci", "s3_li_flashes", "s4_opera", "s5_openmeteo_env", "s6_era5_cds",
           "s7_it_dpc_sri", "s8a_imerg", "s8b_huggingface", "s9_toolchain", "s10_cape_cin",
-          "s11_archivio_hf", "s12_archivio_catalogo", "s13_cape_estremo"]
+          "s11_archivio_hf", "s12_archivio_catalogo", "s13_cape_estremo",
+          "s14_mlcape"]
 
 QUOTA_EUMETSAT = ("Nessun HTTP 429 in oltre 200 download (SEVIRI, LI, entry FCI, richieste Range da 1 byte) "
                   "né header `X-RateLimit-*` sulle API Data Store. Data Tailor: quota disco utente 20 000 MB per "
@@ -199,6 +200,14 @@ def main():
                      f"{mp['MU'].get('cape')} | {v.get('d2m_C', v.get('td_sup_C'))} | {v.get('td_925_C')} |")
         rad = pr.get("radar OPERA attorno al punto", {})
         L += ["", "Radar OPERA entro 1° dal punto: " + ", ".join(f"{h} max {r['max_dBZ']} dBZ" for h, r in rad.items()) + ".", ""]
+    s14 = R.get("s14_mlcape")
+    if s14:
+        stt = s14["misure"]["statistiche"]
+        L += ["### CAPE dello strato rimescolato vettoriale (S14)", "",
+              f"- {s14['risposta']}.",
+              f"- Concordanza sul segno (CAPE > 0): {100 * stt['concordanza_cape>0']:.1f}%; errore CAPE assoluto mediano "
+              f"{stt['cape_errore_assoluto_mediano']} J/kg (p95 {stt['cape_errore_assoluto_p95']}); CIN p95 "
+              f"{stt['cin_errore_assoluto_p95']} J/kg. Leggera sovrastima sistematica (~2–3%).", ""]
     if s7:
         d = s7["misure"]["dataset"]
         L += ["### Accesso lazy a IT-DPC-SRI", "", f"- **Sì**: {s7['misure']['metodo']}.",
