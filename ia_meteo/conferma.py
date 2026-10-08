@@ -11,6 +11,7 @@ Etichetta del riquadro (soglie in testa al file):
 - `confermato`        ERA5 convettivo e convezione osservata;
 - `mancato_dal_modello` convezione osservata ma ERA5 non convettivo (evento vero, il modello lo perde);
 - `falso_allarme`     ERA5 convettivo, area osservabile e nessuna convezione osservata;
+  (la convezione vista anche solo in parte del riquadro conferma; per dire "pulito" serve copertura)
 - `negativo_vero`     ERA5 instabile senza convezione e osservazione pulita (il caso negativo buono);
 - `non_confermabile`  area non coperta da radar né da LI.
 Le statistiche vanno su HF nella sezione `conferme` (una voce per periodo), così si rifà la
@@ -38,7 +39,8 @@ FRAZ_ECO_CONV = 0.002          # ≥ 0,2% dell'area coperta con eco ≥ 35 dBZ (
 MMH_CONV = 10.0                # IT-DPC-SRI: intensità da cella convettiva
 FRAZ_ITDPC_CONV = 0.002
 FLASH_CONV = 50.0              # flash×pixel nel periodo (LI)
-COPERTURA_MIN = 0.5
+COPERTURA_MIN = 0.5            # per dichiarare un riquadro pulito (OPERA + IT-DPC-SRI)
+COPERTURA_VISTA = 0.05         # basta che il radar veda una parte del riquadro per confermare la convezione
 INIZIO_LI = datetime(2024, 7, 4)
 LATO = 5.0
 NX = int((DOMAIN_BBOX["lon_max"] - DOMAIN_BBOX["lon_min"]) / LATO)
@@ -146,10 +148,12 @@ def stat_li(t0, t1, lavoro, tok):
 
 
 def etichetta(r) -> str:
-    oss_conv = ((r.opera_copertura >= COPERTURA_MIN) & (r.opera_frac35 >= FRAZ_ECO_CONV)) \
-        or ((r.itdpc_copertura >= COPERTURA_MIN) & (r.itdpc_frac10 >= FRAZ_ITDPC_CONV)) \
+    """La convezione vista nella parte coperta basta a confermarla; per dichiarare un riquadro
+    pulito serve invece copertura sufficiente (OPERA + IT-DPC-SRI insieme) o i fulmini LI."""
+    oss_conv = ((r.opera_copertura >= COPERTURA_VISTA) & (r.opera_frac35 >= FRAZ_ECO_CONV)) \
+        or ((r.itdpc_copertura >= COPERTURA_VISTA) & (r.itdpc_frac10 >= FRAZ_ITDPC_CONV)) \
         or (r.li_flash >= FLASH_CONV)
-    osservabile = (r.opera_copertura >= COPERTURA_MIN) or (r.itdpc_copertura >= COPERTURA_MIN) or r.li_disponibile
+    osservabile = min(r.opera_copertura + r.itdpc_copertura, 1.0) >= COPERTURA_MIN or r.li_disponibile
     if oss_conv:
         return "confermato" if r.era5_convettivo else "mancato_dal_modello"
     if not osservabile:
@@ -187,7 +191,9 @@ def conferma(periodi: pd.DataFrame) -> pd.DataFrame:
     for _, p in periodi.iterrows():
         if ar.presente("conferme", p.id, reg):
             f = ar.scarica("conferme", p.id)[0]
-            out.append(pd.read_parquet(f))
+            df = pd.read_parquet(f)
+            df["etichetta"] = df.apply(etichetta, axis=1)      # regole aggiornate senza riscaricare il radar
+            out.append(df)
             continue
         t = time.perf_counter()
         df = conferma_periodo(p.id, p.inizio.to_pydatetime(), p.fine.to_pydatetime(), set(p.riquadri_convettivi),
