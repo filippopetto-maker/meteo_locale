@@ -17,6 +17,7 @@ Generato da `smoke/make_report.py` dai JSON in `smoke/results/`. Esecuzione 07�
 | s8b_huggingface | **OK** | 2 | 0 | dataset privato Fil728/ia-meteo-events: creato=True, privato=True, upload+verifica+cancellazione riusciti; file rimasti: ['.gitattributes'] |
 | s9_toolchain | **OK** | 20 | 0 | Sì: LK + estrapolazione +30/+60 min in 0.1 s su [4, 80, 80], processo intero 19.8 s (incl. import e richiesta ERA5), picco RAM 340.3 MB; moto nubi fredde 64.9 km/h da 248°; ERA5 850–500 hPa 30.0 km/h da 269° |
 | s10_cape_cin | **OK** | 8 | 8.93 | ERA5: CAPE e CIN presenti in tutti gli anni 2015–2025 (11/11); CIN definita in media sul 12% del dominio (NaN altrove, CAPE max dove CIN è NaN = 4568 J/kg; CIN mancante nel 46% dei punti con CAPE > 500); evento 12 h: 8.2 MB compressi in 3.8 s; CIN in tempo reale da: ncep_gfs_seamless, ecmwf_ifs, icon_seamless, italia_meteo_arpae_icon_2i |
+| s11_archivio_hf | **OK** | 218 | 1333.2 | Sì: 2 finestre di prova costruite, caricate (1 commit ciascuna), verificate, cancellate dal Mac e riscaricate identiche; MB per finestra {'prova_20190715T12': 6.45, 'prova_20250715T14': 4.55}; spazio HF account 0.011 → 0.011 → 0.011 GB dopo pulizia e compattazione |
 
 Tempo = somma delle fasi misurate (S9: processo intero). Le richieste CDS ripetute possono uscire dalla cache del CDS e risultare più veloci della prima esecuzione.
 
@@ -163,6 +164,7 @@ Scaricati per finestra: SEVIRI disco intero 8887 MB (planning: ~5 600), SEVIRI v
 | 300 finestre | 255 / 45 / 45 | 33.9 GB | 20.6 GB | 2847 GB | 670 GB | 40 h |
 
 Le ore con 3 worker presuppongono che la linea regga 3 download insieme (~9 MB/s ciascuno misurati qui); in sequenza sono 59 h (150) e 119 h (300). Il Data Tailor SEVIRI riduce la rete di ~25 volte ma costa ~50 s di elaborazione lato server per slot.
+
 **Spazio sul Mac** (i dati scaricati non restano: ogni slot si ritaglia e si cancella):
 
 - Lavoro durante il download: ~1.37 GB (3 worker × zip+.nat SEVIRI).
@@ -170,6 +172,24 @@ Le ore con 3 worker presuppongono che la linea regga 3 download insieme (~9 MB/s
 - Ambiente conda: ~1.6 GB (già installato).
 - Dataset ritagliato: da 10.3 GB (150 finestre, int16) a 33.9 GB (300 finestre, float32) se resta tutto in locale; ~0 se ogni finestra va su Hugging Face (privato, limite 100 GB) e si cancella dal Mac.
 
+
+## 3b. Modalità d'archivio: Mac a tetto fisso, finestre su Hugging Face (S11)
+
+`finestra.py` costruisce la finestra in `data/staging/<id>/` scaricando un prodotto alla volta e cancellando il grezzo; `archivio.carica_finestra` la carica con un commit (più `registro.json`), verifica nomi e dimensioni sul repo e cancella la copia locale; `archivio.scarica_finestra` la riporta in una cache locale a tetto fisso. Limiti controllati prima di ogni passo: HF 95.0 GB (account, cronologia inclusa), `ia_meteo/data/` 12.0 GB, cache 8.0 GB, disco libero minimo 5.0 GB.
+
+- Esito: **OK**. Sì: 2 finestre di prova costruite, caricate (1 commit ciascuna), verificate, cancellate dal Mac e riscaricate identiche; MB per finestra {'prova_20190715T12': 6.45, 'prova_20250715T14': 4.55}; spazio HF account 0.011 → 0.011 → 0.011 GB dopo pulizia e compattazione.
+
+| Finestra | sorgenti | MB su HF | costruzione (s) | upload (s) | riscaricata identica |
+|:--|:--|--:|--:|--:|:--|
+| prova_20190715T12 | satellite, radar, ambiente, imerg, itdpc | 6.45 | 96.4 | 2.2 | True |
+| prova_20250715T14 | satellite, radar, ambiente, imerg, fulmini | 4.55 | 121.9 | 1.8 | True |
+
+Dettaglio per sorgente (n frame, MB scaricati, MB nel file, secondi):
+
+- `prova_20190715T12`: satellite 4 / 740.6 / 3.86 / 60.9; radar 4 / 3.0 / 0.2 / 7.1; ambiente 2 / 1.5 / 1.44 / 2.6; imerg 2 / 16.2 / 0.06 / 14.1; itdpc 6 / None / 0.89 / 9.2
+- `prova_20250715T14`: satellite 3 / 535.2 / 3.28 / 60.6; radar 6 / 15.9 / 0.32 / 33.8; ambiente 1 / 0.84 / 0.8 / 6.6; imerg 1 / 8.1 / 0.04 / 7.2; fulmini 3 / 11.9 / 0.1 / 13.7
+
+Su HF i file eliminati restano nella cronologia: `archivio.compatta_cronologia()` la riduce a un commit. Il conteggio `used_storage` di HF si aggiorna in differita: durante S11 è rimasto a 0.011 GB sia con le finestre caricate sia dopo la pulizia. Per questo `controlla_budget` usa il massimo tra il valore HF e la somma delle finestre nel registro.
 
 ## 4. Problemi incontrati e differenze rispetto alla documentazione
 

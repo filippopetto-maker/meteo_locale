@@ -1,0 +1,195 @@
+{
+  "test": "s11_archivio_hf",
+  "esito": "OK",
+  "domanda": "Si può lavorare con il Mac a tetto fisso (≤ 20 GB liberi) appoggiando l'archivio delle finestre sul dataset privato Hugging Face (~95 GB)?",
+  "risposta": "Sì: 2 finestre di prova costruite, caricate (1 commit ciascuna), verificate, cancellate dal Mac e riscaricate identiche; MB per finestra {'prova_20190715T12': 6.45, 'prova_20250715T14': 4.55}; spazio HF account 0.011 → 0.011 → 0.011 GB dopo pulizia e compattazione",
+  "misure": {
+    "secondi": {
+      "prova_20190715T12": 96.4,
+      "prova_20250715T14": 121.9
+    },
+    "MB_scaricati": 1333.2,
+    "MB_conservati": 0,
+    "finestre": {
+      "prova_20190715T12": {
+        "secondi_costruzione": 96.4,
+        "sorgenti": {
+          "satellite": "satellite.nc",
+          "radar": "radar.nc",
+          "ambiente": "ambiente.nc",
+          "imerg": "imerg.nc",
+          "itdpc": "itdpc.nc"
+        },
+        "errori_sorgenti": {},
+        "misure": {
+          "satellite": {
+            "n": 4,
+            "MB_scaricati": 740.6,
+            "MB_file": 3.86,
+            "secondi": 60.9
+          },
+          "radar": {
+            "n": 4,
+            "passo_min": 15,
+            "mancanti": [],
+            "MB_scaricati": 3.0,
+            "MB_file": 0.2,
+            "secondi": 7.1
+          },
+          "ambiente": {
+            "MB_scaricati": 1.5,
+            "ore": 2,
+            "MB_file": 1.44,
+            "secondi": 2.6
+          },
+          "imerg": {
+            "n": 2,
+            "MB_scaricati": 16.2,
+            "MB_file": 0.06,
+            "secondi": 14.1
+          },
+          "itdpc": {
+            "n": 6,
+            "MB_file": 0.89,
+            "secondi": 9.2
+          }
+        },
+        "MB_finestra": 6.45,
+        "picco_locale_GB": {
+          "data_GB": 0.006,
+          "cache_GB": 0.0,
+          "staging_GB": 0.006,
+          "disco_libero_GB": 22.2
+        },
+        "upload": {
+          "id": "prova_20190715T12",
+          "GB": 0.0064,
+          "secondi_upload": 2.2,
+          "file": 6
+        },
+        "staging_cancellato": true,
+        "secondi_riscaricamento": 3.2,
+        "identica_dopo_riscaricamento": true,
+        "lettura_satellite": {
+          "var": "IR_108",
+          "time": 4,
+          "min_max_K": [
+            217.8,
+            326.9
+          ]
+        }
+      },
+      "prova_20250715T14": {
+        "secondi_costruzione": 121.9,
+        "sorgenti": {
+          "satellite": "satellite.nc",
+          "radar": "radar.nc",
+          "ambiente": "ambiente.nc",
+          "imerg": "imerg.nc",
+          "fulmini": "fulmini.nc"
+        },
+        "errori_sorgenti": {},
+        "misure": {
+          "satellite": {
+            "n": 3,
+            "MB_scaricati": 535.2,
+            "MB_file": 3.28,
+            "secondi": 60.6
+          },
+          "radar": {
+            "n": 6,
+            "passo_min": 5,
+            "mancanti": [],
+            "MB_scaricati": 15.9,
+            "MB_file": 0.32,
+            "secondi": 33.8
+          },
+          "ambiente": {
+            "MB_scaricati": 0.84,
+            "ore": 1,
+            "MB_file": 0.8,
+            "secondi": 6.6
+          },
+          "imerg": {
+            "n": 1,
+            "MB_scaricati": 8.1,
+            "MB_file": 0.04,
+            "secondi": 7.2
+          },
+          "fulmini": {
+            "n": 3,
+            "MB_scaricati": 11.9,
+            "MB_file": 0.1,
+            "secondi": 13.7
+          }
+        },
+        "MB_finestra": 4.55,
+        "picco_locale_GB": {
+          "data_GB": 0.011,
+          "cache_GB": 0.006,
+          "staging_GB": 0.005,
+          "disco_libero_GB": 21.13
+        },
+        "upload": {
+          "id": "prova_20250715T14",
+          "GB": 0.0045,
+          "secondi_upload": 1.8,
+          "file": 6
+        },
+        "staging_cancellato": true,
+        "secondi_riscaricamento": 2.7,
+        "identica_dopo_riscaricamento": true,
+        "lettura_satellite": {
+          "var": "ir_105",
+          "time": 3,
+          "min_max_K": [
+            214.8,
+            325.5
+          ]
+        }
+      }
+    },
+    "registro_con_prove": [
+      "prova_20190715T12",
+      "prova_20250715T14"
+    ],
+    "hf_prima": {
+      "account_GB": 0.011,
+      "repo": {
+        "dataset:Fil728/ia-meteo-events": 0.011
+      }
+    },
+    "hf_con_prove": {
+      "account_GB": 0.011,
+      "repo": {
+        "dataset:Fil728/ia-meteo-events": 0.011
+      }
+    },
+    "hf_dopo": {
+      "account_GB": 0.011,
+      "repo": {
+        "dataset:Fil728/ia-meteo-events": 0.011
+      }
+    },
+    "locale_prima": {
+      "data_GB": 0.0,
+      "cache_GB": 0.0,
+      "staging_GB": 0.0,
+      "disco_libero_GB": 21.13
+    },
+    "locale_dopo": {
+      "data_GB": 0.0,
+      "cache_GB": 0.0,
+      "staging_GB": 0.0,
+      "disco_libero_GB": 21.14
+    },
+    "limiti": {
+      "BUDGET_HF_GB": 95.0,
+      "LIMITE_LOCALE_GB": 12.0,
+      "LIMITE_CACHE_GB": 8.0,
+      "MARGINE_DISCO_GB": 5.0
+    }
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-08T11:10:33+00:00"
+}

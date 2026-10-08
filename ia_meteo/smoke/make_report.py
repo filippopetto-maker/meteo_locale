@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common import RESULTS, SMOKE
 
 ORDINE = ["s1_seviri", "s2_fci", "s3_li_flashes", "s4_opera", "s5_openmeteo_env", "s6_era5_cds",
-          "s7_it_dpc_sri", "s8a_imerg", "s8b_huggingface", "s9_toolchain", "s10_cape_cin"]
+          "s7_it_dpc_sri", "s8a_imerg", "s8b_huggingface", "s9_toolchain", "s10_cape_cin",
+          "s11_archivio_hf"]
 
 QUOTA_EUMETSAT = ("Nessun HTTP 429 in oltre 200 download (SEVIRI, LI, entry FCI, richieste Range da 1 byte) "
                   "né header `X-RateLimit-*` sulle API Data Store. Data Tailor: quota disco utente 20 000 MB per "
@@ -225,7 +226,7 @@ def main():
               f"insieme (~9 MB/s ciascuno misurati qui); in sequenza sono "
               f"{st['scenari']['150']['ore_download_sequenziali']:.0f} h (150) e "
               f"{s300['ore_download_sequenziali']:.0f} h (300). Il Data Tailor SEVIRI riduce la rete di ~25 volte "
-              "ma costa ~50 s di elaborazione lato server per slot.", "**Spazio sul Mac** (i dati scaricati non restano: ogni slot si ritaglia e si cancella):", "",
+              "ma costa ~50 s di elaborazione lato server per slot.", "", "**Spazio sul Mac** (i dati scaricati non restano: ogni slot si ritaglia e si cancella):", "",
               f"- Lavoro durante il download: ~{st['picco_disco_lavoro_GB']} GB ({p['worker']} worker × zip+.nat SEVIRI).",
               f"- Catalogo eventi ERA5 della Fase 1 (CAPE, CIN, precipitazione convettiva, orari, apr–nov 2015–2025): "
               f"~{st['catalogo_era5_fase1_GB']} GB.",
@@ -234,6 +235,34 @@ def main():
               f"{s300['GB_conservati_float32']} GB (300 finestre, float32) se resta tutto in locale; "
               "~0 se ogni finestra va su Hugging Face (privato, limite 100 GB) e si cancella dal Mac.",
               "", ""]
+
+    s11 = R.get("s11_archivio_hf")
+    if s11:
+        m = s11["misure"]
+        lim = m["limiti"]
+        L += ["## 3b. Modalità d'archivio: Mac a tetto fisso, finestre su Hugging Face (S11)", "",
+              "`finestra.py` costruisce la finestra in `data/staging/<id>/` scaricando un prodotto alla volta e "
+              "cancellando il grezzo; `archivio.carica_finestra` la carica con un commit (più `registro.json`), "
+              "verifica nomi e dimensioni sul repo e cancella la copia locale; `archivio.scarica_finestra` la "
+              "riporta in una cache locale a tetto fisso. Limiti controllati prima di ogni passo: HF "
+              f"{lim['BUDGET_HF_GB']} GB (account, cronologia inclusa), `ia_meteo/data/` {lim['LIMITE_LOCALE_GB']} GB, "
+              f"cache {lim['LIMITE_CACHE_GB']} GB, disco libero minimo {lim['MARGINE_DISCO_GB']} GB.", "",
+              f"- Esito: **{s11['esito']}**. {s11['risposta']}.", "",
+              "| Finestra | sorgenti | MB su HF | costruzione (s) | upload (s) | riscaricata identica |",
+              "|:--|:--|--:|--:|--:|:--|"]
+        for k, v in m["finestre"].items():
+            L.append(f"| {k} | {', '.join(v.get('sorgenti', {}))} | {v.get('MB_finestra')} | "
+                     f"{v.get('secondi_costruzione')} | {(v.get('upload') or {}).get('secondi_upload')} | "
+                     f"{v.get('identica_dopo_riscaricamento')} |")
+        L += ["", "Dettaglio per sorgente (n frame, MB scaricati, MB nel file, secondi):", ""]
+        for k, v in m["finestre"].items():
+            L.append(f"- `{k}`: " + "; ".join(f"{sn} {mm.get('n', mm.get('ore'))} / {mm.get('MB_scaricati')} / "
+                                             f"{mm.get('MB_file')} / {mm.get('secondi')}" for sn, mm in v.get("misure", {}).items())
+                     + (f"; errori: {v['errori_sorgenti']}" if v.get("errori_sorgenti") else ""))
+        L += ["", "Su HF i file eliminati restano nella cronologia: `archivio.compatta_cronologia()` la riduce a "
+              "un commit. Il conteggio `used_storage` di HF si aggiorna in differita: durante S11 è rimasto a "
+              f"{m['hf_dopo']['account_GB']} GB sia con le finestre caricate sia dopo la pulizia. Per questo "
+              "`controlla_budget` usa il massimo tra il valore HF e la somma delle finestre nel registro.", ""]
 
     L += ["## 4. Problemi incontrati e differenze rispetto alla documentazione", ""]
     L += [f"- {n}" for n in NOTE_ESECUZIONE]
