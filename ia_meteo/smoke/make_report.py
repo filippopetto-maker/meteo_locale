@@ -13,7 +13,7 @@ from common import RESULTS, SMOKE
 
 ORDINE = ["s1_seviri", "s2_fci", "s3_li_flashes", "s4_opera", "s5_openmeteo_env", "s6_era5_cds",
           "s7_it_dpc_sri", "s8a_imerg", "s8b_huggingface", "s9_toolchain", "s10_cape_cin",
-          "s11_archivio_hf", "s12_archivio_catalogo"]
+          "s11_archivio_hf", "s12_archivio_catalogo", "s13_cape_estremo"]
 
 QUOTA_EUMETSAT = ("Nessun HTTP 429 in oltre 200 download (SEVIRI, LI, entry FCI, richieste Range da 1 byte) "
                   "né header `X-RateLimit-*` sulle API Data Store. Data Tailor: quota disco utente 20 000 MB per "
@@ -184,6 +184,21 @@ def main():
         for a, v in m["roma_12utc_ERA5_vs_GFS"].items():
             L.append(f"| {a} | {v.get('ERA5_cape')} | {v.get('GFS_cape')} | {v.get('ERA5_cin', '–') or 'mancante'} | {v.get('GFS_cin')} |")
         L += [""]
+    s13 = R.get("s13_cape_estremo")
+    if s13:
+        pr = s13["misure"]["profili"]
+        L += ["### Il massimo di CAPE del catalogo di luglio 2019 (S13)", "",
+              f"- {s13['risposta']}.", "",
+              "| Profilo | CAPE ERA5 | MetPy SB | MetPy ML100 | MetPy MU | Td 2 m / superficie (°C) | Td 925 hPa (°C) |",
+              "|:--|--:|--:|--:|--:|--:|--:|"]
+        for k, v in pr.items():
+            if "metpy" not in v:
+                continue
+            mp = v["metpy"]
+            L.append(f"| {k} | {v.get('cape_era5', '–')} | {mp['SB'].get('cape')} | {mp['ML100'].get('cape')} | "
+                     f"{mp['MU'].get('cape')} | {v.get('d2m_C', v.get('td_sup_C'))} | {v.get('td_925_C')} |")
+        rad = pr.get("radar OPERA attorno al punto", {})
+        L += ["", "Radar OPERA entro 1° dal punto: " + ", ".join(f"{h} max {r['max_dBZ']} dBZ" for h, r in rad.items()) + ".", ""]
     if s7:
         d = s7["misure"]["dataset"]
         L += ["### Accesso lazy a IT-DPC-SRI", "", f"- **Sì**: {s7['misure']['metodo']}.",

@@ -19,6 +19,7 @@ Generato da `smoke/make_report.py` dai JSON in `smoke/results/`. Esecuzione 07�
 | s10_cape_cin | **OK** | 8 | 8.93 | ERA5: CAPE e CIN presenti in tutti gli anni 2015–2025 (11/11); CIN definita in media sul 12% del dominio (NaN altrove, CAPE max dove CIN è NaN = 4568 J/kg; CIN mancante nel 46% dei punti con CAPE > 500); evento 12 h: 8.2 MB compressi in 3.8 s; CIN in tempo reale da: ncep_gfs_seamless, ecmwf_ifs, icon_seamless, italia_meteo_arpae_icon_2i |
 | s11_archivio_hf | **OK** | 218 | 1333.2 | Sì: 2 finestre di prova costruite, caricate (1 commit ciascuna), verificate, cancellate dal Mac e riscaricate identiche; MB per finestra {'prova_20190715T12': 6.45, 'prova_20250715T14': 4.55}; spazio HF account 0.011 → 0.011 → 0.011 GB dopo pulizia e compattazione |
 | s12_archivio_catalogo | **OK** | 4 | 23.0 | Sì: catalogo era5_2019_07 (744 ore, 21.2 MB, CDS 445.6 s) già su HF da una sessione precedente: ripreso senza nuova richiesta CDS; presente() lo riconosce; mini-finestra caricata e riscaricata identica (anche solo radar); LRU ha tolto prima catalogo/era5_2019_07.nc |
+| s13_cape_estremo | **OK** | 0 | 34 | Punto max 18 UTC: CAPE ERA5 9888.0, MetPy dal profilo ERA5 MU 7593.0 / ML100 2721.0 / SB 7593.0 J/kg, Td 2 m 27.1 °C; Zagabria 12 UTC: ERA5 449.0 (MetPy MU 2238.0) contro osservato MU 771.0 / ML100 63.0 J/kg, Td superficie 15.2 °C; radar OPERA 15–21 UTC entro 1° dal punto: max 2.5 dBZ |
 
 Tempo = somma delle fasi misurate (S9: processo intero). Le richieste CDS ripetute possono uscire dalla cache del CDS e risultare più veloci della prima esecuzione.
 
@@ -133,6 +134,22 @@ Convenzioni, Roma Sud 15/07 12 UTC (ERA5 most-unstable, CIN positiva o mancante;
 | 2024 | 801.2 | 0.0 | mancante | -14.0 |
 | 2025 | 130.8 | 0.0 | mancante | -11.0 |
 
+### Il massimo di CAPE del catalogo di luglio 2019 (S13)
+
+- Punto max 18 UTC: CAPE ERA5 9888.0, MetPy dal profilo ERA5 MU 7593.0 / ML100 2721.0 / SB 7593.0 J/kg, Td 2 m 27.1 °C; Zagabria 12 UTC: ERA5 449.0 (MetPy MU 2238.0) contro osservato MU 771.0 / ML100 63.0 J/kg, Td superficie 15.2 °C; radar OPERA 15–21 UTC entro 1° dal punto: max 2.5 dBZ.
+
+| Profilo | CAPE ERA5 | MetPy SB | MetPy ML100 | MetPy MU | Td 2 m / superficie (°C) | Td 925 hPa (°C) |
+|:--|--:|--:|--:|--:|--:|--:|
+| ERA5 punto_max 12UTC | 2009.0 | 4028.0 | 1706.0 | 4028.0 | 21.0 | 16.5 |
+| ERA5 punto_max 18UTC | 9888.0 | 7593.0 | 2721.0 | 7593.0 | 27.1 | 16.7 |
+| ERA5 zagabria 12UTC | 449.0 | 2238.0 | 389.0 | 2238.0 | 18.6 | 11.9 |
+| ERA5 zagabria 18UTC | 464.0 | 2015.0 | 0.0 | 2015.0 | 19.5 | 4.1 |
+| Zagabria osservato 2019 07 01 00 | – | 0.0 | 0.0 | 605.0 | 17.4 | 6.4 |
+| Zagabria osservato 2019 07 01 12 | – | 771.0 | 63.0 | 771.0 | 15.2 | 7.2 |
+| Zagabria osservato 2019 07 02 00 | – | 0.0 | 0.0 | 0.0 | 13.6 | 7.4 |
+
+Radar OPERA entro 1° dal punto: 15:00 max -32.0 dBZ, 16:00 max -32.0 dBZ, 17:00 max -32.0 dBZ, 18:00 max 2.5 dBZ, 19:00 max -32.0 dBZ, 20:00 max -32.0 dBZ, 21:00 max -32.0 dBZ.
+
 ### Accesso lazy a IT-DPC-SRI
 
 - **Sì**: xarray.open_zarr + s3fs anonimo, endpoint https://object-store.os-api.cci2.ecmwf.int, s3://mlcast-source-datasets/IT-DPC-SRI/v0.1.0/italian-radar-dpc-sri.zarr.
@@ -216,6 +233,7 @@ Su HF i file eliminati restano nella cronologia: `archivio.compatta_cronologia()
 ## Anteprime
 
 ![s10_cape_cin](previews/s10_cape_cin.png)
+![s13_cape_estremo_profili](previews/s13_cape_estremo_profili.png)
 ![s1_seviri_ir108](previews/s1_seviri_ir108.png)
 ![s2_fci_ir105](previews/s2_fci_ir105.png)
 ![s3_li_flashes](previews/s3_li_flashes.png)

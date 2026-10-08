@@ -1,0 +1,207 @@
+{
+  "test": "s13_cape_estremo",
+  "esito": "OK",
+  "domanda": "Il CAPE ERA5 di 9888 J/kg (01/07/2019 18 UTC, 45,0°N 16,5°E) è fisico o un artefatto?",
+  "risposta": "Punto max 18 UTC: CAPE ERA5 9888.0, MetPy dal profilo ERA5 MU 7593.0 / ML100 2721.0 / SB 7593.0 J/kg, Td 2 m 27.1 °C; Zagabria 12 UTC: ERA5 449.0 (MetPy MU 2238.0) contro osservato MU 771.0 / ML100 63.0 J/kg, Td superficie 15.2 °C; radar OPERA 15–21 UTC entro 1° dal punto: max 2.5 dBZ",
+  "misure": {
+    "secondi": {},
+    "MB_scaricati": 34,
+    "MB_conservati": 0,
+    "profili": {
+      "ERA5 punto_max 12UTC": {
+        "sp_hPa": 980.9,
+        "t2m_C": "33.1",
+        "d2m_C": 21.0,
+        "td_925_C": 16.5,
+        "t_500_C": -10.2,
+        "cape_era5": 2009.0,
+        "cin_era5": null,
+        "metpy": {
+          "SB": {
+            "cape": 4028.0,
+            "cin": 0.0
+          },
+          "ML100": {
+            "cape": 1706.0,
+            "cin": -90.0
+          },
+          "MU": {
+            "cape": 4028.0,
+            "cin": 0.0
+          }
+        }
+      },
+      "ERA5 punto_max 18UTC": {
+        "sp_hPa": 979.6,
+        "t2m_C": "28.9",
+        "d2m_C": 27.1,
+        "td_925_C": 16.7,
+        "t_500_C": -10.1,
+        "cape_era5": 9888.0,
+        "cin_era5": 444.0,
+        "metpy": {
+          "SB": {
+            "cape": 7593.0,
+            "cin": -21.0
+          },
+          "ML100": {
+            "cape": 2721.0,
+            "cin": -15.0
+          },
+          "MU": {
+            "cape": 7593.0,
+            "cin": -21.0
+          }
+        }
+      },
+      "ERA5 zagabria 12UTC": {
+        "sp_hPa": 995.3,
+        "t2m_C": "33.1",
+        "d2m_C": 18.6,
+        "td_925_C": 11.9,
+        "t_500_C": -9.9,
+        "cape_era5": 449.0,
+        "cin_era5": null,
+        "metpy": {
+          "SB": {
+            "cape": 2238.0,
+            "cin": -2.0
+          },
+          "ML100": {
+            "cape": 389.0,
+            "cin": -268.0
+          },
+          "MU": {
+            "cape": 2238.0,
+            "cin": -2.0
+          }
+        }
+      },
+      "ERA5 zagabria 18UTC": {
+        "sp_hPa": 993.7,
+        "t2m_C": "29.7",
+        "d2m_C": 19.5,
+        "td_925_C": 4.1,
+        "t_500_C": -10.0,
+        "cape_era5": 464.0,
+        "cin_era5": null,
+        "metpy": {
+          "SB": {
+            "cape": 2015.0,
+            "cin": -198.0
+          },
+          "ML100": {
+            "cape": 0.0,
+            "cin": 0.0
+          },
+          "MU": {
+            "cape": 2015.0,
+            "cin": -198.0
+          }
+        }
+      },
+      "Zagabria osservato 2019 07 01 00": {
+        "livelli": 47,
+        "p_sup_hPa": 1005.0,
+        "t_sup_C": 19.6,
+        "td_sup_C": 17.4,
+        "td_925_C": 6.4,
+        "metpy": {
+          "SB": {
+            "cape": 0.0,
+            "cin": 0.0
+          },
+          "ML100": {
+            "cape": 0.0,
+            "cin": 0.0
+          },
+          "MU": {
+            "cape": 605.0,
+            "cin": -451.0
+          }
+        }
+      },
+      "Zagabria osservato 2019 07 01 12": {
+        "livelli": 57,
+        "p_sup_hPa": 1002.0,
+        "t_sup_C": 32.2,
+        "td_sup_C": 15.2,
+        "td_925_C": 7.2,
+        "metpy": {
+          "SB": {
+            "cape": 771.0,
+            "cin": -214.0
+          },
+          "ML100": {
+            "cape": 63.0,
+            "cin": -383.0
+          },
+          "MU": {
+            "cape": 771.0,
+            "cin": -214.0
+          }
+        }
+      },
+      "Zagabria osservato 2019 07 02 00": {
+        "livelli": 30,
+        "p_sup_hPa": 1000.0,
+        "t_sup_C": 19.6,
+        "td_sup_C": 13.6,
+        "td_925_C": 7.4,
+        "metpy": {
+          "SB": {
+            "cape": 0.0,
+            "cin": 0.0
+          },
+          "ML100": {
+            "cape": 0.0,
+            "cin": 0.0
+          },
+          "MU": {
+            "cape": 0.0,
+            "cin": 0.0
+          }
+        }
+      },
+      "radar OPERA attorno al punto": {
+        "15:00": {
+          "copertura": 1.0,
+          "max_dBZ": -32.0,
+          "px_>=35dBZ": 0
+        },
+        "16:00": {
+          "copertura": 1.0,
+          "max_dBZ": -32.0,
+          "px_>=35dBZ": 0
+        },
+        "17:00": {
+          "copertura": 1.0,
+          "max_dBZ": -32.0,
+          "px_>=35dBZ": 0
+        },
+        "18:00": {
+          "copertura": 1.0,
+          "max_dBZ": 2.5,
+          "px_>=35dBZ": 0
+        },
+        "19:00": {
+          "copertura": 1.0,
+          "max_dBZ": -32.0,
+          "px_>=35dBZ": 0
+        },
+        "20:00": {
+          "copertura": 1.0,
+          "max_dBZ": -32.0,
+          "px_>=35dBZ": 0
+        },
+        "21:00": {
+          "copertura": 1.0,
+          "max_dBZ": -32.0,
+          "px_>=35dBZ": 0
+        }
+      }
+    }
+  },
+  "errori": [],
+  "timestamp_utc": "2026-10-08T13:14:03+00:00"
+}

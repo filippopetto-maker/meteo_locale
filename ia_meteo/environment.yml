@@ -33,3 +33,4 @@ dependencies:
       - "cdsapi>=0.7.7"
       - huggingface_hub
       - earthaccess
+      - metpy     # indici convettivi (CAPE/CIN per particella, poi Corfidi/Bunkers)
