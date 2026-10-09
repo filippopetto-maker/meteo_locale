@@ -42,6 +42,7 @@ from fonti import era5
 VERSIONE = 2                       # 1 = solo CAPE/CIN/cp orari (S12); 2 = + ML-CAPE/CIN e candidati
 ORE_ML = list(range(0, 24, 3))
 MESI_DEFAULT = range(4, 12)        # aprile–novembre (planning)
+TENTATIVI_MESE = 3              # un mese fallito (errori MARS del CDS) si riprova fino a 3 volte
 RIQUADRO = 5.0                     # gradi
 VAR_ORARIE = era5.VAR_CATALOGO + era5.VAR_SUPERFICIE_ML
 _LUCCHETTO_HF = threading.Lock()
@@ -200,13 +201,13 @@ def main():
         return k, m, time.perf_counter() - t0
 
     stop = False
+    tentativi = {}
     with ThreadPoolExecutor(args.parallelo) as ex:
         futuri = {}
-        coda = iter(da_fare)
-        for k in coda:                                  # riempie i posti liberi
+        coda = list(da_fare)                            # i mesi falliti tornano in fondo (guasti del CDS)
+        while coda and len(futuri) < args.parallelo:    # riempie i posti liberi
+            k = coda.pop(0)
             futuri[ex.submit(uno, k)] = k
-            if len(futuri) >= args.parallelo:
-                break
         while futuri:
             for f in as_completed(list(futuri)):
                 k = futuri.pop(f)
@@ -219,10 +220,13 @@ def main():
                 except Exception as e:  # noqa: BLE001
                     print(f"{k[0]}-{k[1]:02d}: ERRORE {e!r}", flush=True)
                     traceback.print_exc()
-                if not stop:
-                    nuovo = next(coda, None)
-                    if nuovo:
-                        futuri[ex.submit(uno, nuovo)] = nuovo
+                    tentativi[k] = tentativi.get(k, 0) + 1
+                    if tentativi[k] < TENTATIVI_MESE:
+                        print(f"{k[0]}-{k[1]:02d}: riprovo in fondo alla coda", flush=True)
+                        coda.append(k)
+                if not stop and coda:
+                    nuovo = coda.pop(0)
+                    futuri[ex.submit(uno, nuovo)] = nuovo
                 break
 
 
