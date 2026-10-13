@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,6 +56,8 @@ RIQUADRO = 5.0                     # gradi
 VAR_ORARIE = era5.VAR_CATALOGO + era5.VAR_SUPERFICIE_ML
 _LUCCHETTO_HF = threading.Lock()
 PRENOTAZIONI = ar.DATA / "prenotazioni"
+PARCHEGGIO = ar.STAGING / "catalogo"          # mesi calcolati in attesa di HF (file + <chiave>.json)
+LIMITE_PARCHEGGIO_GB = 5.0                    # oltre, non si scaricano mesi nuovi finché HF non torna
 
 
 def riquadri(bb=DOMAIN_BBOX, passo=RIQUADRO):
@@ -205,10 +208,60 @@ def elabora_mese(anno: int, mese: int, fonte: str = "cds", giorni: int | None = 
             "mlcape_max": round(float(np.nanmax(mlcape)), 0), "cape_era5_max": round(float(ds.cape.max()), 0)}
     if not carica:
         return mis | {"file": [str(f_nc), str(f_pq)]}
-    with _LUCCHETTO_HF:
-        up = ar.carica("catalogo", chiave, {f"catalogo/{f_nc.name}": f_nc, f"catalogo/{f_pq.name}": f_pq}, mis)
-    mis["secondi_upload"] = up["secondi_upload"]
+    (PARCHEGGIO / f"{chiave}.json").write_text(json.dumps(mis))      # se HF non risponde, il mese resta qui
+    try:
+        mis["secondi_upload"] = _carica_parcheggiato(chiave)
+    except Exception as e:  # noqa: BLE001
+        print(f"{anno}-{mese:02d}: HF non risponde ({e!r:.200}), mese parcheggiato sul Mac "
+              f"({_gb_parcheggio():.2f} GB in attesa)", flush=True)
+        mis["parcheggiato"] = True
     return mis
+
+
+def _file_parcheggiati(chiave):
+    a, m = chiave.split("_")[1:]
+    return {f"catalogo/{chiave}.nc": PARCHEGGIO / f"{chiave}.nc",
+            f"catalogo/candidati_{a}_{m}.parquet": PARCHEGGIO / f"candidati_{a}_{m}.parquet"}
+
+
+def _gb_parcheggio() -> float:
+    return sum(p.stat().st_size for p in PARCHEGGIO.glob("*") if p.is_file()) / 1e9 if PARCHEGGIO.exists() else 0.0
+
+
+def parcheggiati() -> list[str]:
+    return sorted(p.stem for p in PARCHEGGIO.glob("era5_*.json")) if PARCHEGGIO.exists() else []
+
+
+def _carica_parcheggiato(chiave) -> float:
+    """Carica un mese parcheggiato (file + misure salvate); toglie il parcheggio solo se riesce."""
+    mis = json.loads((PARCHEGGIO / f"{chiave}.json").read_text())
+    with _LUCCHETTO_HF:
+        up = ar.carica("catalogo", chiave, _file_parcheggiati(chiave), mis)
+    (PARCHEGGIO / f"{chiave}.json").unlink(missing_ok=True)
+    return up["secondi_upload"]
+
+
+def svuota_parcheggio() -> int:
+    """Riprova a caricare i mesi parcheggiati (di questo o di un altro processo, se non prenotati)."""
+    fatti = 0
+    for chiave in parcheggiati():
+        if not prenota(chiave, "parcheggio"):
+            continue
+        try:
+            if fatto_su_hf(chiave):                        # caricato nel frattempo: si pulisce
+                for p in _file_parcheggiati(chiave).values():
+                    p.unlink(missing_ok=True)
+                (PARCHEGGIO / f"{chiave}.json").unlink(missing_ok=True)
+                continue
+            sec = _carica_parcheggiato(chiave)
+            print(f"{chiave}: parcheggio caricato su HF in {sec:.0f} s", flush=True)
+            fatti += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"{chiave}: HF ancora non disponibile ({e!r:.120})", flush=True)
+            break
+        finally:
+            libera(chiave)
+    return fatti
 
 
 def _vivo(pid: int) -> bool:
@@ -254,8 +307,13 @@ def libera(chiave: str):
         pass
 
 
-def fatto(chiave: str) -> bool:
+def fatto_su_hf(chiave: str) -> bool:
     return ar.registro()["catalogo"].get(chiave, {}).get("versione", 1) >= VERSIONE
+
+
+def fatto(chiave: str) -> bool:
+    """Su HF oppure già calcolato e parcheggiato sul Mac in attesa di HF."""
+    return chiave in parcheggiati() or fatto_su_hf(chiave)
 
 
 def mesi(da: str, a: str, solo_mesi=MESI_DEFAULT):
@@ -287,6 +345,17 @@ def main():
     def uno(k):
         t0 = time.perf_counter()
         chiave = ar.chiave_catalogo(*k)
+        try:
+            svuota_parcheggio()
+        except Exception:  # noqa: BLE001
+            pass
+        while _gb_parcheggio() > LIMITE_PARCHEGGIO_GB:     # tetto del Mac: si aspetta HF
+            print(f"parcheggio pieno ({_gb_parcheggio():.2f} GB): attendo HF", flush=True)
+            time.sleep(600)
+            try:
+                svuota_parcheggio()
+            except Exception:  # noqa: BLE001
+                pass
         if not prenota(chiave, args.fonte):
             return k, "preso dall'altro processo", 0.0
         try:
@@ -328,6 +397,10 @@ def main():
                     nuovo = coda.pop(0)
                     futuri[ex.submit(uno, nuovo)] = nuovo
                 break
+    while parcheggiati():                                   # fine lista: si aspetta che HF torni
+        if svuota_parcheggio() == 0:
+            print(f"{len(parcheggiati())} mesi parcheggiati: riprovo HF fra 10 minuti", flush=True)
+            time.sleep(600)
 
 
 if __name__ == "__main__":
