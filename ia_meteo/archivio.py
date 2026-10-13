@@ -150,26 +150,36 @@ def controlla_budget(gb_nuovi: float = STIMA_FINESTRA_GB, hf: bool = True, a=Non
 
 
 # ---------------------------------------------------------------- caricamento generico
-def _commit_con_registro(a, rid, ops, modifica, messaggio, tentativi=6):
+def _commit_con_registro(a, rid, ops, modifica, messaggio, tentativi=8, gia_fatto=None):
     """Commit dei file + registro.json aggiornato con `modifica(reg)`, con controllo ottimistico:
     il commit dichiara la versione del repo su cui si basa (parent_commit); se nel frattempo un altro
-    processo ha scritto (es. catalogo.py e conferma.py insieme), si rilegge il registro e si riprova."""
+    processo ha scritto (es. catalogo.py e conferma.py insieme), si rilegge il registro e si riprova.
+    Sugli errori del server (5xx, timeout) si riprova con attesa crescente; prima di riprovare,
+    `gia_fatto()` dice se il commit è arrivato comunque (un 504 non garantisce che sia fallito)."""
     from huggingface_hub import CommitOperationAdd
     from huggingface_hub.errors import HfHubHTTPError
+    import requests
     for i in range(tentativi):
-        base = a.repo_info(rid, repo_type="dataset").sha
-        reg = registro(a, revision=base)
-        modifica(reg)
-        reg["aggiornato_utc"] = _ora()
-        op_reg = CommitOperationAdd(path_in_repo="registro.json",
-                                    path_or_fileobj=json.dumps(reg, indent=1, ensure_ascii=False).encode())
         try:
+            if i and gia_fatto is not None and gia_fatto():
+                return None
+            base = a.repo_info(rid, repo_type="dataset").sha
+            reg = registro(a, revision=base)
+            modifica(reg)
+            reg["aggiornato_utc"] = _ora()
+            op_reg = CommitOperationAdd(path_in_repo="registro.json",
+                                        path_or_fileobj=json.dumps(reg, indent=1, ensure_ascii=False).encode())
             return a.create_commit(rid, list(ops) + [op_reg], commit_message=messaggio, repo_type="dataset",
                                    parent_commit=base)
         except HfHubHTTPError as e:
-            if getattr(e.response, "status_code", None) not in (409, 412) or i == tentativi - 1:
+            stato = getattr(e.response, "status_code", None)
+            if i == tentativi - 1 or not (stato in (409, 412) or (stato or 0) >= 500):
                 raise
-            time.sleep(2 + 3 * i)
+            time.sleep(2 + 3 * i if stato in (409, 412) else 30 * (i + 1))
+        except (requests.ConnectionError, requests.Timeout):
+            if i == tentativi - 1:
+                raise
+            time.sleep(30 * (i + 1))
 
 
 
@@ -187,9 +197,14 @@ def carica(sezione: str, chiave: str, file: dict[str, Path], voce: dict | None =
     controlla_budget(gb, a=a)
     ops_file = [CommitOperationAdd(path_in_repo=p, path_or_fileobj=str(f)) for p, f in file.items()]
     t0 = time.perf_counter()
+    timbro = _ora()
+
+    def gia_fatto():
+        return registro(a).get(sezione, {}).get(chiave, {}).get("caricata_utc") == timbro
+
     _commit_con_registro(a, rid, ops_file, lambda reg: reg[sezione].__setitem__(
-        chiave, (voce or {}) | {"file": attesi, "GB": round(gb, 4), "caricata_utc": _ora()}),
-        f"{sezione} {chiave}")
+        chiave, (voce or {}) | {"file": attesi, "GB": round(gb, 4), "caricata_utc": timbro}),
+        f"{sezione} {chiave}", gia_fatto=gia_fatto)
     sec = round(time.perf_counter() - t0, 1)
     remoti = {e.path: e.size for e in a.get_paths_info(rid, list(attesi), repo_type="dataset")}
     if remoti != attesi:
