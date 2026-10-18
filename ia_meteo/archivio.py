@@ -316,3 +316,77 @@ def carica_catalogo(f: Path, anno: int, mese: int, voce: dict | None = None, a=N
 
 def scarica_catalogo(anno: int, mese: int, a=None) -> Path:
     return scarica("catalogo", chiave_catalogo(anno, mese), a=a)[0]
+
+
+# ---------------------------------------------------------------- parcheggio (HF non risponde)
+PARCHEGGIO = STAGING / "parcheggio"
+LIMITE_PARCHEGGIO_GB = 5.0
+
+
+def gb_parcheggio() -> float:
+    if not PARCHEGGIO.exists():
+        return 0.0
+    return sum(p.stat().st_size for p in PARCHEGGIO.rglob("*") if p.is_file()) / 1e9
+
+
+def parcheggiati(sezione: str | None = None) -> list[tuple[str, str]]:
+    if not PARCHEGGIO.exists():
+        return []
+    return sorted((m.parent.parent.name, m.parent.name) for m in PARCHEGGIO.glob("*/*/voce.json")
+                  if sezione is None or m.parent.parent.name == sezione)
+
+
+def carica_o_parcheggia(sezione: str, chiave: str, file: dict[str, Path], voce: dict | None = None) -> str:
+    """Come `carica`; se HF non risponde (anche dopo i tentativi di `_commit_con_registro`) i file
+    restano sul Mac in staging/parcheggio/<sezione>/<chiave>/ e si caricano dopo con
+    `svuota_parcheggio`. Ritorna "caricato" o "parcheggiato"."""
+    try:
+        carica(sezione, chiave, file, voce)
+        return "caricato"
+    except BudgetSuperato:
+        raise
+    except Exception as e:  # noqa: BLE001
+        d = PARCHEGGIO / sezione / chiave
+        d.mkdir(parents=True, exist_ok=True)
+        mappa = {}
+        for p, f in file.items():
+            dest = d / Path(p).name
+            if Path(f) != dest:
+                shutil.move(str(f), dest)
+            mappa[p] = dest.name
+        (d / "voce.json").write_text(json.dumps({"voce": voce or {}, "file": mappa, "errore": repr(e)[:300]}))
+        print(f"HF non risponde: {sezione}/{chiave} parcheggiato sul Mac ({gb_parcheggio():.2f} GB in attesa)",
+              flush=True)
+        return "parcheggiato"
+
+
+def svuota_parcheggio(sezione: str | None = None) -> int:
+    """Carica su HF i pezzi parcheggiati; si ferma al primo errore (HF ancora giù)."""
+    fatti = 0
+    for sez, chiave in parcheggiati(sezione):
+        d = PARCHEGGIO / sez / chiave
+        meta = json.loads((d / "voce.json").read_text())
+        try:
+            if not presente(sez, chiave):
+                carica(sez, chiave, {p: d / n for p, n in meta["file"].items()}, meta["voce"])
+                fatti += 1
+            shutil.rmtree(d, ignore_errors=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"parcheggio: HF ancora non disponibile ({e!r:.120})", flush=True)
+            break
+    return fatti
+
+
+def attendi_parcheggio(limite_gb: float = LIMITE_PARCHEGGIO_GB, pausa_s: int = 600) -> None:
+    """Prova a svuotare il parcheggio; se supera il tetto, aspetta HF prima di produrre altro."""
+    try:
+        svuota_parcheggio()
+    except Exception:  # noqa: BLE001
+        pass
+    while gb_parcheggio() > limite_gb:
+        print(f"parcheggio pieno ({gb_parcheggio():.2f} GB): attendo HF", flush=True)
+        time.sleep(pausa_s)
+        try:
+            svuota_parcheggio()
+        except Exception:  # noqa: BLE001
+            pass

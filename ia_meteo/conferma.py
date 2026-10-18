@@ -187,45 +187,153 @@ def conferma_periodo(pid, t0, t1, conv, neg, geo, ds_it, idx_it, tok) -> pd.Data
     return df
 
 
-def conferma(periodi: pd.DataFrame) -> pd.DataFrame:
-    """`periodi` con colonne id, inizio, fine, riquadri_convettivi, riquadri_negativi."""
-    reg = ar.registro()
+TENTATIVI = 3                 # un periodo che fallisce (rete, server) torna in fondo alla coda
+
+
+def _risorse():
     geo, tok = _Geometrie(), eu.token()
     ds_it = itdpc.apri()
     idx_it = indice_riquadro(ds_it["lat"].values, ds_it["lon"].values).ravel()
+    return geo, tok, ds_it, idx_it
+
+
+def _salva(sezione_chiave: str, df: pd.DataFrame, voce: dict) -> str:
+    f = ar.STAGING / "conferme" / f"{sezione_chiave}.parquet"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(f, index=False)
+    return ar.carica_o_parcheggia("conferme", sezione_chiave, {f"conferme/{f.name}": f}, voce)
+
+
+def _fatto(chiave: str, reg: dict) -> bool:
+    return ar.presente("conferme", chiave, reg) or ("conferme", chiave) in ar.parcheggiati("conferme")
+
+
+def _in_coda(lavori, esegui, nome):
+    """Esegue `esegui(x)` su ogni lavoro; gli errori rimettono il lavoro in fondo (TENTATIVI volte).
+    Prima di ogni lavoro prova a svuotare il parcheggio e rispetta il suo tetto di 5 GB."""
+    coda, tentativi = list(lavori), {}
+    while coda:
+        x = coda.pop(0)
+        ar.attendi_parcheggio()
+        try:
+            esegui(x)
+        except ar.BudgetSuperato:
+            raise
+        except Exception as e:  # noqa: BLE001
+            k = nome(x)
+            tentativi[k] = tentativi.get(k, 0) + 1
+            print(f"{k}: ERRORE {e!r:.300}", flush=True)
+            if tentativi[k] < TENTATIVI:
+                print(f"{k}: riprovo in fondo alla coda", flush=True)
+                coda.append(x)
+                time.sleep(60)
+    while ar.parcheggiati():                              # fine lista: si aspetta che HF torni
+        if ar.svuota_parcheggio() == 0:
+            print(f"{len(ar.parcheggiati())} pezzi parcheggiati: riprovo HF fra 10 minuti", flush=True)
+            time.sleep(600)
+
+
+def conferma(periodi: pd.DataFrame, raccogli: bool = True) -> pd.DataFrame | None:
+    """`periodi` con colonne id, inizio, fine, riquadri_convettivi, riquadri_negativi. Salta i periodi
+    già su HF (o parcheggiati); con `raccogli` rilegge tutto e lo restituisce."""
+    reg = ar.registro()
+    da_fare = [p for _, p in periodi.iterrows() if not _fatto(p.id, reg)]
+    print(f"{len(periodi)} periodi, {len(periodi) - len(da_fare)} già confermati, {len(da_fare)} da fare", flush=True)
+    if da_fare:
+        geo, tok, ds_it, idx_it = _risorse()
+
+        def uno(p):
+            t = time.perf_counter()
+            df = conferma_periodo(p.id, p.inizio.to_pydatetime(), p.fine.to_pydatetime(),
+                                  set(p.riquadri_convettivi), set(p.riquadri_negativi), geo, ds_it, idx_it, tok)
+            esito = _salva(p.id, df, {"inizio": str(p.inizio), "fine": str(p.fine),
+                                      "etichette": df.etichetta.value_counts().to_dict()})
+            print(f"{p.id}: {df.etichetta.value_counts().to_dict()} ({time.perf_counter() - t:.0f} s, {esito})",
+                  flush=True)
+
+        _in_coda(da_fare, uno, lambda p: p.id)
+    if not raccogli:
+        return None
     out = []
     for _, p in periodi.iterrows():
-        if ar.presente("conferme", p.id, reg):
-            f = ar.scarica("conferme", p.id)[0]
-            df = pd.read_parquet(f)
-            df["etichetta"] = df.apply(etichetta, axis=1)      # regole aggiornate senza riscaricare il radar
-            out.append(df)
-            continue
-        t = time.perf_counter()
-        df = conferma_periodo(p.id, p.inizio.to_pydatetime(), p.fine.to_pydatetime(), set(p.riquadri_convettivi),
-                              set(p.riquadri_negativi), geo, ds_it, idx_it, tok)
-        f = ar.STAGING / "conferme" / f"{p.id}.parquet"
-        f.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(f, index=False)
-        ar.carica("conferme", p.id, {f"conferme/{f.name}": f},
-                  {"inizio": str(p.inizio), "fine": str(p.fine),
-                   "etichette": df.etichetta.value_counts().to_dict()})
-        print(f"{p.id}: {df.etichetta.value_counts().to_dict()} ({time.perf_counter() - t:.0f} s)", flush=True)
+        df = pd.read_parquet(ar.scarica("conferme", p.id)[0])
+        df["etichetta"] = df.apply(etichetta, axis=1)          # regole aggiornate senza riscaricare il radar
         out.append(df)
     return pd.concat(out, ignore_index=True)
 
 
+# ---------------------------------------------------------------- scansione radar di tutti i periodi
+PASSO_SCANSIONE_H = 3
+
+
+def scansiona_mese(anno: int, mese: int, geo, ds_it, idx_it) -> pd.DataFrame:
+    """Radar a ogni istante a 3 h del mese (non solo nella rosa ERA5): una riga per istante e riquadro
+    con le stesse misure della conferma. Serve a trovare i temporali piccoli e locali che ERA5 non vede
+    (i "mancati dal modello" fuori dalla rosa). Senza LI: costerebbe ~25 GB al mese."""
+    import calendar
+    lavoro = ar.DATA / "lavoro" / f"scansione_{anno:04d}_{mese:02d}"
+    righe = []
+    t = datetime(anno, mese, 1)
+    fine = t + timedelta(days=calendar.monthrange(anno, mese)[1])
+    while t < fine:
+        s = stat_opera(t, t + timedelta(hours=1), geo, lavoro)
+        s |= stat_itdpc(t, t + timedelta(hours=1), ds_it, idx_it) if t.year <= 2025 else {}
+        df = pd.DataFrame({k: v for k, v in s.items() if isinstance(v, np.ndarray)})
+        df.insert(0, "riquadro", [nome_riquadro(i) for i in range(NX * NY)])
+        df.insert(0, "time", pd.Timestamp(t))
+        df["opera_ore"], df["itdpc_ore"] = s.get("opera_ore", 0), s.get("itdpc_ore", 0)
+        righe.append(df)
+        t += timedelta(hours=PASSO_SCANSIONE_H)
+    rm(lavoro)
+    out = pd.concat(righe, ignore_index=True)
+    num = out.select_dtypes("float64").columns
+    out[num] = out[num].astype("float32")
+    return out
+
+
+def scansione(mesi):
+    reg = ar.registro()
+    da_fare = [k for k in mesi if not _fatto(f"scansione_{k[0]:04d}_{k[1]:02d}", reg)]
+    print(f"scansione: {len(mesi)} mesi, {len(mesi) - len(da_fare)} già fatti, {len(da_fare)} da fare", flush=True)
+    if not da_fare:
+        return
+    geo, _, ds_it, idx_it = _risorse()
+
+    def uno(k):
+        t = time.perf_counter()
+        chiave = f"scansione_{k[0]:04d}_{k[1]:02d}"
+        df = scansiona_mese(*k, geo, ds_it, idx_it)
+        conv = int(((df.opera_frac35 >= FRAZ_ECO_CONV) | (df.get("itdpc_frac10", 0) >= FRAZ_ITDPC_CONV)).sum())
+        esito = _salva(chiave, df, {"anno": k[0], "mese": k[1], "istanti": int(df.time.nunique()),
+                                    "riquadri_convettivi_radar": conv})
+        print(f"{chiave}: {df.time.nunique()} istanti, {conv} riquadri-istante convettivi "
+              f"({time.perf_counter() - t:.0f} s, {esito})", flush=True)
+
+    _in_coda(da_fare, uno, lambda k: f"scansione_{k[0]:04d}_{k[1]:02d}")
+
+
 def main():
     import selezione as se
+    from catalogo import mesi as elenco_mesi
     ap = argparse.ArgumentParser()
-    ap.add_argument("--da-selezione", action="store_true")
+    ap.add_argument("--da-selezione", action="store_true", help="conferma la rosa larga di selezione.py")
     ap.add_argument("--n", type=int, default=se.N_ROSA)
+    ap.add_argument("--scansione", action="store_true", help="radar ogni 3 h su tutti i mesi del catalogo")
+    ap.add_argument("--da", default="2015-04")
+    ap.add_argument("--a", default="2025-11")
+    ap.add_argument("--al-contrario", action="store_true")
     a = ap.parse_args()
-    cand = se.scegli(se.periodi(se.classifica(se.carica_candidati())), a.n, se.MAX_PER_MESE_ROSA)
-    tutto = conferma(cand)
-    f = ar.DATA / "conferme.parquet"
-    tutto.to_parquet(f, index=False)
-    print(tutto.etichetta.value_counts().to_string())
+    if a.scansione:
+        m = list(elenco_mesi(a.da, a.a))
+        scansione(m[::-1] if a.al_contrario else m)
+        return
+    rosa = ar.DATA / "rosa_larga.parquet"
+    if rosa.exists() and a.n == se.N_ROSA:
+        cand = pd.read_parquet(rosa)
+    else:
+        cand = se.scegli(se.periodi(se.classifica(se.carica_candidati())), a.n, se.MAX_PER_MESE_ROSA)
+    conferma(cand, raccogli=False)
+    print("conferma finita", flush=True)
 
 
 if __name__ == "__main__":
