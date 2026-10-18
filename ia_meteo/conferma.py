@@ -81,35 +81,60 @@ def _conta(idx, maschera):
     return np.bincount(v, minlength=NX * NY)
 
 
-def stat_opera(t0, t1, geo, lavoro):
-    """Per riquadro: copertura media, frazione max (sulle ore) con eco ≥ 35/45 dBZ, eco max."""
+FLUSSI_OPERA = 4               # download in parallelo (prova 18/10/2026: 12 ore in 5 s invece di 34)
+FLUSSI_LI = 6                  # oltre 6–8 la linea è satura (72 prodotti in 44 s invece di 160)
+
+
+def _riprova(fun, *a, tentativi=3):
+    for k in range(tentativi):
+        try:
+            return fun(*a)
+        except FileNotFoundError:
+            raise
+        except Exception:  # noqa: BLE001
+            if k == tentativi - 1:
+                raise
+            time.sleep(10 * (k + 1))
+
+
+def _conta_opera(t, geo, lavoro):
+    """Conteggi per riquadro di un composito orario; None se manca."""
     n = NX * NY
-    cop, f35, f45, f55, mx, ore = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n), np.full(n, -np.inf), 0
+    try:
+        f, _ = _riprova(opera.scarica_dbzh, t, lavoro)
+    except FileNotFoundError:
+        return None
+    o = opera.leggi_odim(f)
+    rm(f)
+    idx = geo.opera(o)
+    v = opera.dbz(o).ravel()
+    mx = np.full(n, -np.inf)
+    np.maximum.at(mx, np.where(idx >= 0, idx, 0), np.where(np.isfinite(v) & (idx >= 0), v, -np.inf))
+    return {"tot": np.bincount(idx[idx >= 0], minlength=n), "coperti": _conta(idx, np.isfinite(v)),
+            "c35": _conta(idx, v >= DBZ_CONV), "c45": _conta(idx, v >= DBZ_FORTE),
+            "c55": _conta(idx, v >= DBZ_GRANDINE), "mx": mx}
+
+
+def stat_opera(t0, t1, geo, lavoro, flussi=FLUSSI_OPERA):
+    """Per riquadro: copertura media, frazione max (sulle ore) con eco ≥ 35/45/55 dBZ, eco max."""
+    from concurrent.futures import ThreadPoolExecutor
+    n = NX * NY
+    ore_t = []
     t = t0
     while t < t1:
-        try:
-            f, _ = opera.scarica_dbzh(t, lavoro)
-            o = opera.leggi_odim(f)
-            rm(f)
-        except FileNotFoundError:
-            t += timedelta(hours=PASSO_RADAR_H)
-            continue
-        idx = geo.opera(o)
-        v = opera.dbz(o).ravel()
-        tot = np.bincount(idx[idx >= 0], minlength=n)
-        coperti = _conta(idx, np.isfinite(v))
-        c35 = _conta(idx, v >= DBZ_CONV)
-        c45 = _conta(idx, v >= DBZ_FORTE)
-        c55 = _conta(idx, v >= DBZ_GRANDINE)
-        with np.errstate(all="ignore"):
-            cop += np.where(tot > 0, coperti / tot, 0)
-            f35 = np.maximum(f35, np.where(coperti > 0, c35 / coperti, 0))
-            f45 = np.maximum(f45, np.where(coperti > 0, c45 / coperti, 0))
-            f55 = np.maximum(f55, np.where(coperti > 0, c55 / coperti, 0))
-        vv = np.where(np.isfinite(v) & (idx >= 0), v, -np.inf)
-        np.maximum.at(mx, np.where(idx >= 0, idx, 0), vv)
-        ore += 1
+        ore_t.append(t)
         t += timedelta(hours=PASSO_RADAR_H)
+    with ThreadPoolExecutor(flussi) as ex:
+        conteggi = [c for c in ex.map(lambda x: _conta_opera(x, geo, lavoro), ore_t) if c is not None]
+    cop, f35, f45, f55, mx = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n), np.full(n, -np.inf)
+    for c in conteggi:
+        with np.errstate(all="ignore"):
+            cop += np.where(c["tot"] > 0, c["coperti"] / c["tot"], 0)
+            f35 = np.maximum(f35, np.where(c["coperti"] > 0, c["c35"] / c["coperti"], 0))
+            f45 = np.maximum(f45, np.where(c["coperti"] > 0, c["c45"] / c["coperti"], 0))
+            f55 = np.maximum(f55, np.where(c["coperti"] > 0, c["c55"] / c["coperti"], 0))
+        mx = np.maximum(mx, c["mx"])
+    ore = len(conteggi)
     return {"opera_ore": ore, "opera_copertura": cop / max(ore, 1), "opera_frac35": f35, "opera_frac45": f45,
             "opera_frac55": f55, "opera_max_dbz": np.where(np.isfinite(mx), mx, np.nan)}
 
@@ -141,16 +166,21 @@ def _passo_s(da):
     return float((t[1] - t[0]) / np.timedelta64(1, "s")) if len(t) > 1 else 3600.0
 
 
-def stat_li(t0, t1, lavoro, tok):
+def stat_li(t0, t1, lavoro, tok, flussi=FLUSSI_LI):
+    from concurrent.futures import ThreadPoolExecutor
     n = NX * NY
-    somma = np.zeros(n)
-    for p in eu.cerca(eu.LI_AF, t0, t1, tok):
-        f = eu.scarica(p, lavoro, eu.li_body(p))
+
+    def uno(p):
+        f = _riprova(eu.scarica, p, lavoro, eu.li_body(p))
         la, lo, w, _ = eu.li_flash(f)
         rm(f)
         idx = indice_riquadro(la, lo)
-        somma += np.bincount(idx[idx >= 0], weights=w[idx >= 0], minlength=n)
-    return {"li_flash": somma}
+        return np.bincount(idx[idx >= 0], weights=w[idx >= 0], minlength=n)
+
+    prodotti = list(eu.cerca(eu.LI_AF, t0, t1, tok))
+    with ThreadPoolExecutor(flussi) as ex:
+        parti = list(ex.map(uno, prodotti))
+    return {"li_flash": np.sum(parti, axis=0) if parti else np.zeros(n)}
 
 
 def etichetta(r) -> str:
@@ -275,15 +305,21 @@ def scansiona_mese(anno: int, mese: int, geo, ds_it, idx_it) -> pd.DataFrame:
     righe = []
     t = datetime(anno, mese, 1)
     fine = t + timedelta(days=calendar.monthrange(anno, mese)[1])
+    istanti = []
     while t < fine:
-        s = stat_opera(t, t + timedelta(hours=1), geo, lavoro)
+        istanti.append(t)
+        t += timedelta(hours=PASSO_SCANSIONE_H)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(FLUSSI_OPERA) as ex:          # un istante = un composito: parallelo sugli istanti
+        radar = list(ex.map(lambda x: stat_opera(x, x + timedelta(hours=1), geo, lavoro, flussi=1), istanti))
+    for t, s in zip(istanti, radar):
+        s = dict(s)
         s |= stat_itdpc(t, t + timedelta(hours=1), ds_it, idx_it) if t.year <= 2025 else {}
         df = pd.DataFrame({k: v for k, v in s.items() if isinstance(v, np.ndarray)})
         df.insert(0, "riquadro", [nome_riquadro(i) for i in range(NX * NY)])
         df.insert(0, "time", pd.Timestamp(t))
         df["opera_ore"], df["itdpc_ore"] = s.get("opera_ore", 0), s.get("itdpc_ore", 0)
         righe.append(df)
-        t += timedelta(hours=PASSO_SCANSIONE_H)
     rm(lavoro)
     out = pd.concat(righe, ignore_index=True)
     num = out.select_dtypes("float64").columns
