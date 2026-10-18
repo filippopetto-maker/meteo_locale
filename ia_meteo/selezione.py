@@ -10,15 +10,23 @@ catalogo completo prima della selezione definitiva):
 - il resto non conta.
 Punteggio di un periodo: somma sui riquadri convettivi dell'intensità (massimo nel periodo di
 frazione con ≥ 1 mm convettivi in 3 h × ML-CAPE p90 / 1000, con tetto 3), pesata per le zone poco
-rappresentate, più un piccolo peso per i negativi. Senza l'intensità vincevano i giorni con tanti
+rappresentate, più BETA_LOCALE × il picco locale (massimo cp3h_mm_max dei riquadri convettivi),
+entrambi divisi per la loro mediana, più un piccolo peso per i negativi. Il picco locale serve ai
+temporali violenti ma piccoli: senza, il 24/07/2023 (grandine record Lombardia-Friuli) era 1088°. Senza l'intensità vincevano i giorni con tanti
 temporali deboli sparsi: il 10/07/2019 (grandinata di Pescara) finiva 59° su 245 nel mese pilota. Si scelgono i periodi migliori senza sovrapposizioni, con un
 massimo per mese per non concentrare tutto in pochi episodi, e si rispetta la divisione per anni del
 planning (train 2015–2021, validazione 2022, test 2023–2024, FCI 2025).
 La conferma con il radar OPERA (e i fulmini LI dal 2024) si fa dopo, solo sulle finestre scelte.
 
+Rosa larga per la conferma radar (step 1, ottobre 2026): N_ROSA periodi con al più MAX_PER_MESE_ROSA
+per mese. Scelta con prove sul catalogo completo (88 mesi) contro 15 eventi documentati e i picchi
+locali di ogni riquadro: 1200 / 25 / BETA 1 prende 15/15 eventi e l'82% dei picchi; 6 per mese ne
+prendeva 6/15; oltre 1200 il guadagno cala (1500: 84%, 2000: 85%) e la conferma costa di più.
+
 Uso:
-    python selezione.py --n 300            # usa tutti i mesi del catalogo presenti su HF
-Scrive data/events_candidati.parquet (bozza) e stampa il riepilogo.
+    python selezione.py --rosa             # rosa larga → data/rosa_larga.parquet
+    python selezione.py --n 300            # bozza finale → data/events_candidati.parquet
+Usa tutti i mesi del catalogo presenti su HF.
 """
 from __future__ import annotations
 
@@ -34,8 +42,11 @@ FRAZ_CP = 0.05                # frazione del riquadro con ≥ 1 mm convettivi in
 SOGLIA_MLCAPE_NEG = 1000.0
 FRAZ_CP_NEG = 0.005
 DURATA_H = 12
-MAX_PER_MESE = 6
+MAX_PER_MESE = 6               # selezione finale (provvisorio: si rivede con la conferma radar)
 PESO_NEGATIVI = 0.02           # solo spareggio: i negativi stanno comunque dentro le finestre
+BETA_LOCALE = 1.0              # peso del picco locale di pioggia convettiva
+N_ROSA = 1200
+MAX_PER_MESE_ROSA = 25
 INSIEMI = {"train": range(2015, 2022), "validazione": [2022], "test": [2023, 2024], "fci": [2025]}
 
 
@@ -73,6 +84,7 @@ def periodi(df: pd.DataFrame) -> pd.DataFrame:
     att = df[df.convettivo].groupby("time")["riquadro"].apply(set).reindex(per_t.index)
     inten = df[df.convettivo].groupby("time").apply(lambda g: dict(zip(g.riquadro, g.intensita))).reindex(per_t.index)
     negs = df[df.negativo].groupby("time")["riquadro"].apply(set).reindex(per_t.index)
+    picco = df[df.convettivo].groupby("time").cp3h_mm_max.max().reindex(per_t.index)
     righe = []
     tempi = per_t.index
     for i in range(len(tempi) - passi + 1):
@@ -88,27 +100,35 @@ def periodi(df: pd.DataFrame) -> pd.DataFrame:
         neg = set().union(*[s for s in negs.loc[blocco] if isinstance(s, set)]) - conv
         righe.append({"inizio": blocco[0], "fine": blocco[0] + pd.Timedelta(hours=DURATA_H),
                       "riquadri_convettivi": sorted(conv), "riquadri_negativi": sorted(neg),
-                      "intensita": intens, "n_conv": len(conv), "n_neg": len(neg)})
+                      "intensita": intens, "n_conv": len(conv), "n_neg": len(neg),
+                      "picco_locale": float(np.nan_to_num(picco.loc[blocco].max()))})
     return pd.DataFrame(righe)
 
 
-def scegli(per: pd.DataFrame, n: int) -> pd.DataFrame:
-    """Periodi migliori senza sovrapposizioni, al più MAX_PER_MESE per mese, pesando le zone rare."""
+def punteggio(per: pd.DataFrame, beta: float = BETA_LOCALE) -> np.ndarray:
     freq = pd.Series([r for rr in per.riquadri_convettivi for r in rr]).value_counts()
     peso_zona = np.sqrt(freq.median() / freq).to_dict()          # ≈ 1 per una zona tipica
-    per = per.copy()
-    per["punteggio"] = [sum(peso_zona.get(r, 0) * v for r, v in it.items()) + PESO_NEGATIVI * nn
-                        for it, nn in zip(per.intensita, per.n_neg)]
+    esteso = np.array([sum(peso_zona.get(r, 0) * v for r, v in it.items()) for it in per.intensita])
+    esteso = esteso / np.median(esteso[esteso > 0])
+    locale = per.picco_locale.to_numpy() / np.median(per.picco_locale[per.picco_locale > 0])
+    return esteso + beta * locale + PESO_NEGATIVI * per.n_neg.to_numpy()
+
+
+def scegli(per: pd.DataFrame, n: int, max_mese: int = MAX_PER_MESE, beta: float = BETA_LOCALE) -> pd.DataFrame:
+    """Periodi migliori senza sovrapposizioni, al più `max_mese` per mese, pesando le zone rare."""
+    per = per.assign(punteggio=punteggio(per, beta))
     per = per[per.n_conv > 0].sort_values("punteggio", ascending=False)
-    scelti, occupati, per_mese = [], [], {}
+    passi = DURATA_H // 3
+    scelti, occupati, per_mese = [], set(), {}
     for _, r in per.iterrows():
         mese = r.inizio.strftime("%Y-%m")
-        if per_mese.get(mese, 0) >= MAX_PER_MESE:
+        if per_mese.get(mese, 0) >= max_mese:
             continue
-        if any(not (r.fine <= a or r.inizio >= b) for a, b in occupati):
+        slot = [r.inizio + pd.Timedelta(hours=3 * k) for k in range(passi)]   # istanti a 3 h coperti
+        if any(x in occupati for x in slot):
             continue
         scelti.append(r)
-        occupati.append((r.inizio, r.fine))
+        occupati.update(slot)
         per_mese[mese] = per_mese.get(mese, 0) + 1
         if len(scelti) >= n:
             break
@@ -123,12 +143,13 @@ def scegli(per: pd.DataFrame, n: int) -> pd.DataFrame:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=300)
+    ap.add_argument("--rosa", action="store_true", help=f"rosa larga per la conferma ({N_ROSA}, {MAX_PER_MESE_ROSA}/mese)")
     a = ap.parse_args()
     df = classifica(carica_candidati())
     per = periodi(df)
-    sel = scegli(per, a.n)
+    sel = scegli(per, N_ROSA, MAX_PER_MESE_ROSA) if a.rosa else scegli(per, a.n)
     ar.DATA.mkdir(parents=True, exist_ok=True)
-    f = ar.DATA / "events_candidati.parquet"
+    f = ar.DATA / ("rosa_larga.parquet" if a.rosa else "events_candidati.parquet")
     sel.to_parquet(f, index=False)
     print(f"{df.time.dt.strftime('%Y-%m').nunique()} mesi, {len(per)} periodi da 12 h valutati, {len(sel)} scelti → {f}")
     print(sel[["id", "insieme", "satellite", "n_conv", "n_neg", "punteggio"]].to_string(index=False))

@@ -18,7 +18,7 @@ Le statistiche vanno su HF nella sezione `conferme` (una voce per periodo), cos√
 selezione senza riscaricare il radar. Riprende dove si era fermato.
 
 Uso:
-    python conferma.py --da-selezione --n 600          # rosa larga da selezione.py, poi conferma
+    python conferma.py --da-selezione                  # rosa larga di selezione.py (N_ROSA), poi conferma
 """
 from __future__ import annotations
 
@@ -213,9 +213,9 @@ def main():
     import selezione as se
     ap = argparse.ArgumentParser()
     ap.add_argument("--da-selezione", action="store_true")
-    ap.add_argument("--n", type=int, default=600)
+    ap.add_argument("--n", type=int, default=se.N_ROSA)
     a = ap.parse_args()
-    cand = se.scegli(se.periodi(se.classifica(se.carica_candidati())), a.n)
+    cand = se.scegli(se.periodi(se.classifica(se.carica_candidati())), a.n, se.MAX_PER_MESE_ROSA)
     tutto = conferma(cand)
     f = ar.DATA / "conferme.parquet"
     tutto.to_parquet(f, index=False)
