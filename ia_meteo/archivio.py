@@ -318,9 +318,16 @@ def scarica_catalogo(anno: int, mese: int, a=None) -> Path:
     return scarica("catalogo", chiave_catalogo(anno, mese), a=a)[0]
 
 
-# ---------------------------------------------------------------- parcheggio (HF non risponde)
+# ---------------------------------------------------------------- parcheggio e caricamento a lotti
+# HF permette 128 commit all'ora per repository (429 "Too Many Requests"): la conferma produce un
+# periodo ogni ~15 s, quindi i pezzi piccoli si mettono nel parcheggio (staging/parcheggio/<sezione>/
+# <chiave>/) e si caricano a lotti, un commit ogni INTERVALLO_LOTTO_S. Il parcheggio fa anche da
+# riserva se HF non risponde: al massimo LIMITE_PARCHEGGIO_GB sul Mac, poi si aspetta.
 PARCHEGGIO = STAGING / "parcheggio"
 LIMITE_PARCHEGGIO_GB = 5.0
+INTERVALLO_LOTTO_S = 600
+_ultimo_lotto = [0.0]
+_pausa_hf = [0.0]
 
 
 def gb_parcheggio() -> float:
@@ -336,57 +343,104 @@ def parcheggiati(sezione: str | None = None) -> list[tuple[str, str]]:
                   if sezione is None or m.parent.parent.name == sezione)
 
 
+def parcheggia(sezione: str, chiave: str, file: dict[str, Path], voce: dict | None = None, errore: str = "") -> None:
+    if sezione not in SEZIONI:
+        raise ValueError(f"sezione {sezione!r} non prevista: {SEZIONI}")
+    d = PARCHEGGIO / sezione / chiave
+    d.mkdir(parents=True, exist_ok=True)
+    mappa = {}
+    for p, f in file.items():
+        dest = d / Path(p).name
+        if Path(f) != dest:
+            shutil.move(str(f), dest)
+        mappa[p] = dest.name
+    (d / "voce.json").write_text(json.dumps({"voce": voce or {}, "file": mappa, "errore": errore[:300]}))
+
+
 def carica_o_parcheggia(sezione: str, chiave: str, file: dict[str, Path], voce: dict | None = None) -> str:
-    """Come `carica`; se HF non risponde (anche dopo i tentativi di `_commit_con_registro`) i file
-    restano sul Mac in staging/parcheggio/<sezione>/<chiave>/ e si caricano dopo con
-    `svuota_parcheggio`. Ritorna "caricato" o "parcheggiato"."""
+    """Mette il pezzo nel parcheggio e prova a caricare il lotto (al più un commit ogni
+    INTERVALLO_LOTTO_S). Ritorna "caricato" se il pezzo è già su HF, altrimenti "in coda"."""
+    parcheggia(sezione, chiave, file, voce)
+    svuota_parcheggio()
+    return "in coda" if (sezione, chiave) in parcheggiati(sezione) else "caricato"
+
+
+def svuota_parcheggio(forza: bool = False, a=None) -> int:
+    """Carica tutto il parcheggio con UN commit (file + registro). Senza `forza` lo fa al più ogni
+    INTERVALLO_LOTTO_S, e dopo un errore di HF aspetta (15 min se 429, 5 min altrimenti)."""
+    ora = time.time()
+    if not forza and (ora - _ultimo_lotto[0] < INTERVALLO_LOTTO_S or ora < _pausa_hf[0]):
+        return 0
+    if not parcheggiati():
+        return 0
+    import fcntl
+    PARCHEGGIO.mkdir(parents=True, exist_ok=True)
+    lucchetto = open(PARCHEGGIO / ".lotto.lock", "w")
     try:
-        carica(sezione, chiave, file, voce)
-        return "caricato"
+        fcntl.flock(lucchetto, fcntl.LOCK_EX | fcntl.LOCK_NB)   # un solo processo alla volta carica il lotto
+    except BlockingIOError:
+        lucchetto.close()
+        return 0
+    try:
+        return _carica_lotto(ora, a)
+    finally:
+        fcntl.flock(lucchetto, fcntl.LOCK_UN)
+        lucchetto.close()
+
+
+def _carica_lotto(ora: float, a=None) -> int:
+    from huggingface_hub import CommitOperationAdd
+    voci = parcheggiati()
+    if not voci:
+        return 0
+    _ultimo_lotto[0] = ora
+    try:
+        a = a or api()
+        rid = assicura_repo(a)
+        ops, attesi, nuove = [], {}, {}
+        for sez, chiave in voci:
+            d = PARCHEGGIO / sez / chiave
+            meta = json.loads((d / "voce.json").read_text())
+            file = {p: d / n for p, n in meta["file"].items()}
+            sz = {p: f.stat().st_size for p, f in file.items()}
+            ops += [CommitOperationAdd(path_in_repo=p, path_or_fileobj=str(f)) for p, f in file.items()]
+            attesi |= sz
+            nuove[(sez, chiave)] = meta["voce"] | {"file": sz, "GB": round(sum(sz.values()) / 1e9, 4)}
+        if nuove:
+            controlla_budget(sum(attesi.values()) / 1e9, a=a)
+            timbro = _ora()
+
+            def modifica(reg):
+                for (sez, chiave), v in nuove.items():
+                    reg[sez][chiave] = v | {"caricata_utc": timbro}
+
+            def gia_fatto():
+                r = registro(a)
+                return all(r.get(s, {}).get(c, {}).get("caricata_utc") == timbro for s, c in nuove)
+
+            _commit_con_registro(a, rid, ops, modifica, f"lotto di {len(nuove)} pezzi", gia_fatto=gia_fatto)
+            remoti = {e.path: e.size for e in a.get_paths_info(rid, list(attesi), repo_type="dataset")}
+            if remoti != attesi:
+                raise RuntimeError(f"verifica del lotto fallita: {len(attesi)} attesi, {len(remoti)} trovati uguali")
+        for sez, chiave in voci:
+            shutil.rmtree(PARCHEGGIO / sez / chiave, ignore_errors=True)
+        if nuove:
+            print(f"lotto caricato su HF: {len(nuove)} pezzi in un commit", flush=True)
+        return len(nuove)
     except BudgetSuperato:
         raise
     except Exception as e:  # noqa: BLE001
-        d = PARCHEGGIO / sezione / chiave
-        d.mkdir(parents=True, exist_ok=True)
-        mappa = {}
-        for p, f in file.items():
-            dest = d / Path(p).name
-            if Path(f) != dest:
-                shutil.move(str(f), dest)
-            mappa[p] = dest.name
-        (d / "voce.json").write_text(json.dumps({"voce": voce or {}, "file": mappa, "errore": repr(e)[:300]}))
-        print(f"HF non risponde: {sezione}/{chiave} parcheggiato sul Mac ({gb_parcheggio():.2f} GB in attesa)",
-              flush=True)
-        return "parcheggiato"
-
-
-def svuota_parcheggio(sezione: str | None = None) -> int:
-    """Carica su HF i pezzi parcheggiati; si ferma al primo errore (HF ancora giù)."""
-    fatti = 0
-    for sez, chiave in parcheggiati(sezione):
-        d = PARCHEGGIO / sez / chiave
-        meta = json.loads((d / "voce.json").read_text())
-        try:
-            if not presente(sez, chiave):
-                carica(sez, chiave, {p: d / n for p, n in meta["file"].items()}, meta["voce"])
-                fatti += 1
-            shutil.rmtree(d, ignore_errors=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"parcheggio: HF ancora non disponibile ({e!r:.120})", flush=True)
-            break
-    return fatti
+        attesa = 900 if "429" in repr(e) else 300
+        _pausa_hf[0] = time.time() + attesa
+        print(f"parcheggio: HF non disponibile ({e!r:.140}), riprovo fra {attesa // 60} min "
+              f"({len(voci)} pezzi, {gb_parcheggio():.2f} GB in attesa)", flush=True)
+        return 0
 
 
 def attendi_parcheggio(limite_gb: float = LIMITE_PARCHEGGIO_GB, pausa_s: int = 600) -> None:
-    """Prova a svuotare il parcheggio; se supera il tetto, aspetta HF prima di produrre altro."""
-    try:
-        svuota_parcheggio()
-    except Exception:  # noqa: BLE001
-        pass
+    """Prova a caricare il lotto; se il parcheggio supera il tetto, aspetta HF prima di produrre altro."""
+    svuota_parcheggio()
     while gb_parcheggio() > limite_gb:
         print(f"parcheggio pieno ({gb_parcheggio():.2f} GB): attendo HF", flush=True)
         time.sleep(pausa_s)
-        try:
-            svuota_parcheggio()
-        except Exception:  # noqa: BLE001
-            pass
+        svuota_parcheggio(forza=True)

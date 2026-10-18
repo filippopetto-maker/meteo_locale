@@ -257,9 +257,9 @@ def _in_coda(lavori, esegui, nome):
                 print(f"{k}: riprovo in fondo alla coda", flush=True)
                 coda.append(x)
                 time.sleep(60)
-    while ar.parcheggiati():                              # fine lista: si aspetta che HF torni
-        if ar.svuota_parcheggio() == 0:
-            print(f"{len(ar.parcheggiati())} pezzi parcheggiati: riprovo HF fra 10 minuti", flush=True)
+    while ar.parcheggiati():                              # fine lista: ultimo lotto (o si aspetta HF)
+        if ar.svuota_parcheggio(forza=True) == 0 and ar.parcheggiati():
+            print(f"{len(ar.parcheggiati())} pezzi in attesa: riprovo HF fra 10 minuti", flush=True)
             time.sleep(600)
 
 
