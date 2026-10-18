@@ -83,12 +83,16 @@ def leggi_odim(path: Path) -> dict:
             "prodotto": what.get("product", ""), "proj": p, "x": x, "y": y}
 
 
+DBZ_MAX_VALIDO = 80.0         # oltre è un pixel corrotto (nei compositi compaiono 128, 327,5, 16352, inf)
+
+
 def dbz(o: dict) -> np.ndarray:
-    """dBZ con NaN fuori copertura e −32 dove coperto senza eco (undetect)."""
+    """dBZ con NaN fuori copertura e sui pixel corrotti, −32 dove coperto senza eco (undetect)."""
     w, raw = o["what"], o["raw"]
     v = raw * w["gain"] + w["offset"]
     v = np.where(raw == w["undetect"], -32.0, v)
-    return np.where(raw == w["nodata"], np.nan, v).astype("float32")
+    v = np.where((raw == w["nodata"]) | ~np.isfinite(v) | (v > DBZ_MAX_VALIDO), np.nan, v)
+    return v.astype("float32")
 
 
 def lonlat(o: dict, passo: int = 1):

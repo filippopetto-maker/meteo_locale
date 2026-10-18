@@ -3,9 +3,10 @@ con quello che è successo davvero.
 
 Per ogni periodo da 12 h (da selezione.py) e ogni riquadro 5°×5°:
 - radar OPERA, un composito all'ora (fonti.opera): copertura, frazione dell'area coperta con eco
-  ≥ 35 e ≥ 45 dBZ, eco massima. Statistiche sui pixel nativi del composito (2 km / 1 km);
+  ≥ 35, ≥ 45 e ≥ 55 dBZ (grandine probabile), eco massima. Statistiche sui pixel nativi del
+  composito (2 km / 1 km); i pixel corrotti (> 80 dBZ, inf) sono esclusi in fonti.opera.dbz;
 - radar italiano IT-DPC-SRI sui riquadri che toccano l'Italia (OPERA non copre l'Italia): copertura,
-  frazione con intensità ≥ 10 mm/h, massimo;
+  frazione con intensità ≥ 10 e ≥ 50 mm/h, massimo (il massimo è rumoroso: clutter fino a 300 mm/h);
 - fulmini MTG LI dal 04/07/2024: somma di flash×pixel nel periodo.
 Etichetta del riquadro (soglie in testa al file):
 - `confermato`        ERA5 convettivo e convezione osservata;
@@ -34,9 +35,10 @@ from common import DOMAIN_BBOX, rm
 from fonti import eumetsat as eu, itdpc, opera
 
 PASSO_RADAR_H = 1
-DBZ_CONV, DBZ_FORTE = 35.0, 45.0
+DBZ_CONV, DBZ_FORTE, DBZ_GRANDINE = 35.0, 45.0, 55.0
 FRAZ_ECO_CONV = 0.002          # ≥ 0,2% dell'area coperta con eco ≥ 35 dBZ (≈ 50 km² su un riquadro)
 MMH_CONV = 10.0                # IT-DPC-SRI: intensità da cella convettiva
+MMH_FORTE = 50.0
 FRAZ_ITDPC_CONV = 0.002
 FLASH_CONV = 50.0              # flash×pixel nel periodo (LI)
 COPERTURA_MIN = 0.5            # per dichiarare un riquadro pulito (OPERA + IT-DPC-SRI)
@@ -82,7 +84,7 @@ def _conta(idx, maschera):
 def stat_opera(t0, t1, geo, lavoro):
     """Per riquadro: copertura media, frazione max (sulle ore) con eco ≥ 35/45 dBZ, eco max."""
     n = NX * NY
-    cop, f35, f45, mx, ore = np.zeros(n), np.zeros(n), np.zeros(n), np.full(n, -np.inf), 0
+    cop, f35, f45, f55, mx, ore = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n), np.full(n, -np.inf), 0
     t = t0
     while t < t1:
         try:
@@ -98,16 +100,18 @@ def stat_opera(t0, t1, geo, lavoro):
         coperti = _conta(idx, np.isfinite(v))
         c35 = _conta(idx, v >= DBZ_CONV)
         c45 = _conta(idx, v >= DBZ_FORTE)
+        c55 = _conta(idx, v >= DBZ_GRANDINE)
         with np.errstate(all="ignore"):
             cop += np.where(tot > 0, coperti / tot, 0)
             f35 = np.maximum(f35, np.where(coperti > 0, c35 / coperti, 0))
             f45 = np.maximum(f45, np.where(coperti > 0, c45 / coperti, 0))
+            f55 = np.maximum(f55, np.where(coperti > 0, c55 / coperti, 0))
         vv = np.where(np.isfinite(v) & (idx >= 0), v, -np.inf)
         np.maximum.at(mx, np.where(idx >= 0, idx, 0), vv)
         ore += 1
         t += timedelta(hours=PASSO_RADAR_H)
     return {"opera_ore": ore, "opera_copertura": cop / max(ore, 1), "opera_frac35": f35, "opera_frac45": f45,
-            "opera_max_dbz": np.where(np.isfinite(mx), mx, np.nan)}
+            "opera_frac55": f55, "opera_max_dbz": np.where(np.isfinite(mx), mx, np.nan)}
 
 
 def stat_itdpc(t0, t1, ds_it, idx_it):
@@ -116,17 +120,19 @@ def stat_itdpc(t0, t1, ds_it, idx_it):
     sub = ds_it[var].sel(time=slice(np.datetime64(t0), np.datetime64(t1 - timedelta(seconds=1))))
     sub = sub.isel(time=slice(None, None, max(1, int(round(3600 / _passo_s(sub))))))       # uno all'ora
     tot = np.bincount(idx_it[idx_it >= 0], minlength=n)
-    cop, fr, mx, ore = np.zeros(n), np.zeros(n), np.full(n, -np.inf), 0
+    cop, fr, fr50, mx, ore = np.zeros(n), np.zeros(n), np.zeros(n), np.full(n, -np.inf), 0
     for i in range(sub.sizes["time"]):
         v = sub.isel(time=i).values.ravel()
         coperti = _conta(idx_it, np.isfinite(v))
         forti = _conta(idx_it, v >= MMH_CONV)
+        fortissimi = _conta(idx_it, v >= MMH_FORTE)
         with np.errstate(all="ignore"):
             cop += np.where(tot > 0, coperti / tot, 0)
             fr = np.maximum(fr, np.where(coperti > 0, forti / coperti, 0))
+            fr50 = np.maximum(fr50, np.where(coperti > 0, fortissimi / coperti, 0))
         np.maximum.at(mx, np.where(idx_it >= 0, idx_it, 0), np.where(np.isfinite(v) & (idx_it >= 0), v, -np.inf))
         ore += 1
-    return {"itdpc_ore": ore, "itdpc_copertura": cop / max(ore, 1), "itdpc_frac10": fr,
+    return {"itdpc_ore": ore, "itdpc_copertura": cop / max(ore, 1), "itdpc_frac10": fr, "itdpc_frac50": fr50,
             "itdpc_max_mmh": np.where(np.isfinite(mx), mx, np.nan)}
 
 
