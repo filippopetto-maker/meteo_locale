@@ -30,6 +30,7 @@ INIZIO_FCI = datetime(2025, 1, 1)      # planning: FCI solo dal 2025 (e per il l
 INIZIO_CIRRUS = datetime(2024, 7, 1)   # OPERA 1 km / 5 min
 INIZIO_LI = datetime(2024, 7, 4)
 FINE_IMERG_V07 = datetime(2025, 10, 1)
+TENTATIVI_IMERG = 3
 
 
 def _impila(frames: list, tempi: list, lats, lons):
@@ -143,7 +144,14 @@ def precipitazione_imerg(t0, t1, lavoro: Path) -> tuple:
     imerg.login()
     frames, tempi, peso = [], [], 0.0
     for g in imerg.granuli(t0, t1):
-        f = imerg.scarica([g], lavoro)[0]
+        for k in range(TENTATIVI_IMERG):               # GES DISC risponde a tratti "An Internal Error has occurred"
+            try:
+                f = imerg.scarica([g], lavoro)[0]
+                break
+            except Exception:  # noqa: BLE001
+                if k == TENTATIVI_IMERG - 1:
+                    raise
+                time.sleep(60 * (k + 1))
         peso += mb(f)
         sub, _, _ = imerg.ritaglio(f, DOMAIN_BBOX)
         rm(f)
@@ -168,6 +176,30 @@ def radar_italia(t0, t1, area) -> tuple:
 
 
 FINE_ITDPC = datetime(2026, 1, 1)       # IT-DPC-SRI v0.1.0 arriva a fine 2025
+
+
+def sorgenti_attese(t0: datetime) -> set:
+    """Sorgenti che una finestra che inizia a t0 deve avere."""
+    s = {"satellite", "radar", "ambiente"}
+    if t0 < FINE_IMERG_V07:
+        s.add("imerg")
+    if t0 >= INIZIO_LI:
+        s.add("fulmini")
+    if t0 < FINE_ITDPC:
+        s.add("radar_italia")
+    return s
+
+
+def passo_singolo(nome: str, t0: datetime, t1: datetime, lavoro: Path, tok=None) -> tuple:
+    """Una sola sorgente non essenziale (per completare finestre già caricate): (Dataset, misure, tipi)."""
+    area = area_def_regular(DOMAIN_BBOX, 0.05)
+    if nome == "imerg":
+        return (*precipitazione_imerg(t0, t1, lavoro), {})
+    if nome == "fulmini":
+        return (*fulmini(t0, t1, area, lavoro, tok or eu.token()), {})
+    if nome == "radar_italia":
+        return (*radar_italia(t0, t1, area), {"pioggia_max": "dBZ", "pioggia_media": "dBZ"})
+    raise ValueError(nome)
 
 
 def costruisci(fid: str, t0: datetime, t1: datetime, sensore: str | None = None, via: str = "completo") -> Path:

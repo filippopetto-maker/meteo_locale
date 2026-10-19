@@ -253,8 +253,10 @@ def rosa_radar(n=N_ROSA_RADAR, max_mese=MAX_PER_MESE_RADAR) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------- casi negativi e valutazione "giorno qualsiasi"
-N_NEGATIVE = 400               # planning: 1 negativa ogni 2 positive (~770 positive entro 90 GB)
+N_NEGATIVE = 550               # planning: 1 negativa ogni 2 positive (~770 positive entro 90 GB). Candidati: circa
+                               # un quarto si scarta al controllo radar completo (fase2.verifica_negativa) → ~400
 MLCAPE_NEGATIVO = 1000.0
+MLCAPE_NEGATIVO_RISERVA = 700.0   # secondo giro, dopo i ~450 periodi con ML-CAPE ≥ 1000
 ECO_DEBOLE_DBZ = 40.0          # negativi: nessun segnale nemmeno debole (il criterio radar ha recall 0,77 sui fulmini)
 PIOGGIA_DEBOLE_MMH = 10.0
 CASUALI = {2022: 40, 2023: 40, 2024: 40, 2025: 40}   # validazione, test, FCI: periodi estratti a caso
@@ -293,26 +295,27 @@ def rosa_negativa(n=N_NEGATIVE) -> pd.DataFrame:
     passi = DURATA_H // 3
     piv = lambda c, f: d.pivot_table(index="time", columns="riquadro", values=c, aggfunc="max").sort_index() \
         .astype(float).rolling(passi).agg(f).shift(-(passi - 1))
-    inst = piv("mlcape", "max") >= MLCAPE_NEGATIVO
+    cape = piv("mlcape", "max")
     conv = piv("conv", "max") > 0
     debole = piv("debole", "max") > 0
     oss = piv("oss", "min") > 0
-    neg = (inst & ~conv & ~debole & oss)
-    n_neg = neg.sum(axis=1)
     occ = _finestre_occupate("rosa_larga", "rosa_radar")
     cand_per = periodi(cand).set_index("inizio")
     scelti = []
-    for t, v in n_neg[n_neg > 0].sort_values(ascending=False).items():
-        slot = [t + pd.Timedelta(hours=3 * k) for k in range(passi)]
-        if any(x in occ for x in slot) or t not in cand_per.index:
-            continue
-        r = cand_per.loc[t]
-        scelti.append({"inizio": t, "fine": t + pd.Timedelta(hours=DURATA_H), "n_negativi_oss": int(v),
-                       "riquadri_negativi_oss": sorted(neg.columns[neg.loc[t].values]),
-                       "riquadri_convettivi": r.riquadri_convettivi, "riquadri_negativi": r.riquadri_negativi})
-        occ.update(slot)
-        if len(scelti) >= n:
-            break
+    for soglia in (MLCAPE_NEGATIVO, MLCAPE_NEGATIVO_RISERVA):      # prima i più instabili, poi la riserva
+        neg = (cape >= soglia) & ~conv & ~debole & oss
+        n_neg = neg.sum(axis=1)
+        for t, v in n_neg[n_neg > 0].sort_values(ascending=False).items():
+            if len(scelti) >= n:
+                break
+            slot = [t + pd.Timedelta(hours=3 * k) for k in range(passi)]
+            if any(x in occ for x in slot) or t not in cand_per.index:
+                continue
+            r = cand_per.loc[t]
+            scelti.append({"inizio": t, "fine": t + pd.Timedelta(hours=DURATA_H), "n_negativi_oss": int(v),
+                           "riquadri_negativi_oss": sorted(neg.columns[neg.loc[t].values]), "soglia_mlcape": soglia,
+                           "riquadri_convettivi": r.riquadri_convettivi, "riquadri_negativi": r.riquadri_negativi})
+            occ.update(slot)
     out = pd.DataFrame(scelti).sort_values("inizio").reset_index(drop=True)
     out["id"] = out.inizio.dt.strftime("%Y%m%d_%H")
     out["insieme"] = [insieme(t.year) for t in out.inizio]

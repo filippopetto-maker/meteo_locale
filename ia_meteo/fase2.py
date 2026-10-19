@@ -21,9 +21,11 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import time
 import traceback
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -53,7 +55,9 @@ def _punteggio(riep: pd.DataFrame) -> pd.Series:
     return g.conv.sum() + 200 * g.f55.sum() + 200 * g.f50.sum()
 
 
-QUOTE = {"positiva": 770, "negativa": 400, "casuale": 200}   # entro ~90 GB (19/10/2026; +40 casuali 2022 il 20/10)
+QUOTE = {"positiva": 770, "negativa": 550, "casuale": 200}   # entro ~90 GB (19/10/2026; +40 casuali 2022 il 20/10;
+# 20/10: 550 candidati negativi perché ~1/4 si scarta al controllo radar completo → ~400 negative, 1 ogni 2 positive)
+SCARTATE = ar.DATA / "negativi_scartati"      # un file per finestra negativa scartata (condiviso fra le corsie)
 
 
 def _positive() -> pd.DataFrame:
@@ -84,7 +88,7 @@ def ordine() -> pd.DataFrame:
     pos = _positive()
     neg = pd.read_parquet(ar.DATA / "rosa_negativa.parquet")
     neg["priorita"] = neg.groupby(neg.inizio.dt.year).n_negativi_oss.rank(pct=True)
-    neg = neg.sort_values(["priorita", "n_negativi_oss"], ascending=False).assign(componente="negativa")
+    neg = neg.sort_values(["soglia_mlcape", "priorita", "n_negativi_oss"], ascending=False).assign(componente="negativa")
     cas = pd.read_parquet(ar.DATA / "casuali.parquet")
     cas = cas.sample(frac=1, random_state=1).assign(componente="casuale", priorita=0.0)   # ordine casuale
     parti = []
@@ -102,9 +106,45 @@ def ordine() -> pd.DataFrame:
     return df.drop(columns="chiave")
 
 
-def costruisci_e_carica(r, via: str) -> str:
+def verifica_negativa(fid: str, t0, t1, riquadri: list[str]) -> tuple[list[str], dict]:
+    """Prima di costruire una finestra negativa: radar completo (OPERA ogni 5–15 min e, dove vede, il radar
+    italiano) sui riquadri negativi. Pulito = coperto (≥ 50%) e nessun pixel ≥ 40 dBZ / ≥ 10 mm/h in nessuna
+    immagine. La scansione ogni 3 h lasciava passare celle brevi: 16 riquadri su 17 nelle prime 3 negative."""
+    import zone
+    from common import DOMAIN_BBOX, area_def_regular
+    area = area_def_regular(DOMAIN_BBOX, 0.05)
+    riq = zone.riquadri()
+    imp = zone.carica()["impronta_radar_italia"]
+    lavoro = ar.DATA / "lavoro" / f"verifica_{fid}"
+    try:
+        op = fi.radar(t0, t1, area, lavoro)[0].dbz.values
+        it = None
+        if t0 < fi.FINE_ITDPC and any(imp[riq[k]].mean() > 0.2 for k in riquadri):
+            it = fi.radar_italia(t0, t1, area)[0].pioggia_max.values
+    finally:
+        shutil.rmtree(lavoro, ignore_errors=True)
+    puliti, det = [], {}
+    for k in riquadri:
+        r, c = riq[k]
+        b = op[:, r, c]
+        cop_op = float(np.isfinite(b).mean())
+        mx_op = float(np.nanmax(b)) if np.isfinite(b).any() else None
+        cop_it, mx_it = 0.0, None
+        if it is not None:
+            bi = it[:, r, c]
+            cop_it = float(np.isfinite(bi).mean())
+            mx_it = float(np.nanmax(bi)) if np.isfinite(bi).any() else None
+        coperto = max(cop_op, cop_it) >= 0.5
+        pulito = coperto and (mx_op is None or mx_op < 40) and (mx_it is None or mx_it < 10)
+        det[k] = {"copertura_opera": round(cop_op, 3), "max_dbz": mx_op, "copertura_italia": round(cop_it, 3),
+                  "max_mmh": mx_it, "pulito": pulito}
+        if pulito:
+            puliti.append(k)
+    return puliti, det
+
+
+def costruisci_e_carica(r, via: str, extra: dict | None = None) -> str:
     d = fi.costruisci(r.id, r.inizio.to_pydatetime(), r.fine.to_pydatetime(), via=via)
-    import json
     meta = json.loads((d / "meta.json").read_text())
     mancano = [k for k in ESSENZIALI if k in meta["errori"] or k not in meta["file"]]
     if mancano:
@@ -115,7 +155,7 @@ def costruisci_e_carica(r, via: str) -> str:
             "ambiente_v": AMBIENTE_V if _ambiente_v2(d / "ambiente.nc") else 0,
             "componente": r.componente,
             "insieme": r.insieme, "priorita": float(r.priorita), "via": via,
-            "sorgenti": sorted(meta["file"]), "errori": meta["errori"]}
+            "sorgenti": sorted(meta["file"]), "errori": meta["errori"]} | (extra or {})
     esito = ar.carica_o_parcheggia("finestre", r.id, file, voce)
     shutil.rmtree(d, ignore_errors=True)
     return esito
@@ -186,12 +226,93 @@ def completa_ambiente(ogni: int = 10) -> int:
     return fatte
 
 
+def completa_sorgenti(ogni: int = 10) -> int:
+    """Finestre già caricate a cui manca una sorgente non essenziale (IMERG, fulmini, radar italiano:
+    di solito un guasto temporaneo del servizio): si calcola, si aggiunge con meta.json aggiornato e si
+    aggiorna il registro, un commit ogni `ogni` finestre. Riprendibile come completa_ambiente."""
+    from huggingface_hub import CommitOperationAdd
+    a = ar.api()
+    rid = ar.assicura_repo(a)
+    reg = ar.registro(a)["finestre"]
+    da_fare = []
+    for k, v in reg.items():
+        t0 = pd.Timestamp(v["inizio"]).to_pydatetime()
+        for nome in sorted(fi.sorgenti_attese(t0) - set(v["sorgenti"]) - set(ESSENZIALI) - {"ambiente"}):
+            da_fare.append((k, nome))
+    print(f"sorgenti da completare: {len(da_fare)} {sorted({n for _, n in da_fare})}", flush=True)
+    fatte, lotto = 0, []
+
+    def commit(lotto):
+        ops, nuove = [], {}
+        for k, nome, f, mis in lotto:
+            ops.append(CommitOperationAdd(path_in_repo=f"finestre/{k}/{nome}.nc", path_or_fileobj=str(f)))
+            nuove.setdefault(k, []).append((nome, f, mis))
+        for k, voci in nuove.items():                   # meta.json della finestra allineato al registro
+            m = json.loads(Path(ar.scarica("finestre", k, lambda p: p.endswith("meta.json"), a)[0]).read_text())
+            for nome, f, mis in voci:
+                m["errori"].pop(nome, None)
+                m["file"][nome] = f"{nome}.nc"
+                m["misure"][nome] = mis | {"completata_dopo": True}
+            mj = ar.STAGING / f"sorgenti_{k}" / "meta.json"
+            mj.parent.mkdir(parents=True, exist_ok=True)
+            mj.write_text(json.dumps(m, indent=1, ensure_ascii=False, default=str))
+            ops.append(CommitOperationAdd(path_in_repo=f"finestre/{k}/meta.json", path_or_fileobj=str(mj)))
+
+        def modifica(reg):
+            for k, voci in nuove.items():
+                v = reg["finestre"][k]
+                for nome, f, _ in voci:
+                    v["file"][f"finestre/{k}/{nome}.nc"] = f.stat().st_size
+                    v["errori"].pop(nome, None)
+                    v["sorgenti"] = sorted(set(v["sorgenti"]) | {nome})
+                v["file"][f"finestre/{k}/meta.json"] = (ar.STAGING / f"sorgenti_{k}" / "meta.json").stat().st_size
+                v["GB"] = round(sum(v["file"].values()) / 1e9, 4)
+        ar._commit_con_registro(a, rid, ops, modifica, f"sorgenti completate per {len(nuove)} finestre")
+        for k in nuove:
+            shutil.rmtree(ar.STAGING / f"sorgenti_{k}", ignore_errors=True)
+        print(f"caricate {len(lotto)} sorgenti in {len(nuove)} finestre", flush=True)
+
+    for k, nome in da_fare:
+        v = reg[k]
+        t0, t1 = pd.Timestamp(v["inizio"]).to_pydatetime(), pd.Timestamp(v["fine"]).to_pydatetime()
+        d = ar.STAGING / f"sorgenti_{k}"
+        d.mkdir(parents=True, exist_ok=True)
+        f, mf = d / f"{nome}.nc", d / f"{nome}.json"
+        if f.exists() and mf.exists():                  # già calcolata in una sessione interrotta
+            lotto.append((k, nome, f, json.loads(mf.read_text())))
+            fatte += 1
+            continue
+        lavoro = ar.DATA / "lavoro" / f"sorgenti_{k}"
+        try:
+            ds, mis, tipo = fi.passo_singolo(nome, t0, t1, lavoro)
+            mis["MB_file"] = fi._salva(ds, f, tipo)
+            mf.write_text(json.dumps(mis, default=str))
+        except Exception as e:  # noqa: BLE001
+            print(f"{k} {nome}: ERRORE {e!r:.200}", flush=True)
+            continue
+        finally:
+            shutil.rmtree(lavoro, ignore_errors=True)
+        lotto.append((k, nome, f, mis))
+        fatte += 1
+        print(f"{k} {nome}: {mis}", flush=True)
+        if len(lotto) >= ogni:
+            commit(lotto)
+            lotto = []
+    if lotto:
+        commit(lotto)
+    return fatte
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--via", choices=["completo", "tailor"], default="completo")
     ap.add_argument("--max", type=int, default=None, help="al più N finestre in questa sessione")
     ap.add_argument("--completa-ambiente", action="store_true", help="rifà ambiente.nc delle finestre già caricate")
+    ap.add_argument("--completa-sorgenti", action="store_true", help="aggiunge le sorgenti non essenziali mancanti")
     a = ap.parse_args()
+    if a.completa_sorgenti:
+        print(f"fine: {completa_sorgenti()} sorgenti completate", flush=True)
+        return
     if a.completa_ambiente:
         print(f"fine: {completa_ambiente()} finestre completate", flush=True)
         return
@@ -200,10 +321,14 @@ def main():
 
     def leggi_coda():
         lista = pd.read_parquet(ORDINE)
-        fatte = set(ar.registro()["finestre"]) | {k for s, k in ar.parcheggiati("finestre")}
+        fatte = set(ar.registro()["finestre"]) | {k for s, k in ar.parcheggiati("finestre")} | \
+            {f.stem for f in SCARTATE.glob("*.json")}
         coda = [r for r in lista.itertuples() if r.id not in fatte and (a.via == "completo" or r.satellite == "seviri")]
         print(f"{len(lista)} finestre in elenco, {len(fatte)} già fatte, {len(coda)} candidate per la corsia {a.via}", flush=True)
         return coda
+
+    def negativi() -> dict:
+        return pd.read_parquet(ar.DATA / "rosa_negativa.parquet").set_index("id").riquadri_negativi_oss.map(list).to_dict()
 
     coda, versione = leggi_coda(), ORDINE.stat().st_mtime
     tentativi, n = {}, 0
@@ -228,7 +353,18 @@ def main():
             continue
         t = time.perf_counter()
         try:
-            esito = costruisci_e_carica(r, a.via)
+            extra = None
+            if r.componente == "negativa":
+                puliti, det = verifica_negativa(r.id, r.inizio.to_pydatetime(), r.fine.to_pydatetime(),
+                                                negativi().get(r.id, []))
+                if not puliti:
+                    SCARTATE.mkdir(parents=True, exist_ok=True)
+                    (SCARTATE / f"{r.id}.json").write_text(json.dumps(det, indent=1))
+                    print(f"{r.id} [negativa, pos {r.posizione}]: scartata, nessun riquadro pulito col radar completo "
+                          f"({(time.perf_counter() - t) / 60:.1f} min)", flush=True)
+                    continue
+                extra = {"riquadri_negativi_verificati": puliti, "verifica_negativa": det}
+            esito = costruisci_e_carica(r, a.via, extra)
             n += 1
             print(f"{r.id} [{r.componente}/{r.rosa}, pos {r.posizione}]: {esito} in {(time.perf_counter() - t) / 60:.1f} min "
                   f"(sessione: {n})", flush=True)
