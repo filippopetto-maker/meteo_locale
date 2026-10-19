@@ -255,8 +255,12 @@ def rosa_radar(n=N_ROSA_RADAR, max_mese=MAX_PER_MESE_RADAR) -> pd.DataFrame:
 # ---------------------------------------------------------------- casi negativi e valutazione "giorno qualsiasi"
 N_NEGATIVE = 400               # planning: 1 negativa ogni 2 positive (~770 positive entro 90 GB)
 MLCAPE_NEGATIVO = 1000.0
+ECO_DEBOLE_DBZ = 40.0          # negativi: nessun segnale nemmeno debole (il criterio radar ha recall 0,77 sui fulmini)
+PIOGGIA_DEBOLE_MMH = 10.0
 CASUALI = {2022: 40, 2023: 40, 2024: 40, 2025: 40}   # validazione, test, FCI: periodi estratti a caso
 SEME_CASUALI = 20261019
+CASUALI_AGGIUNTI = {2022: 40}  # 20/10/2026: validazione raddoppiata (calibrazione su un solo anno), seme a parte
+SEME_AGGIUNTI = 20261020
 
 
 def _finestre_occupate(*nomi) -> set:
@@ -272,8 +276,9 @@ def _finestre_occupate(*nomi) -> set:
 def rosa_negativa(n=N_NEGATIVE) -> pd.DataFrame:
     """Planning: "ambiente instabile ma nessuna convezione osservata". Per ogni periodo da 12 h si
     contano i riquadri con ML-CAPE p90 ≥ 1000 in qualche istante, coperti dal radar (≥ 50%) in tutti
-    gli istanti e senza convezione radar (criterio calibrato sui fulmini) in nessuno; si scelgono i
-    periodi con più riquadri così, fuori dalle altre rose e senza sovrapposizioni."""
+    gli istanti e senza convezione radar (criterio calibrato sui fulmini) in nessuno, e senza nemmeno
+    un segnale debole (eco ≥ 40 dBZ o ≥ 10 mm/h IT-DPC-SRI); si scelgono i periodi con più riquadri
+    così, fuori dalle altre rose e senza sovrapposizioni."""
     cand = classifica(carica_candidati())
     scan = carica_scansione()
     import conferma as co
@@ -284,13 +289,15 @@ def rosa_negativa(n=N_NEGATIVE) -> pd.DataFrame:
     d["conv"] = co.radar_convettivo(d.opera_copertura, d.opera_frac45, d.itdpc_copertura.fillna(0),
                                     d.itdpc_frac50.fillna(0), d.mlcape, d.opera_frac55)
     d["oss"] = (d.opera_copertura >= 0.5) | (d.itdpc_copertura.fillna(0) >= 0.5)
+    d["debole"] = (d.opera_max_dbz.fillna(-99) >= ECO_DEBOLE_DBZ) | (d.itdpc_max_mmh.fillna(0) >= PIOGGIA_DEBOLE_MMH)
     passi = DURATA_H // 3
     piv = lambda c, f: d.pivot_table(index="time", columns="riquadro", values=c, aggfunc="max").sort_index() \
         .astype(float).rolling(passi).agg(f).shift(-(passi - 1))
     inst = piv("mlcape", "max") >= MLCAPE_NEGATIVO
     conv = piv("conv", "max") > 0
+    debole = piv("debole", "max") > 0
     oss = piv("oss", "min") > 0
-    neg = (inst & ~conv & oss)
+    neg = (inst & ~conv & ~debole & oss)
     n_neg = neg.sum(axis=1)
     occ = _finestre_occupate("rosa_larga", "rosa_radar")
     cand_per = periodi(cand).set_index("inizio")
@@ -314,11 +321,22 @@ def rosa_negativa(n=N_NEGATIVE) -> pd.DataFrame:
     return out
 
 
-def casuali(quanti=CASUALI, seme=SEME_CASUALI) -> pd.DataFrame:
+def casuali(quanti=CASUALI, seme=SEME_CASUALI, aggiunti=CASUALI_AGGIUNTI, seme_agg=SEME_AGGIUNTI) -> pd.DataFrame:
     """Periodi da 12 h estratti a caso (aprile–novembre, stratificati per mese, inizio a ore multiple di 3),
     senza guardare la convezione: misurano FAR e CSI su un giorno qualsiasi. Possono coincidere con
     finestre delle altre rose (in quel caso si riusa la stessa finestra)."""
-    rng = np.random.default_rng(seme)
+    righe = []
+    for q, sm in ((quanti, seme), (aggiunti, seme_agg)):     # i primi 160 restano quelli già estratti
+        righe += _estrai(q, np.random.default_rng(sm))
+    out = pd.DataFrame(righe).drop_duplicates("inizio").sort_values("inizio").reset_index(drop=True)
+    out["id"] = out.inizio.dt.strftime("%Y%m%d_%H")
+    out["insieme"] = [insieme(t.year) for t in out.inizio]
+    out["satellite"] = np.where(out.inizio >= pd.Timestamp("2025-01-01"), "fci", "seviri")
+    out["rosa"] = "casuale"
+    return out
+
+
+def _estrai(quanti: dict, rng) -> list:
     righe = []
     for anno, n in quanti.items():
         mesi_ = list(range(4, 12))
@@ -329,12 +347,7 @@ def casuali(quanti=CASUALI, seme=SEME_CASUALI) -> pd.DataFrame:
             for g in rng.choice(len(giorni), size=k, replace=False):
                 t = giorni[g] + pd.Timedelta(hours=int(rng.integers(0, 8)) * 3)
                 righe.append({"inizio": t, "fine": t + pd.Timedelta(hours=DURATA_H)})
-    out = pd.DataFrame(righe).sort_values("inizio").reset_index(drop=True)
-    out["id"] = out.inizio.dt.strftime("%Y%m%d_%H")
-    out["insieme"] = [insieme(t.year) for t in out.inizio]
-    out["satellite"] = np.where(out.inizio >= pd.Timestamp("2025-01-01"), "fci", "seviri")
-    out["rosa"] = "casuale"
-    return out
+    return righe
 
 
 if __name__ == "__main__":

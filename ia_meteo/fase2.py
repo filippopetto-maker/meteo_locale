@@ -52,7 +52,7 @@ def _punteggio(riep: pd.DataFrame) -> pd.Series:
     return g.conv.sum() + 200 * g.f55.sum() + 200 * g.f50.sum()
 
 
-QUOTE = {"positiva": 770, "negativa": 400, "casuale": 160}   # entro ~90 GB (decisione del 19/10/2026)
+QUOTE = {"positiva": 770, "negativa": 400, "casuale": 200}   # entro ~90 GB (19/10/2026; +40 casuali 2022 il 20/10)
 
 
 def _positive() -> pd.DataFrame:
@@ -126,13 +126,20 @@ def main():
     a = ap.parse_args()
     if not ORDINE.exists():
         ordine().to_parquet(ORDINE, index=False)
-    lista = pd.read_parquet(ORDINE)
-    reg = ar.registro()
-    fatte = set(reg["finestre"]) | {k for s, k in ar.parcheggiati("finestre")}
-    coda = [r for r in lista.itertuples() if r.id not in fatte and (a.via == "completo" or r.satellite == "seviri")]
-    print(f"{len(lista)} finestre in elenco, {len(fatte)} già fatte, {len(coda)} candidate per la corsia {a.via}", flush=True)
+
+    def leggi_coda():
+        lista = pd.read_parquet(ORDINE)
+        fatte = set(ar.registro()["finestre"]) | {k for s, k in ar.parcheggiati("finestre")}
+        coda = [r for r in lista.itertuples() if r.id not in fatte and (a.via == "completo" or r.satellite == "seviri")]
+        print(f"{len(lista)} finestre in elenco, {len(fatte)} già fatte, {len(coda)} candidate per la corsia {a.via}", flush=True)
+        return coda
+
+    coda, versione = leggi_coda(), ORDINE.stat().st_mtime
     tentativi, n = {}, 0
     while coda:
+        if ORDINE.stat().st_mtime != versione:          # ordine rigenerato: si riparte dal nuovo, senza riavviare
+            coda, versione = leggi_coda(), ORDINE.stat().st_mtime
+            continue
         r = coda.pop(0)
         chiave = f"finestra_{r.id}"
         try:
