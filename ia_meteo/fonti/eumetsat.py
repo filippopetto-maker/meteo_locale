@@ -186,7 +186,8 @@ def fci_ritaglio(prodotto, area, lavoro: Path, canali=CANALI_FCI, bb: dict = DOM
 
 # ---------------------------------------------------------------- LI
 def li_body(prodotto) -> str:
-    return [e for e in prodotto.entries if "BODY" in e and e.endswith(".nc")][0]
+    corpo = [e for e in prodotto.entries if "BODY" in e and e.endswith(".nc")]
+    return corpo[0] if corpo else None          # prodotti "PART" senza BODY (es. 02/09/2024 15:40): nessun dato
 
 
 def li_flash(f: Path):

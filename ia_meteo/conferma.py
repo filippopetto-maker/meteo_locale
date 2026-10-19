@@ -171,7 +171,10 @@ def stat_li(t0, t1, lavoro, tok, flussi=FLUSSI_LI):
     n = NX * NY
 
     def uno(p):
-        f = _riprova(eu.scarica, p, lavoro, eu.li_body(p))
+        corpo = eu.li_body(p)
+        if corpo is None:                       # prodotto parziale senza dati
+            return np.zeros(n)
+        f = _riprova(eu.scarica, p, lavoro, corpo)
         la, lo, w, _ = eu.li_flash(f)
         rm(f)
         idx = indice_riquadro(la, lo)
