@@ -1,0 +1,146 @@
+"""Fase 2 — costruzione di tutte le finestre delle due rose, in ordine d'importanza, verso HF.
+
+Elenco: rosa larga ERA5 (1200, selezione.py --rosa) + rosa radar dei temporali mancati da ERA5
+(400, selezione.py --rosa-radar), con le conferme osservate (conferma.py --riepilogo). Ordine:
+in ogni rosa i periodi con più convezione osservata e più intensa vengono prima, confrontati dentro
+lo stesso anno (percentile del punteggio nell'anno: i fulmini, solo dal 2024, e la diversa qualità
+del radar negli anni non devono spostare tutto su certi anni); le due rose si alternano 3:1 (le
+proporzioni delle rose). Così dopo poche centinaia di finestre c'è già un nucleo con tutti gli anni.
+
+Due "corsie" in parallelo, due processi che si prenotano le finestre (data/prenotazioni/):
+- `--via completo`: satellite scaricato intero (8 GB a finestra, satura la linea);
+- `--via tailor`: satellite ritagliato dal Data Tailor (0,35 GB, 3 alla volta per limite EUMETSAT),
+  solo finestre SEVIRI (fino al 2024); usa poca banda e si somma alla prima (~+30%).
+Le finestre vanno nel parcheggio e su HF a lotti (archivio.carica_o_parcheggia, max 5 GB sul Mac).
+Una finestra senza satellite o senza radar non si carica e si riprova (al più 2 volte).
+
+Uso:
+    caffeinate -i python fase2.py --via completo
+    caffeinate -i python fase2.py --via tailor
+"""
+from __future__ import annotations
+
+import argparse
+import shutil
+import time
+import traceback
+
+import numpy as np
+import pandas as pd
+
+import archivio as ar
+import finestra as fi
+from catalogo import libera, prenota
+
+ORDINE = ar.DATA / "finestre_ordine.parquet"
+TENTATIVI = 2
+# eventi documentati usati per scegliere la rosa (selezione.py): le loro finestre vanno per prime
+EVENTI = ["2017-09-10", "2018-08-20", "2018-09-28", "2019-07-10", "2019-09-12", "2021-10-25", "2022-08-18",
+          "2022-09-15", "2023-07-19", "2023-07-21", "2023-07-24", "2023-08-04", "2023-09-05", "2023-09-10",
+          "2024-10-29"]
+ESSENZIALI = ("satellite", "radar")
+
+
+def _punteggio(riep: pd.DataFrame) -> pd.Series:
+    """Convezione osservata del periodo: riquadri convettivi (confermati + mancati da ERA5) e intensità
+    radar (≥ 55 dBZ, ≥ 50 mm/h). Niente fulmini: ci sono solo dal 2024."""
+    conv = riep.etichetta.isin(["confermato", "mancato_dal_modello"])
+    g = riep.assign(conv=conv, f55=riep.opera_frac55.where(conv, 0).clip(upper=0.02),
+                    f50=riep.itdpc_frac50.fillna(0).where(conv, 0).clip(upper=0.02)).groupby("periodo")
+    return g.conv.sum() + 200 * g.f55.sum() + 200 * g.f50.sum()
+
+
+def ordine() -> pd.DataFrame:
+    righe = []
+    for rosa, riep in (("era5", "riepilogo_rosa"), ("radar", "riepilogo_radar")):
+        sel = pd.read_parquet(ar.DATA / f"{'rosa_larga' if rosa == 'era5' else 'rosa_radar'}.parquet")
+        p = _punteggio(pd.read_parquet(ar.DATA / f"{riep}.parquet"))
+        sel = sel.assign(rosa=rosa, punteggio_oss=sel.id.map(p).fillna(0))
+        sel["priorita"] = sel.groupby(sel.inizio.dt.year).punteggio_oss.rank(pct=True)
+        sel = sel.sort_values(["priorita", "punteggio_oss"], ascending=False)
+        righe.append(sel[["id", "inizio", "fine", "insieme", "satellite", "rosa", "priorita"]].reset_index(drop=True))
+    era5, radar = righe
+    out, i, j = [], 0, 0
+    while i < len(era5) or j < len(radar):            # 3 ERA5 : 1 radar
+        for _ in range(3):
+            if i < len(era5):
+                out.append(era5.iloc[i]); i += 1
+        if j < len(radar):
+            out.append(radar.iloc[j]); j += 1
+    df = pd.DataFrame(out).drop_duplicates("id").reset_index(drop=True)
+    giorni = [pd.Timestamp(d) for d in EVENTI]
+    evento = df.apply(lambda r: any(r.inizio < g + pd.Timedelta("1D") and r.fine > g for g in giorni), axis=1)
+    df = pd.concat([df[evento], df[~evento]], ignore_index=True)
+    df["posizione"] = np.arange(len(df))
+    return df
+
+
+def costruisci_e_carica(r, via: str) -> str:
+    d = fi.costruisci(r.id, r.inizio.to_pydatetime(), r.fine.to_pydatetime(), via=via)
+    import json
+    meta = json.loads((d / "meta.json").read_text())
+    mancano = [k for k in ESSENZIALI if k in meta["errori"] or k not in meta["file"]]
+    if mancano:
+        shutil.rmtree(d, ignore_errors=True)
+        raise RuntimeError(f"mancano {mancano}: {meta['errori']}")
+    file = {f"finestre/{r.id}/{f.name}": f for f in sorted(d.iterdir()) if f.is_file()}
+    voce = {"inizio": meta["inizio"], "fine": meta["fine"], "satellite": meta["satellite"], "rosa": r.rosa,
+            "insieme": r.insieme, "priorita": float(r.priorita), "via": via,
+            "sorgenti": sorted(meta["file"]), "errori": meta["errori"]}
+    esito = ar.carica_o_parcheggia("finestre", r.id, file, voce)
+    shutil.rmtree(d, ignore_errors=True)
+    return esito
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--via", choices=["completo", "tailor"], default="completo")
+    ap.add_argument("--max", type=int, default=None, help="al più N finestre in questa sessione")
+    a = ap.parse_args()
+    if not ORDINE.exists():
+        ordine().to_parquet(ORDINE, index=False)
+    lista = pd.read_parquet(ORDINE)
+    reg = ar.registro()
+    fatte = set(reg["finestre"]) | {k for s, k in ar.parcheggiati("finestre")}
+    coda = [r for r in lista.itertuples() if r.id not in fatte and (a.via == "completo" or r.satellite == "seviri")]
+    print(f"{len(lista)} finestre in elenco, {len(fatte)} già fatte, {len(coda)} candidate per la corsia {a.via}", flush=True)
+    tentativi, n = {}, 0
+    while coda:
+        r = coda.pop(0)
+        chiave = f"finestra_{r.id}"
+        try:
+            ar.attendi_parcheggio()
+        except ar.BudgetSuperato as e:
+            print(f"STOP, budget HF: {e}", flush=True)
+            break
+        if r.id in ar.registro()["finestre"] or ("finestre", r.id) in ar.parcheggiati("finestre"):
+            continue
+        if not prenota(chiave, a.via):
+            continue
+        t = time.perf_counter()
+        try:
+            esito = costruisci_e_carica(r, a.via)
+            n += 1
+            print(f"{r.id} [{r.rosa}, pos {r.posizione}]: {esito} in {(time.perf_counter() - t) / 60:.1f} min "
+                  f"(sessione: {n})", flush=True)
+        except ar.BudgetSuperato as e:
+            print(f"STOP, budget HF: {e}", flush=True)
+            break
+        except Exception as e:  # noqa: BLE001
+            tentativi[r.id] = tentativi.get(r.id, 0) + 1
+            print(f"{r.id}: ERRORE {e!r:.300}", flush=True)
+            traceback.print_exc()
+            if tentativi[r.id] < TENTATIVI:
+                coda.append(r)
+        finally:
+            libera(chiave)
+        if a.max and n >= a.max:
+            break
+    while ar.parcheggiati():
+        if ar.svuota_parcheggio(forza=True) == 0 and ar.parcheggiati():
+            time.sleep(600)
+    print("fine sessione", flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -25,6 +25,7 @@ from common import DOMAIN_BBOX, area_def_regular, mb, rm
 from fonti import era5, eumetsat as eu, imerg, itdpc, opera
 
 WORKER = 3
+WORKER_TAILOR = 3                      # EUMETSAT: al più 3 personalizzazioni Data Tailor per utente (in coda + in corso)
 INIZIO_FCI = datetime(2025, 1, 1)      # planning: FCI solo dal 2025 (e per il live)
 INIZIO_CIRRUS = datetime(2024, 7, 1)   # OPERA 1 km / 5 min
 INIZIO_LI = datetime(2024, 7, 4)
@@ -45,29 +46,46 @@ def _salva(ds, path: Path, tipo: dict[str, str]):
     return round(mb(path), 2)
 
 
-def satellite(t0, t1, area, lavoro: Path, sensore: str, tok) -> tuple:
-    """Ritagli SEVIRI o FCI su [t0, t1), WORKER prodotti in parallelo, grezzi cancellati subito."""
+def satellite(t0, t1, area, lavoro: Path, sensore: str, tok, via: str = "completo") -> tuple:
+    """Ritagli SEVIRI o FCI su [t0, t1), grezzi cancellati subito. `via="tailor"` (solo SEVIRI): ritaglio
+    lato server con il Data Tailor (7 MB per immagine, identico al percorso completo), 3 alla volta;
+    se un ritaglio fallisce due volte quell'immagine si scarica intera."""
     import xarray as xr
     coll = eu.FCI if sensore == "fci" else eu.SEVIRI
     prodotti = eu.cerca(coll, t0, t1, tok)
     lons, lats = area.get_lonlats()
+    tailor = via == "tailor" and sensore == "seviri"
+    n_worker = WORKER_TAILOR if tailor else WORKER
 
     def uno(i_p):
         i, p = i_p
-        d = lavoro / f"w{i % WORKER}"
+        d = lavoro / f"w{i % n_worker}"
         d.mkdir(parents=True, exist_ok=True)
         if sensore == "fci":
             ds, m = eu.fci_ritaglio(p, area, d)
+        elif tailor:
+            for k in range(2):
+                try:
+                    ds, m = eu.seviri_tailor(p, area, d, tok=tok)
+                    m["MB_zip"] = m["MB_tailor"]
+                    break
+                except Exception:  # noqa: BLE001
+                    time.sleep(30)
+            else:
+                ds, m = eu.seviri_ritaglio(p, area, d)
+                m["ripiego_completo"] = True
         else:
             ds, m = eu.seviri_ritaglio(p, area, d)
-        return p.sensing_start, ds.drop_vars(["lat", "lon"]), m
+        return p.sensing_start, ds.drop_vars(["lat", "lon"], errors="ignore"), m
 
-    with ThreadPoolExecutor(WORKER) as ex:
+    with ThreadPoolExecutor(n_worker) as ex:
         ris = list(ex.map(uno, enumerate(prodotti)))
     ris.sort(key=lambda r: r[0])
     ds = _impila([r[1] for r in ris], [r[0] for r in ris], lats[:, 0], lons[0])
     ds.attrs = {"sensore": sensore, "collezione": coll, "unita": "K"}
-    mis = {"n": len(ris), "MB_scaricati": round(sum(r[2].get("MB_zip", r[2].get("MB_chunk", 0)) for r in ris), 1)}
+    mis = {"n": len(ris), "via": "tailor" if tailor else "completo",
+           "ripieghi": sum(bool(r[2].get("ripiego_completo")) for r in ris),
+           "MB_scaricati": round(sum(r[2].get("MB_zip", r[2].get("MB_chunk", 0)) for r in ris), 1)}
     return ds, mis
 
 
@@ -152,7 +170,7 @@ def radar_italia(t0, t1, area) -> tuple:
 FINE_ITDPC = datetime(2026, 1, 1)       # IT-DPC-SRI v0.1.0 arriva a fine 2025
 
 
-def costruisci(fid: str, t0: datetime, t1: datetime, sensore: str | None = None) -> Path:
+def costruisci(fid: str, t0: datetime, t1: datetime, sensore: str | None = None, via: str = "completo") -> Path:
     """Scrive data/staging/<fid>/ con satellite, radar, radar_italia, ambiente, imerg, [fulmini], meta.json."""
     ar.controlla_budget(ar.STIMA_FINESTRA_GB + 0.5 * WORKER, hf=False)   # finestra + grezzi in volo
     sensore = sensore or ("fci" if t0 >= INIZIO_FCI else "seviri")
@@ -164,7 +182,7 @@ def costruisci(fid: str, t0: datetime, t1: datetime, sensore: str | None = None)
     meta = {"id": fid, "inizio": t0.isoformat(), "fine": t1.isoformat(), "satellite": sensore,
             "griglia": "EPSG:4326 0,05°", "bbox": DOMAIN_BBOX, "misure": {}, "file": {}, "errori": {}}
 
-    passi = [("satellite", lambda: satellite(t0, t1, area, lavoro, sensore, tok), {"IR_108": "Tb", "WV_062": "Tb",
+    passi = [("satellite", lambda: satellite(t0, t1, area, lavoro, sensore, tok, via), {"IR_108": "Tb", "WV_062": "Tb",
               "WV_073": "Tb", "ir_105": "Tb", "wv_63": "Tb", "wv_73": "Tb"}),
              ("radar", lambda: radar(t0, t1, area, lavoro), {"dbz": "dBZ"}),
              ("ambiente", lambda: era5.fetch_env(t0, t1, lavoro), {})]
