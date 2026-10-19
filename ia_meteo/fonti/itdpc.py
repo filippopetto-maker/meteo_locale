@@ -48,3 +48,32 @@ def ritaglio(ds, t, bb: dict, finestra=None):
     else:
         sel = da.isel(time=int(np.argmin(np.abs(ds.time.values - np.datetime64(t)))))
     return sel.isel({da.dims[1]: ysl, da.dims[2]: xsl})
+
+
+def su_griglia(ds, t0, t1, lat_c, lon_c):
+    """Pioggia IT-DPC-SRI su [t0, t1) aggregata sulla griglia regolare (centri lat_c decrescenti,
+    lon_c crescenti): massimo e media dei pixel nativi (~1 km) di ogni cella. NaN fuori copertura.
+    Ritorna (tempi, massimo, media) con forma (n, len(lat_c), len(lon_c))."""
+    var = variabile(ds)
+    passo = float(lat_c[0] - lat_c[1])
+    lat2, lon2 = ds["lat"].values, ds["lon"].values
+    r = np.rint((lat_c[0] - lat2) / passo).astype(int)
+    c = np.rint((lon2 - lon_c[0]) / passo).astype(int)
+    ok = (r >= 0) & (r < len(lat_c)) & (c >= 0) & (c < len(lon_c))
+    cella = np.where(ok, r * len(lon_c) + c, -1).ravel()
+    n = len(lat_c) * len(lon_c)
+    sub = ds[var].sel(time=slice(np.datetime64(t0), np.datetime64(t1) - np.timedelta64(1, "s")))
+    tempi, massimi, medie = [], [], []
+    for i in range(sub.sizes["time"]):
+        v = sub.isel(time=i).values.ravel()
+        m = (cella >= 0) & np.isfinite(v)
+        mx = np.full(n, -np.inf)
+        np.maximum.at(mx, cella[m], v[m])
+        conta = np.bincount(cella[m], minlength=n)
+        somma = np.bincount(cella[m], weights=v[m], minlength=n)
+        with np.errstate(all="ignore"):
+            media = np.where(conta > 0, somma / conta, np.nan)
+        massimi.append(np.where(np.isfinite(mx), mx, np.nan).reshape(len(lat_c), len(lon_c)).astype("float32"))
+        medie.append(media.reshape(len(lat_c), len(lon_c)).astype("float32"))
+        tempi.append(sub.time.values[i])
+    return np.array(tempi), np.stack(massimi) if massimi else None, np.stack(medie) if medie else None

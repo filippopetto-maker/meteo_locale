@@ -6,7 +6,7 @@ cancella dal Mac. Il disco del Mac ospita al più: una finestra in staging + WOR
 grezzi alla volta (~0,5 GB ciascuno per SEVIRI).
 
 Uso:
-    python finestra.py --id 20190715_06 --inizio 2019-07-15T06:00 --fine 2019-07-15T18:00 [--lazio] [--carica]
+    python finestra.py --id 20190715_06 --inizio 2019-07-15T06:00 --fine 2019-07-15T18:00 [--carica]
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 import archivio as ar
-from common import DOMAIN_BBOX, TEST_BBOXES, area_def_regular, mb, rm
+from common import DOMAIN_BBOX, area_def_regular, mb, rm
 from fonti import era5, eumetsat as eu, imerg, itdpc, opera
 
 WORKER = 3
@@ -135,16 +135,25 @@ def precipitazione_imerg(t0, t1, lavoro: Path) -> tuple:
     return ds, {"n": len(tempi), "MB_scaricati": round(peso, 1)}
 
 
-def radar_italia(t0, t1) -> tuple:
-    ds = itdpc.apri()
-    sub = itdpc.ritaglio(ds, slice(np.datetime64(t0), np.datetime64(t1 - timedelta(seconds=1))),
-                         TEST_BBOXES["lazio"]).load()
-    out = sub.rename("pioggia").to_dataset()
-    return out, {"n": int(sub.sizes["time"])}
+def radar_italia(t0, t1, area) -> tuple:
+    """IT-DPC-SRI (OPERA non copre l'Italia) sulla griglia comune: pioggia massima e media per cella."""
+    import xarray as xr
+    lons, lats = area.get_lonlats()
+    tempi, mx, media = itdpc.su_griglia(itdpc.apri(), t0, t1, lats[:, 0], lons[0])
+    if mx is None:
+        raise FileNotFoundError(f"IT-DPC-SRI senza dati fra {t0} e {t1}")
+    mx, media = np.minimum(mx, 300.0), np.minimum(media, 300.0)          # codifica int16 ×0,01: tetto 327 mm/h
+    ds = xr.Dataset({"pioggia_max": (("time", "lat", "lon"), mx), "pioggia_media": (("time", "lat", "lon"), media)},
+                    coords={"time": tempi, "lat": lats[:, 0], "lon": lons[0]})
+    ds.attrs = {"fonte": "IT-DPC-SRI (EWC S3)", "unita": "mm/h", "nota": "max e media dei pixel ~1 km per cella; NaN fuori copertura"}
+    return ds, {"n": len(tempi)}
 
 
-def costruisci(fid: str, t0: datetime, t1: datetime, lazio: bool = False, sensore: str | None = None) -> Path:
-    """Scrive data/staging/<fid>/ con satellite, radar, ambiente, imerg, [fulmini], [itdpc], meta.json."""
+FINE_ITDPC = datetime(2026, 1, 1)       # IT-DPC-SRI v0.1.0 arriva a fine 2025
+
+
+def costruisci(fid: str, t0: datetime, t1: datetime, sensore: str | None = None) -> Path:
+    """Scrive data/staging/<fid>/ con satellite, radar, radar_italia, ambiente, imerg, [fulmini], meta.json."""
     ar.controlla_budget(ar.STIMA_FINESTRA_GB + 0.5 * WORKER, hf=False)   # finestra + grezzi in volo
     sensore = sensore or ("fci" if t0 >= INIZIO_FCI else "seviri")
     out = ar.STAGING / fid
@@ -153,7 +162,7 @@ def costruisci(fid: str, t0: datetime, t1: datetime, lazio: bool = False, sensor
     area = area_def_regular(DOMAIN_BBOX, 0.05)
     tok = eu.token()
     meta = {"id": fid, "inizio": t0.isoformat(), "fine": t1.isoformat(), "satellite": sensore,
-            "griglia": "EPSG:4326 0,05°", "bbox": DOMAIN_BBOX, "lazio": lazio, "misure": {}, "file": {}, "errori": {}}
+            "griglia": "EPSG:4326 0,05°", "bbox": DOMAIN_BBOX, "misure": {}, "file": {}, "errori": {}}
 
     passi = [("satellite", lambda: satellite(t0, t1, area, lavoro, sensore, tok), {"IR_108": "Tb", "WV_062": "Tb",
               "WV_073": "Tb", "ir_105": "Tb", "wv_63": "Tb", "wv_73": "Tb"}),
@@ -163,8 +172,8 @@ def costruisci(fid: str, t0: datetime, t1: datetime, lazio: bool = False, sensor
         passi.append(("imerg", lambda: precipitazione_imerg(t0, t1, lavoro), {}))
     if t0 >= INIZIO_LI:
         passi.append(("fulmini", lambda: fulmini(t0, t1, area, lavoro, tok), {}))
-    if lazio:
-        passi.append(("itdpc", lambda: radar_italia(t0, t1), {}))
+    if t0 < FINE_ITDPC:
+        passi.append(("radar_italia", lambda: radar_italia(t0, t1, area), {"pioggia_max": "dBZ", "pioggia_media": "dBZ"}))
 
     for nome, fn, tipo in passi:
         t_start = time.perf_counter()
@@ -190,11 +199,10 @@ def main():
     ap.add_argument("--id", required=True)
     ap.add_argument("--inizio", required=True, type=datetime.fromisoformat)
     ap.add_argument("--fine", required=True, type=datetime.fromisoformat)
-    ap.add_argument("--lazio", action="store_true")
     ap.add_argument("--sensore", choices=["seviri", "fci"])
     ap.add_argument("--carica", action="store_true", help="carica su HF e cancella dal Mac")
     a = ap.parse_args()
-    d = costruisci(a.id, a.inizio, a.fine, a.lazio, a.sensore)
+    d = costruisci(a.id, a.inizio, a.fine, a.sensore)
     if a.carica:
         print(ar.carica_finestra(d))
 
