@@ -34,6 +34,8 @@ from catalogo import libera, prenota
 
 ORDINE = ar.DATA / "finestre_ordine.parquet"
 TENTATIVI = 2
+LIMITE_GB = 90.0               # ci si ferma a ~90 GB su HF (~1000 finestre): prima la curva di apprendimento,
+                               # poi si decide se le altre ~600 aggiungono valore (decisione del 19/10/2026)
 # eventi documentati usati per scegliere la rosa (selezione.py): le loro finestre vanno per prime
 EVENTI = ["2017-09-10", "2018-08-20", "2018-09-28", "2019-07-10", "2019-09-12", "2021-10-25", "2022-08-18",
           "2022-09-15", "2023-07-19", "2023-07-21", "2023-07-24", "2023-08-04", "2023-09-05", "2023-09-10",
@@ -112,6 +114,10 @@ def main():
             ar.attendi_parcheggio()
         except ar.BudgetSuperato as e:
             print(f"STOP, budget HF: {e}", flush=True)
+            break
+        occupati = ar.gb_registro(ar.registro()) + ar.gb_parcheggio()
+        if occupati >= LIMITE_GB:
+            print(f"STOP: {occupati:.1f} GB su HF + parcheggio, limite di questa fase {LIMITE_GB} GB", flush=True)
             break
         if r.id in ar.registro()["finestre"] or ("finestre", r.id) in ar.parcheggiati("finestre"):
             continue
