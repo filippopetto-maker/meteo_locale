@@ -52,7 +52,11 @@ def _punteggio(riep: pd.DataFrame) -> pd.Series:
     return g.conv.sum() + 200 * g.f55.sum() + 200 * g.f50.sum()
 
 
-def ordine() -> pd.DataFrame:
+QUOTE = {"positiva": 770, "negativa": 400, "casuale": 160}   # entro ~90 GB (decisione del 19/10/2026)
+
+
+def _positive() -> pd.DataFrame:
+    """Rosa ERA5 e rosa radar alternate 3:1, ciascuna per percentile della convezione osservata nell'anno."""
     righe = []
     for rosa, riep in (("era5", "riepilogo_rosa"), ("radar", "riepilogo_radar")):
         sel = pd.read_parquet(ar.DATA / f"{'rosa_larga' if rosa == 'era5' else 'rosa_radar'}.parquet")
@@ -69,12 +73,32 @@ def ordine() -> pd.DataFrame:
                 out.append(era5.iloc[i]); i += 1
         if j < len(radar):
             out.append(radar.iloc[j]); j += 1
-    df = pd.DataFrame(out).drop_duplicates("id").reset_index(drop=True)
+    return pd.DataFrame(out).assign(componente="positiva")
+
+
+def ordine() -> pd.DataFrame:
+    """Positive, negative (planning: 1 ogni 2 positive) e casuali (valutazione 'giorno qualsiasi')
+    mescolate in proporzione alle QUOTE: la k-esima di una componente va alla posizione relativa
+    k/quota, così anche un arresto anticipato rispetta i rapporti. In testa le finestre degli eventi."""
+    pos = _positive()
+    neg = pd.read_parquet(ar.DATA / "rosa_negativa.parquet")
+    neg["priorita"] = neg.groupby(neg.inizio.dt.year).n_negativi_oss.rank(pct=True)
+    neg = neg.sort_values(["priorita", "n_negativi_oss"], ascending=False).assign(componente="negativa")
+    cas = pd.read_parquet(ar.DATA / "casuali.parquet")
+    cas = cas.sample(frac=1, random_state=1).assign(componente="casuale", priorita=0.0)   # ordine casuale
+    parti = []
+    for comp, df in (("positiva", pos), ("negativa", neg), ("casuale", cas)):
+        df = df[["id", "inizio", "fine", "insieme", "satellite", "rosa", "priorita", "componente"]].reset_index(drop=True)
+        df["chiave"] = (np.arange(len(df)) + 0.5) / QUOTE[comp]
+        parti.append(df)
+    df = pd.concat(parti).sort_values("chiave", kind="stable")
+    df = df.drop_duplicates("id").reset_index(drop=True)          # una casuale può coincidere con un'altra finestra
     giorni = [pd.Timestamp(d) for d in EVENTI]
-    evento = df.apply(lambda r: any(r.inizio < g + pd.Timedelta("1D") and r.fine > g for g in giorni), axis=1)
+    evento = df.apply(lambda r: r.componente == "positiva" and
+                      any(r.inizio < g + pd.Timedelta("1D") and r.fine > g for g in giorni), axis=1)
     df = pd.concat([df[evento], df[~evento]], ignore_index=True)
     df["posizione"] = np.arange(len(df))
-    return df
+    return df.drop(columns="chiave")
 
 
 def costruisci_e_carica(r, via: str) -> str:
@@ -87,6 +111,7 @@ def costruisci_e_carica(r, via: str) -> str:
         raise RuntimeError(f"mancano {mancano}: {meta['errori']}")
     file = {f"finestre/{r.id}/{f.name}": f for f in sorted(d.iterdir()) if f.is_file()}
     voce = {"inizio": meta["inizio"], "fine": meta["fine"], "satellite": meta["satellite"], "rosa": r.rosa,
+            "componente": r.componente,
             "insieme": r.insieme, "priorita": float(r.priorita), "via": via,
             "sorgenti": sorted(meta["file"]), "errori": meta["errori"]}
     esito = ar.carica_o_parcheggia("finestre", r.id, file, voce)
@@ -127,7 +152,7 @@ def main():
         try:
             esito = costruisci_e_carica(r, a.via)
             n += 1
-            print(f"{r.id} [{r.rosa}, pos {r.posizione}]: {esito} in {(time.perf_counter() - t) / 60:.1f} min "
+            print(f"{r.id} [{r.componente}/{r.rosa}, pos {r.posizione}]: {esito} in {(time.perf_counter() - t) / 60:.1f} min "
                   f"(sessione: {n})", flush=True)
         except ar.BudgetSuperato as e:
             print(f"STOP, budget HF: {e}", flush=True)
