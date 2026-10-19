@@ -111,6 +111,7 @@ def costruisci_e_carica(r, via: str) -> str:
         raise RuntimeError(f"mancano {mancano}: {meta['errori']}")
     file = {f"finestre/{r.id}/{f.name}": f for f in sorted(d.iterdir()) if f.is_file()}
     voce = {"inizio": meta["inizio"], "fine": meta["fine"], "satellite": meta["satellite"], "rosa": r.rosa,
+            "ambiente_ml": "ambiente" in meta["file"],
             "componente": r.componente,
             "insieme": r.insieme, "priorita": float(r.priorita), "via": via,
             "sorgenti": sorted(meta["file"]), "errori": meta["errori"]}
@@ -119,11 +120,64 @@ def costruisci_e_carica(r, via: str) -> str:
     return esito
 
 
+def completa_ambiente(ogni: int = 10) -> int:
+    """Finestre caricate prima del 20/10/2026: si rifà ambiente.nc con superficie, pressione al livello
+    del mare e ML-CAPE/CIN dai profili completi (stessa funzione e stessa fonte CDS delle nuove) e si
+    sostituisce su HF, un commit ogni `ogni` finestre. Ritorna quante ne ha completate."""
+    from huggingface_hub import CommitOperationAdd
+    from fonti import era5
+    a = ar.api()
+    rid = ar.assicura_repo(a)
+    da_fare = [k for k, v in ar.registro(a)["finestre"].items() if not v.get("ambiente_ml")]
+    print(f"ambiente da completare: {len(da_fare)} finestre", flush=True)
+    fatte, lotto = 0, {}
+
+    def commit(lotto):
+        ops = [CommitOperationAdd(path_in_repo=f"finestre/{k}/ambiente.nc", path_or_fileobj=str(f)) for k, f in lotto.items()]
+
+        def modifica(reg):
+            for k, f in lotto.items():
+                v = reg["finestre"][k]
+                v["file"][f"finestre/{k}/ambiente.nc"] = f.stat().st_size
+                v["GB"] = round(sum(v["file"].values()) / 1e9, 4)
+                v["ambiente_ml"] = True
+        ar._commit_con_registro(a, rid, ops, modifica, f"ambiente con ML-CAPE per {len(lotto)} finestre")
+        for f in lotto.values():
+            shutil.rmtree(f.parent, ignore_errors=True)
+        print(f"caricati {len(lotto)} ambienti", flush=True)
+
+    for k in da_fare:
+        v = ar.registro(a)["finestre"][k]
+        t0, t1 = pd.Timestamp(v["inizio"]).to_pydatetime(), pd.Timestamp(v["fine"]).to_pydatetime()
+        d = ar.STAGING / f"ambiente_{k}"
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            ds, _ = era5.fetch_env(t0, t1, ar.DATA / "lavoro" / f"ambiente_{k}")
+            fi._salva(ds, d / "ambiente.nc", {})
+        except Exception as e:  # noqa: BLE001
+            print(f"{k}: ERRORE {e!r:.200}", flush=True)
+            continue
+        finally:
+            shutil.rmtree(ar.DATA / "lavoro" / f"ambiente_{k}", ignore_errors=True)
+        lotto[k] = d / "ambiente.nc"
+        fatte += 1
+        if len(lotto) >= ogni:
+            commit(lotto)
+            lotto = {}
+    if lotto:
+        commit(lotto)
+    return fatte
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--via", choices=["completo", "tailor"], default="completo")
     ap.add_argument("--max", type=int, default=None, help="al più N finestre in questa sessione")
+    ap.add_argument("--completa-ambiente", action="store_true", help="rifà ambiente.nc delle finestre già caricate")
     a = ap.parse_args()
+    if a.completa_ambiente:
+        print(f"fine: {completa_ambiente()} finestre completate", flush=True)
+        return
     if not ORDINE.exists():
         ordine().to_parquet(ORDINE, index=False)
 

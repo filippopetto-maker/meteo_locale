@@ -34,7 +34,9 @@ PRESSURE = "reanalysis-era5-pressure-levels"
 VAR_SINGLE = ["convective_available_potential_energy", "convective_inhibition", "k_index",
               "total_totals_index", "total_column_water_vapour", "zero_degree_level",
               "boundary_layer_height", "sea_surface_temperature", "convective_precipitation",
-              "10m_u_component_of_wind", "10m_v_component_of_wind"]
+              "10m_u_component_of_wind", "10m_v_component_of_wind",
+              # 20/10/2026: superficie per la ML-CAPE (e come canali) + pressione al livello del mare
+              "2m_temperature", "2m_dewpoint_temperature", "surface_pressure", "mean_sea_level_pressure"]
 VAR_PRESSURE = ["u_component_of_wind", "v_component_of_wind", "temperature", "relative_humidity"]
 LIVELLI = ["850", "700", "500", "300"]
 # campi fissi (una volta sola): quota del terreno e maschera terra/mare per la distanza dalla costa
@@ -106,9 +108,17 @@ def prepara_cin(ds):
     return ds
 
 
+def ml_cape_cin_ore(pl, sl) -> tuple:
+    """ML-CAPE/CIN (strato rimescolato 100 hPa) per ogni ora, dai profili completi di T e q su
+    LIVELLI_ML: la stessa funzione del catalogo (catalogo.ml_mese → indici.ml_cape_cin)."""
+    from catalogo import ml_mese
+    return ml_mese(pl, sl)
+
+
 def fetch_env(t0: datetime, t1: datetime, lavoro: Path, bb: dict = DOMAIN_BBOX, quiet: bool = True):
-    """Ambiente orario da t0 a t1 compresi (ore intere) per un evento: single + pressure levels.
-    Una coppia di richieste per giorno toccato. Ritorna (Dataset, MB scaricati)."""
+    """Ambiente orario da t0 a t1 compresi (ore intere) per un evento: single + pressure levels, più
+    ML-CAPE e ML-CIN calcolate dai profili completi (T e q su 23 livelli, che non si salvano).
+    Tre richieste per giorno toccato. Ritorna (Dataset, MB scaricati)."""
     import xarray as xr
     ore_per_giorno: dict[datetime, list[int]] = {}
     t = t0.replace(minute=0, second=0, microsecond=0)
@@ -119,9 +129,18 @@ def fetch_env(t0: datetime, t1: datetime, lavoro: Path, bb: dict = DOMAIN_BBOX, 
     for g, ore in ore_per_giorno.items():
         s, p1 = richiesta(SINGLE, VAR_SINGLE, g, ore, lavoro, bb, quiet=quiet)
         p, p2 = richiesta(PRESSURE, VAR_PRESSURE, g, ore, lavoro, bb, livelli=LIVELLI, quiet=quiet)
-        peso += p1 + p2
-        parti.append(xr.merge([s, p], compat="override"))
+        prof, p3 = richiesta(PRESSURE, ["temperature", "specific_humidity"], g, ore, lavoro, bb,
+                             livelli=LIVELLI_ML, quiet=quiet)
+        peso += p1 + p2 + p3
+        mlcape, mlcin = ml_cape_cin_ore(prof, s)
+        ml = xr.Dataset({"mlcape": (("time", "latitude", "longitude"), mlcape),
+                         "mlcin": (("time", "latitude", "longitude"), mlcin)},
+                        coords={"time": prof.time.values, "latitude": prof.latitude.values,
+                                "longitude": prof.longitude.values})
+        parti.append(xr.merge([s, p, ml], compat="override"))
     ds = xr.concat(parti, dim="time") if len(parti) > 1 else parti[0]
+    ds["mlcape"].attrs = {"units": "J kg-1", "long_name": "CAPE strato rimescolato 100 hPa (indici.ml_cape_cin, 23 livelli)"}
+    ds["mlcin"].attrs = {"units": "J kg-1", "long_name": "CIN strato rimescolato 100 hPa (≤ 0)"}
     return prepara_cin(ds), peso
 
 
