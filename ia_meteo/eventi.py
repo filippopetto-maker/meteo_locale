@@ -170,7 +170,12 @@ def costruisci() -> pd.DataFrame:
 
 
 def carica_su_hf(df: pd.DataFrame) -> str:
-    return ar.carica_o_parcheggia("conferme", "eventi", {"conferme/eventi.parquet": FILE},
+    """Carica una copia: il parcheggio di archivio sposta e poi cancella i file che riceve."""
+    import shutil
+    copia = ar.STAGING / "eventi" / "eventi.parquet"
+    copia.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(FILE, copia)
+    return ar.carica_o_parcheggia("conferme", "eventi", {"conferme/eventi.parquet": copia},
                                   {"righe": len(df), "regimi": df.regime.value_counts().to_dict()})
 
 
