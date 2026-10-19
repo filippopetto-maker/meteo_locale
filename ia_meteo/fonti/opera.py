@@ -16,6 +16,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import threading
+
 import numpy as np
 import requests
 
@@ -112,9 +114,52 @@ def copertura(o: dict, bboxes: dict, passo: int = 4) -> dict:
     return out
 
 
+_INDICI: dict = {}             # geometria del composito → indici di aggregazione (si calcolano una volta)
+_MAX_INDICI = 4
+_LUCCHETTO = threading.Lock()
+
+
+def _indici_griglia(o: dict, area):
+    """Per ogni pixel del composito, la cella della griglia comune (come BucketResampler), ordinati
+    per cella: (pixel validi in ordine, inizio di ogni cella in quell'ordine, celle). Il calcolo
+    da lon/lat costa qualche GB sui compositi a 1 km: si fa una volta per geometria."""
+    w = o["where"]
+    chiave = (w["projdef"], w["UL_lon"], w["UL_lat"], w["xscale"], w["yscale"], o["raw"].shape, area.area_id, area.shape)
+    with _LUCCHETTO:
+        if chiave in _INDICI:
+            return _INDICI[chiave]
+        import dask.array as da
+        from pyresample.bucket import BucketResampler
+        lon, lat = lonlat(o)
+        br = BucketResampler(area, da.from_array(lon), da.from_array(lat))   # stessi indici della versione precedente
+        idx = np.asarray(br.idxs.compute()).ravel()
+        del lon, lat, br
+        pix = np.flatnonzero(idx >= 0)
+        cella = idx[pix].astype(np.int64)
+        del idx
+        ordine = np.argsort(cella, kind="stable")
+        pix, cella = pix[ordine], cella[ordine]
+        celle, inizi = np.unique(cella, return_index=True)
+        while len(_INDICI) >= _MAX_INDICI:
+            _INDICI.pop(next(iter(_INDICI)))
+        _INDICI[chiave] = (pix.astype(np.int64), inizi, celle)
+        return _INDICI[chiave]
+
+
 def su_griglia(o: dict, area) -> np.ndarray:
     """Riflettività massima per cella della griglia comune (max pooling, non media: i nuclei
     convettivi non vanno diluiti). NaN dove la cella è fuori copertura."""
+    pix, inizi, celle = _indici_griglia(o, area)
+    v = dbz(o).ravel()[pix]
+    v = np.where(np.isnan(v), -999.0, v).astype("float32")
+    out = np.full(area.shape[0] * area.shape[1], -999.0, dtype="float32")
+    out[celle] = np.maximum.reduceat(v, inizi)
+    out = out.reshape(area.shape)
+    return np.where(out <= -998, np.nan, out).astype("float32")
+
+
+def su_griglia_bucket(o: dict, area) -> np.ndarray:
+    """Versione precedente (BucketResampler di pyresample), tenuta per il confronto."""
     import dask.array as da
     from pyresample.bucket import BucketResampler
     v = dbz(o)
