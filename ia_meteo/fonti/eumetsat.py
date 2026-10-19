@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from common import DOMAIN_BBOX, env, mb
+from common import DOMAIN_BBOX, env, mb, rm
 
 SEVIRI = "EO:EUM:DAT:MSG:HRSEVIRI"
 FCI = "EO:EUM:DAT:0662"
@@ -120,6 +120,71 @@ def seviri_ritaglio(prodotto, area, lavoro: Path, canali=CANALI_SEVIRI, out: Pat
         z.unlink(missing_ok=True)
         natp.unlink(missing_ok=True)
     return _salva_ritaglio(ds, out), m
+
+
+# ---------------------------------------------------------------- SEVIRI via Data Tailor
+# Il Data Tailor ritaglia il dominio lato server (7 MB invece dei 185 MB dello zip). L'uscita è in
+# radianza, nella proiezione geostazionaria con una GeoTransform propria (pixel 2998,355 m, ellissoide
+# GRS80) leggermente diversa da quella di satpy (3000,403 m, a=6378169, b=6356583,8): i pixel sono però
+# esattamente quelli nativi. Si ricostruisce la geometria satpy (colonna del primo pixel = round(x/2998,355)−1,
+# riga = round(y/2997,815)) e si calibra in temperatura di brillanza con le costanti di satpy: prova
+# 19/10/2026 su slot 2016, 2017, 2018, 2019, 2024 (MSG3 e MSG4): differenza con .nat → satpy 0,0–0,005 K al 99°
+# percentile. Prima della correzione di geolocalizzazione EUMETSAT di dicembre 2017 i pixel sono spostati di
+# mezzo pixel (+0,5 colonne, −0,5 righe): senza correggerlo l'errore era 7–10 K sui bordi delle nubi.
+_FINE_VECCHIA_GEOLOC = datetime(2018, 1, 1)
+_VICINI = {}                                  # indici di ricampionamento per geometria (si calcolano una volta)
+_PASSO_SATPY = 3000.403165817
+_GEOS_SATPY = {"proj": "geos", "h": 35785831.0, "lon_0": 0.0, "a": 6378169.0, "b": 6356583.8, "units": "m"}
+_C1, _C2 = 1.19104273e-5, 1.43877523
+_SAT_MSG = {"MSG1": 321, "MSG2": 322, "MSG3": 323, "MSG4": 324}
+
+
+def _tb_seviri(radianza, canale: str, sat: int):
+    from satpy.readers.core.seviri import CALIB
+    c = CALIB[sat][canale]
+    with np.errstate(all="ignore"):
+        return (_C2 * c["VC"] / np.log1p(_C1 * c["VC"] ** 3 / radianza) - c["BETA"]) / c["ALPHA"]
+
+
+def seviri_tailor(prodotto, area, lavoro: Path, canali=CANALI_SEVIRI, tok=None, limite_s: int = 1800):
+    """Come seviri_ritaglio ma con il ritaglio fatto dal Data Tailor. Ritorna (Dataset, misure)."""
+    import xarray as xr
+    from pyresample import geometry, kd_tree
+    t0 = time.perf_counter()
+    r = tailor(prodotto, "HRSEVIRI", [DT_CANALI_SEVIRI[c] for c in canali], dest=lavoro, limite_s=limite_s, tok=tok)
+    if r.get("stato") != "DONE":
+        raise RuntimeError(f"Data Tailor {r.get('stato')}: {r.get('log', '')[-300:]}")
+    m = {"sec_tailor": r["secondi"], "MB_tailor": r["MB_output"]}
+    f = r["file"][0]
+    with xr.open_dataset(f) as d:
+        nx, ny = d.sizes["x"], d.sizes["y"]
+        dx, dy = float(abs(d.x[1] - d.x[0])), float(abs(d.y[1] - d.y[0]))
+        sud_in_alto = bool(d.y[0] < d.y[-1])
+        vecchia = prodotto.sensing_start < _FINE_VECCHIA_GEOLOC
+        c0 = round(float(d.x.min()) / dx) - 1 + (0.5 if vecchia else 0.0)
+        r0 = round(float(d.y.max()) / dy) + (-0.5 if vecchia else 0.0)
+        chiave = (c0, r0, nx, ny, area.area_id, area.shape)
+        if chiave not in _VICINI:
+            x0, y1 = c0 * _PASSO_SATPY - _PASSO_SATPY / 2, r0 * _PASSO_SATPY + _PASSO_SATPY / 2
+            src = geometry.AreaDefinition("dt", "dt", "geos", _GEOS_SATPY, nx, ny,
+                                          (x0, y1 - _PASSO_SATPY * ny, x0 + _PASSO_SATPY * nx, y1))
+            _VICINI[chiave] = (src, kd_tree.get_neighbour_info(src, area, 10000, neighbours=1))
+        src, info = _VICINI[chiave]
+        sat = _SAT_MSG[str(prodotto)[:4]]
+        lons, lats = area.get_lonlats()
+        dati = {}
+        for c in canali:
+            a = d[DT_CANALI_SEVIRI[c]].values.astype("float64")
+            if sud_in_alto:
+                a = a[::-1]
+            v = kd_tree.get_sample_from_neighbour_info("nn", area.shape, _tb_seviri(a, c, sat), *info, fill_value=np.nan)
+            dati[c] = (("lat", "lon"), np.asarray(v, dtype="float32"))
+        t_nom = d.attrs.get("EPCT_start_sensing_time")
+    rm(f)
+    ds = xr.Dataset(dati, coords={"lat": lats[:, 0], "lon": lons[0]})
+    ds.attrs = {"start_time": t_nom, "units": "K", "fonte": SEVIRI, "prodotto": str(prodotto), "via": "Data Tailor"}
+    m["secondi"] = round(time.perf_counter() - t0, 1)
+    return ds, m
 
 
 # ---------------------------------------------------------------- FCI
