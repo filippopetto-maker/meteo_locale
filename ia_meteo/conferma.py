@@ -201,7 +201,7 @@ def artefatto_opera(f45, f55):
 
 def radar_convettivo(opera_cop, f45, itdpc_cop, f50, mlcape, f55=0.0):
     """Criterio radar calibrato sui fulmini (vale anche su array/Series)."""
-    eco = ((opera_cop >= COPERTURA_VISTA) & (f45 >= FRAZ45_CONV) & ~artefatto_opera(f45, f55)) | \
+    eco = ((opera_cop >= COPERTURA_VISTA) & (f45 >= FRAZ45_CONV) & np.logical_not(artefatto_opera(f45, f55))) | \
         ((itdpc_cop >= COPERTURA_VISTA) & (f50 >= FRAZ50_ITDPC_CONV))
     return eco & (mlcape >= MLCAPE_RADAR_CONV)
 
