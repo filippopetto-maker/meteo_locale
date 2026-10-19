@@ -133,6 +133,7 @@ def seviri_ritaglio(prodotto, area, lavoro: Path, canali=CANALI_SEVIRI, out: Pat
 # mezzo pixel (+0,5 colonne, −0,5 righe): senza correggerlo l'errore era 7–10 K sui bordi delle nubi.
 _FINE_VECCHIA_GEOLOC = datetime(2018, 1, 1)
 _VICINI = {}                                  # indici di ricampionamento per geometria (si calcolano una volta)
+_MAX_VICINI = 6                               # ~30 MB l'uno: senza tetto la cache cresceva a 18 GB (20/10/2026)
 _PASSO_SATPY = 3000.403165817
 _GEOS_SATPY = {"proj": "geos", "h": 35785831.0, "lon_0": 0.0, "a": 6378169.0, "b": 6356583.8, "units": "m"}
 _C1, _C2 = 1.19104273e-5, 1.43877523
@@ -164,11 +165,16 @@ def seviri_tailor(prodotto, area, lavoro: Path, canali=CANALI_SEVIRI, tok=None, 
         c0 = round(float(d.x.min()) / dx) - 1 + (0.5 if vecchia else 0.0)
         r0 = round(float(d.y.max()) / dy) + (-0.5 if vecchia else 0.0)
         chiave = (c0, r0, nx, ny, area.area_id, area.shape)
-        if chiave not in _VICINI:
+        if chiave in _VICINI:
+            _VICINI[chiave] = _VICINI.pop(chiave)             # più recente in coda
+        else:
+            while len(_VICINI) >= _MAX_VICINI:
+                _VICINI.pop(next(iter(_VICINI)))
             x0, y1 = c0 * _PASSO_SATPY - _PASSO_SATPY / 2, r0 * _PASSO_SATPY + _PASSO_SATPY / 2
             src = geometry.AreaDefinition("dt", "dt", "geos", _GEOS_SATPY, nx, ny,
                                           (x0, y1 - _PASSO_SATPY * ny, x0 + _PASSO_SATPY * nx, y1))
             _VICINI[chiave] = (src, kd_tree.get_neighbour_info(src, area, 10000, neighbours=1))
+            print(f"Data Tailor: nuova geometria {chiave[:4]} ({len(_VICINI)} in cache)", flush=True)
         src, info = _VICINI[chiave]
         sat = _SAT_MSG[str(prodotto)[:4]]
         lons, lats = area.get_lonlats()
