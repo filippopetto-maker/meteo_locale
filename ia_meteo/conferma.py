@@ -41,6 +41,13 @@ MMH_CONV = 10.0                # IT-DPC-SRI: intensità da cella convettiva
 MMH_FORTE = 50.0
 FRAZ_ITDPC_CONV = 0.002
 FLASH_CONV = 50.0              # flash×pixel nel periodo (LI)
+# Criterio radar calibrato sui fulmini LI (174 periodi 2024–2025, 2838 riquadri coperti, 19/10/2026):
+# eco ≥ 45 dBZ su ≥ 0,1% dell'area coperta (o IT-DPC-SRI ≥ 50 mm/h su ≥ 0,025%) e ML-CAPE p90 ≥ 100
+# nel riquadro → precisione 0,93, richiamo 0,77. Il vecchio (≥ 35 dBZ su 0,2%) aveva precisione 0,75:
+# scambiava per temporali le piogge frontali con eco forte (banda di fusione), quasi tutte con CAPE ~ 0.
+FRAZ45_CONV = 0.001
+FRAZ50_ITDPC_CONV = 0.00025
+MLCAPE_RADAR_CONV = 100.0
 COPERTURA_MIN = 0.5            # per dichiarare un riquadro pulito (OPERA + IT-DPC-SRI)
 COPERTURA_VISTA = 0.05         # basta che il radar veda una parte del riquadro per confermare la convezione
 INIZIO_LI = datetime(2024, 7, 4)
@@ -186,11 +193,25 @@ def stat_li(t0, t1, lavoro, tok, flussi=FLUSSI_LI):
     return {"li_flash": np.sum(parti, axis=0) if parti else np.zeros(n)}
 
 
+def artefatto_opera(f45, f55):
+    """Blocchi di eco quasi tutta ≥ 55 dBZ: nei temporali veri ≥ 55 è ~10% di ≥ 45 (99° percentile 47%).
+    95 casi su 56 mila riquadri con eco, 64 nel 2023 fra Sud Italia e Balcani."""
+    return (f45 >= 0.005) & (f55 >= 0.6 * f45)
+
+
+def radar_convettivo(opera_cop, f45, itdpc_cop, f50, mlcape, f55=0.0):
+    """Criterio radar calibrato sui fulmini (vale anche su array/Series)."""
+    eco = ((opera_cop >= COPERTURA_VISTA) & (f45 >= FRAZ45_CONV) & ~artefatto_opera(f45, f55)) | \
+        ((itdpc_cop >= COPERTURA_VISTA) & (f50 >= FRAZ50_ITDPC_CONV))
+    return eco & (mlcape >= MLCAPE_RADAR_CONV)
+
+
 def etichetta(r) -> str:
     """La convezione vista nella parte coperta basta a confermarla; per dichiarare un riquadro
-    pulito serve invece copertura sufficiente (OPERA + IT-DPC-SRI insieme) o i fulmini LI."""
-    oss_conv = ((r.opera_copertura >= COPERTURA_VISTA) & (r.opera_frac35 >= FRAZ_ECO_CONV)) \
-        or ((r.itdpc_copertura >= COPERTURA_VISTA) & (r.itdpc_frac10 >= FRAZ_ITDPC_CONV)) \
+    pulito serve invece copertura sufficiente (OPERA + IT-DPC-SRI insieme) o i fulmini LI.
+    Serve la colonna `mlcape` (ML-CAPE p90 massimo del riquadro nel periodo, da `aggiungi_mlcape`)."""
+    oss_conv = bool(radar_convettivo(r.opera_copertura, r.opera_frac45, r.itdpc_copertura,
+                                     getattr(r, "itdpc_frac50", 0.0), r.mlcape, getattr(r, "opera_frac55", 0.0))) \
         or (r.li_flash >= FLASH_CONV)
     osservabile = min(r.opera_copertura + r.itdpc_copertura, 1.0) >= COPERTURA_MIN or r.li_disponibile
     if oss_conv:
@@ -216,7 +237,48 @@ def conferma_periodo(pid, t0, t1, conv, neg, geo, ds_it, idx_it, tok) -> pd.Data
     df["li_disponibile"] = li
     df["era5_convettivo"] = df.riquadro.isin(conv)
     df["era5_negativo"] = df.riquadro.isin(neg)
+    df["etichetta"] = ""                     # l'etichetta definitiva si dà in `riepilogo`, con la ML-CAPE
+    return df
+
+
+def aggiungi_mlcape(df: pd.DataFrame, cand: pd.DataFrame) -> pd.DataFrame:
+    """ML-CAPE p90 massima del riquadro fra 3 h prima dell'inizio e la fine del periodo (catalogo)."""
+    inizio = pd.to_datetime(df.periodo.str.slice(0, 11), format="%Y%m%d_%H")
+    df = df.assign(_t0=inizio - pd.Timedelta(hours=3), _t1=inizio + pd.Timedelta(hours=12))
+    c = cand[["time", "riquadro", "mlcape_p90"]]
+    out = []
+    for (t0, t1), g in df.groupby(["_t0", "_t1"]):
+        m = c[(c.time >= t0) & (c.time < t1)].groupby("riquadro").mlcape_p90.max()
+        out.append(g.riquadro.map(m))
+    df["mlcape"] = pd.concat(out).reindex(df.index).fillna(0.0)
+    return df.drop(columns=["_t0", "_t1"])
+
+
+def leggi_conferme(ids) -> pd.DataFrame:
+    from huggingface_hub import snapshot_download
+    a = ar.api()
+    snapshot_download(ar.repo_id(a), repo_type="dataset", local_dir=ar.CACHE,
+                      allow_patterns=[f"conferme/{i}.parquet" for i in ids])
+    return pd.concat([pd.read_parquet(ar.CACHE / "conferme" / f"{i}.parquet") for i in ids], ignore_index=True)
+
+
+def riepilogo(ids, nome: str) -> pd.DataFrame:
+    """Rilegge le conferme di `ids`, aggiunge la ML-CAPE, rietichetta con il criterio calibrato e
+    carica la tabella unica su HF (conferme/<nome>)."""
+    import selezione as se
+    df = aggiungi_mlcape(leggi_conferme(ids), se.carica_candidati())
+    for c in ("itdpc_frac50", "opera_frac55"):
+        if c not in df:
+            df[c] = 0.0
     df["etichetta"] = df.apply(etichetta, axis=1)
+    f = ar.STAGING / "conferme" / f"{nome}.parquet"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(f, index=False)
+    import shutil
+    shutil.copy(f, ar.DATA / f"{nome}.parquet")
+    ar.carica_o_parcheggia("conferme", nome, {f"conferme/{f.name}": f},
+                           {"periodi": int(df.periodo.nunique()), "etichette": df.etichetta.value_counts().to_dict()})
+    ar.svuota_parcheggio(forza=True)
     return df
 
 
@@ -287,12 +349,7 @@ def conferma(periodi: pd.DataFrame, raccogli: bool = True) -> pd.DataFrame | Non
         _in_coda(da_fare, uno, lambda p: p.id)
     if not raccogli:
         return None
-    out = []
-    for _, p in periodi.iterrows():
-        df = pd.read_parquet(ar.scarica("conferme", p.id)[0])
-        df["etichetta"] = df.apply(etichetta, axis=1)          # regole aggiornate senza riscaricare il radar
-        out.append(df)
-    return pd.concat(out, ignore_index=True)
+    return riepilogo(list(periodi.id), "riepilogo_" + raccogli) if isinstance(raccogli, str) else None
 
 
 # ---------------------------------------------------------------- scansione radar di tutti i periodi
@@ -361,7 +418,19 @@ def main():
     ap.add_argument("--da", default="2015-04")
     ap.add_argument("--a", default="2025-11")
     ap.add_argument("--al-contrario", action="store_true")
+    ap.add_argument("--riepilogo", action="store_true", help="rietichetta la rosa (criterio calibrato) e la carica unita")
+    ap.add_argument("--rosa-radar", action="store_true", help="usa data/rosa_radar.parquet (selezione.py --rosa-radar)")
     a = ap.parse_args()
+    nome = "rosa_radar" if a.rosa_radar else "rosa_larga"
+    if a.riepilogo:
+        df = riepilogo(list(pd.read_parquet(ar.DATA / f"{nome}.parquet").id),
+                       "riepilogo_radar" if a.rosa_radar else "riepilogo_rosa")
+        print(df.etichetta.value_counts().to_string())
+        return
+    if a.rosa_radar:
+        conferma(pd.read_parquet(ar.DATA / "rosa_radar.parquet"), raccogli=False)
+        print("conferma finita", flush=True)
+        return
     if a.scansione:
         m = list(elenco_mesi(a.da, a.a))
         scansione(m[::-1] if a.al_contrario else m)

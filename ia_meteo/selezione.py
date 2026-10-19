@@ -144,7 +144,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=300)
     ap.add_argument("--rosa", action="store_true", help=f"rosa larga per la conferma ({N_ROSA}, {MAX_PER_MESE_ROSA}/mese)")
+    ap.add_argument("--rosa-radar", action="store_true", help="temporali mancati da ERA5, dalla scansione radar")
     a = ap.parse_args()
+    if a.rosa_radar:
+        sel = rosa_radar()
+        f = ar.DATA / "rosa_radar.parquet"
+        sel.to_parquet(f, index=False)
+        print(f"{len(sel)} periodi → {f}")
+        print(sel.groupby("insieme").size().to_dict(), sel.groupby(sel.inizio.dt.month).size().to_dict())
+        return
     df = classifica(carica_candidati())
     per = periodi(df)
     sel = scegli(per, N_ROSA, MAX_PER_MESE_ROSA) if a.rosa else scegli(per, a.n)
@@ -153,6 +161,85 @@ def main():
     sel.to_parquet(f, index=False)
     print(f"{df.time.dt.strftime('%Y-%m').nunique()} mesi, {len(per)} periodi da 12 h valutati, {len(sel)} scelti → {f}")
     print(sel[["id", "insieme", "satellite", "n_conv", "n_neg", "punteggio"]].to_string(index=False))
+
+
+
+# ---------------------------------------------------------------- rosa radar (temporali mancati da ERA5)
+N_ROSA_RADAR = 400
+MAX_PER_MESE_RADAR = 8
+
+
+def carica_scansione() -> pd.DataFrame:
+    """Scansione radar ogni 3 h di tutti i mesi (conferma.py --scansione), da HF."""
+    from huggingface_hub import snapshot_download
+    a = ar.api()
+    chiavi = [k for k in ar.registro(a)["conferme"] if k.startswith("scansione_")]
+    snapshot_download(ar.repo_id(a), repo_type="dataset", local_dir=ar.CACHE,
+                      allow_patterns=[f"conferme/{k}.parquet" for k in chiavi])
+    return pd.concat([pd.read_parquet(ar.CACHE / "conferme" / f"{k}.parquet") for k in sorted(chiavi)],
+                     ignore_index=True)
+
+
+def mancati_radar(scan: pd.DataFrame, cand: pd.DataFrame) -> pd.DataFrame:
+    """Riquadri-istante con convezione per il radar (criterio calibrato sui fulmini) che ERA5 non
+    classifica convettivi. ML-CAPE: massimo fra l'istante e quelli a ±3 h."""
+    import conferma as co
+    d = scan.merge(cand[["time", "riquadro", "convettivo", "mlcape_p90"]], on=["time", "riquadro"], how="left")
+    d = d.sort_values(["riquadro", "time"])
+    g = d.groupby("riquadro").mlcape_p90
+    d["mlcape"] = pd.concat([g.shift(1), d.mlcape_p90, g.shift(-1)], axis=1).max(axis=1).fillna(0)
+    d["radar_conv"] = co.radar_convettivo(d.opera_copertura, d.opera_frac45, d.itdpc_copertura.fillna(0),
+                                          d.itdpc_frac50.fillna(0), d.mlcape, d.opera_frac55)
+    m = d[d.radar_conv & ~d.convettivo.fillna(False).astype(bool)].copy()
+    # intensità osservata: area con eco forte, con più peso a grandine (≥ 55 dBZ) e ≥ 50 mm/h
+    f45 = m.opera_frac45.where(~co.artefatto_opera(m.opera_frac45, m.opera_frac55), 0.0)
+    f55 = m.opera_frac55.where(~co.artefatto_opera(m.opera_frac45, m.opera_frac55), 0.0)
+    m["intensita_radar"] = f45 + 3 * f55 + 4 * m.itdpc_frac50.fillna(0)
+    return m
+
+
+def rosa_radar(n=N_ROSA_RADAR, max_mese=MAX_PER_MESE_RADAR) -> pd.DataFrame:
+    """Periodi da 12 h con i temporali mancati da ERA5 più intensi, fuori dalle finestre della rosa
+    larga e senza sovrapposizioni, al più `max_mese` per mese, pesando le zone rare."""
+    cand = classifica(carica_candidati())
+    m = mancati_radar(carica_scansione(), cand)
+    rosa = pd.read_parquet(ar.DATA / "rosa_larga.parquet")
+    passi = DURATA_H // 3
+    occupati = {t + pd.Timedelta(hours=3 * k) for t in rosa.inizio for k in range(passi)}
+    freq = m.riquadro.value_counts()
+    peso = np.sqrt(freq.median() / freq)
+    m["v"] = m.intensita_radar / m.intensita_radar.median() * m.riquadro.map(peso)
+    per_t = m.groupby(["time", "riquadro"]).v.max().unstack(fill_value=0.0).sort_index()
+    tempi = pd.DatetimeIndex(sorted(cand.time.unique()))
+    per_t = per_t.reindex(tempi, fill_value=0.0)
+    # punteggio di un periodo: somma sui riquadri del massimo nelle 4 istanti
+    mx = per_t.rolling(passi).max().shift(-(passi - 1))
+    punteggio = mx.sum(axis=1)
+    validi = [t for t in tempi if (t + pd.Timedelta(hours=DURATA_H - 3)) in per_t.index
+              and punteggio.get(t, 0) > 0]
+    cand_per = periodi(cand).set_index("inizio")
+    scelti, per_mese = [], {}
+    for t in sorted(validi, key=lambda x: -punteggio[x]):
+        mese = t.strftime("%Y-%m")
+        slot = [t + pd.Timedelta(hours=3 * k) for k in range(passi)]
+        if per_mese.get(mese, 0) >= max_mese or any(x in occupati for x in slot) or t not in cand_per.index:
+            continue
+        r = cand_per.loc[t]
+        riq = mx.loc[t]
+        scelti.append({"inizio": t, "fine": t + pd.Timedelta(hours=DURATA_H), "punteggio_radar": float(punteggio[t]),
+                       "riquadri_mancati": sorted(riq[riq > 0].index), "n_mancati": int((riq > 0).sum()),
+                       "riquadri_convettivi": r.riquadri_convettivi, "riquadri_negativi": r.riquadri_negativi,
+                       "n_conv": r.n_conv, "n_neg": r.n_neg})
+        occupati.update(slot)
+        per_mese[mese] = per_mese.get(mese, 0) + 1
+        if len(scelti) >= n:
+            break
+    out = pd.DataFrame(scelti).sort_values("inizio").reset_index(drop=True)
+    out["id"] = out.inizio.dt.strftime("%Y%m%d_%H")
+    out["insieme"] = [insieme(t.year) for t in out.inizio]
+    out["satellite"] = np.where(out.inizio >= pd.Timestamp("2025-01-01"), "fci", "seviri")
+    out["rosa"] = "radar"
+    return out
 
 
 if __name__ == "__main__":
