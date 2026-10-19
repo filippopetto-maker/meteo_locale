@@ -103,9 +103,13 @@ def radar(t0, t1, area, lavoro: Path) -> tuple:
 def fulmini(t0, t1, area, lavoro: Path, tok) -> tuple:
     import xarray as xr
     lons, lats = area.get_lonlats()
-    frames, tempi, peso = [], [], 0.0
+    frames, tempi, peso, parziali = [], [], 0.0, 0
     for p in eu.cerca(eu.LI_AF, t0, t1, tok):
-        f = eu.scarica(p, lavoro, eu.li_body(p))
+        corpo = eu.li_body(p)
+        if corpo is None:                       # prodotto parziale senza dati: l'istante resta mancante
+            parziali += 1
+            continue
+        f = eu.scarica(p, lavoro, corpo)
         peso += mb(f)
         la, lo, w, _ = eu.li_flash(f)
         rm(f)
@@ -113,7 +117,7 @@ def fulmini(t0, t1, area, lavoro: Path, tok) -> tuple:
         tempi.append(p.sensing_start)
     ds = _impila(frames, tempi, lats[:, 0], lons[0])
     ds.attrs = {"fonte": eu.LI_AF, "unita": "flash×pixel per 10 min"}
-    return ds, {"n": len(tempi), "MB_scaricati": round(peso, 1)}
+    return ds, {"n": len(tempi), "parziali_saltati": parziali, "MB_scaricati": round(peso, 1)}
 
 
 def precipitazione_imerg(t0, t1, lavoro: Path) -> tuple:
