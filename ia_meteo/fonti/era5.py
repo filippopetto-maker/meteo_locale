@@ -41,6 +41,8 @@ VAR_PRESSURE = ["u_component_of_wind", "v_component_of_wind", "temperature", "re
 LIVELLI = ["850", "700", "500", "300"]
 # campi fissi (una volta sola): quota del terreno e maschera terra/mare per la distanza dalla costa
 VAR_FISSE = ["geopotential", "land_sea_mask"]
+ATTESA_CDS_S = 1200     # ambiente delle finestre: oltre 20 min di coda (o errore) si passa ad ARCO-ERA5
+RIPROVE_CDS = 4         # cdsapi di suo riprova 500 volte ogni 120 s: un guasto bloccherebbe per ore
 CIN_MANCANTE = 1000.0   # J/kg: soglia oltre la quale ERA5 non scrive la CIN
 # profili per la CAPE dello strato rimescolato (indici.ml_cape_cin): superficie + 23 livelli fino a 150 hPa
 VAR_SUPERFICIE_ML = ["2m_temperature", "2m_dewpoint_temperature", "surface_pressure"]
@@ -88,7 +90,7 @@ def richiesta(dataset: str, variabili: list[str], giorno: datetime, ore: list[in
     if livelli:
         req["pressure_level"] = livelli
     target = lavoro / f"{dataset}_{giorno:%Y%m%d}.nc"
-    cdsapi.Client(quiet=quiet, progress=False).retrieve(dataset, req, str(target))
+    cdsapi.Client(quiet=quiet, progress=False, retry_max=RIPROVE_CDS).retrieve(dataset, req, str(target))
     peso = mb(target)
     sub = lavoro / (target.stem + "_zip")
     try:
@@ -116,6 +118,48 @@ def ml_cape_cin_ore(pl, sl) -> tuple:
 
 
 def fetch_env(t0: datetime, t1: datetime, lavoro: Path, bb: dict = DOMAIN_BBOX, quiet: bool = True):
+    """Ambiente orario da t0 a t1 compresi: CDS, e se il CDS fallisce (coda, termini da riaccettare,
+    guasti) lo stesso ambiente da ARCO-ERA5. Ritorna (Dataset, MB scaricati); ds.attrs["fonte"]."""
+    from concurrent.futures import ThreadPoolExecutor
+    ex = ThreadPoolExecutor(1)
+    try:
+        ds, peso = ex.submit(fetch_env_cds, t0, t1, lavoro, bb, quiet).result(timeout=ATTESA_CDS_S)
+        ds.attrs["fonte"] = "ERA5 (Copernicus CDS)"
+    except Exception as e:  # noqa: BLE001  (anche TimeoutError: coda troppo lunga)
+        print(f"ambiente: CDS non disponibile ({e!r:.150}), uso ARCO-ERA5", flush=True)
+        ds, peso = fetch_env_arco(t0, t1, bb)
+        ds.attrs["fonte"] = "ERA5 (ARCO-ERA5, Google Cloud)"
+    finally:
+        ex.shutdown(wait=False)
+    return ds, peso
+
+
+def fetch_env_arco(t0: datetime, t1: datetime, bb: dict = DOMAIN_BBOX):
+    """Stesse variabili, ore, livelli e ML-CAPE di `fetch_env_cds`, da ARCO-ERA5 (senza coda; ~5,5 GB
+    di rete a finestra perché ogni blocco in quota è un'ora globale con 37 livelli). `r` non c'è in
+    ARCO: si calcola da T e q con la formula dell'IFS."""
+    from fonti import arco
+    tempi, t = [], t0.replace(minute=0, second=0, microsecond=0)
+    while t <= t1:
+        tempi.append(t)
+        t += timedelta(hours=1)
+    sl, g1 = arco.dataset(VAR_SINGLE, tempi, bb=bb)
+    pl, g2 = arco.dataset(["temperature", "specific_humidity", "u_component_of_wind", "v_component_of_wind"],
+                          tempi, livelli=LIVELLI_ML, bb=bb)
+    mlcape, mlcin = ml_cape_cin_ore(pl, sl)
+    p4 = pl.sel(pressure_level=[float(x) for x in LIVELLI])
+    p4 = p4.assign(r=arco.umidita_relativa(p4.t, p4.q, p4.pressure_level))[["u", "v", "t", "r", "q"]]
+    ds = sl.merge(p4)
+    ds["r"].attrs["nota"] = ("ricalcolata da T e q (formula IFS): senza scarto medio ma ±3,6% al 99° percentile "
+                             "rispetto alla r di ERA5, che l'IFS calcola nel post-processing; usare q")
+    ds["mlcape"] = (("time", "latitude", "longitude"), mlcape)
+    ds["mlcin"] = (("time", "latitude", "longitude"), mlcin)
+    ds["mlcape"].attrs = {"units": "J kg-1", "long_name": "CAPE strato rimescolato 100 hPa (indici.ml_cape_cin, 23 livelli)"}
+    ds["mlcin"].attrs = {"units": "J kg-1", "long_name": "CIN strato rimescolato 100 hPa (≤ 0)"}
+    return prepara_cin(ds), (g1 + g2) * 1e3
+
+
+def fetch_env_cds(t0: datetime, t1: datetime, lavoro: Path, bb: dict = DOMAIN_BBOX, quiet: bool = True):
     """Ambiente orario da t0 a t1 compresi (ore intere) per un evento: single + pressure levels, più
     ML-CAPE e ML-CIN calcolate dai profili completi (T e q su 23 livelli, che non si salvano).
     Tre richieste per giorno toccato. Ritorna (Dataset, MB scaricati)."""
@@ -137,7 +181,8 @@ def fetch_env(t0: datetime, t1: datetime, lavoro: Path, bb: dict = DOMAIN_BBOX, 
                          "mlcin": (("time", "latitude", "longitude"), mlcin)},
                         coords={"time": prof.time.values, "latitude": prof.latitude.values,
                                 "longitude": prof.longitude.values})
-        parti.append(xr.merge([s, p, ml], compat="override"))
+        q4 = prof[["q"]].sel(pressure_level=p.pressure_level.values)   # q ai 4 livelli: uguale CDS/ARCO, r no
+        parti.append(xr.merge([s, p, q4, ml], compat="override"))
     ds = xr.concat(parti, dim="time") if len(parti) > 1 else parti[0]
     ds["mlcape"].attrs = {"units": "J kg-1", "long_name": "CAPE strato rimescolato 100 hPa (indici.ml_cape_cin, 23 livelli)"}
     ds["mlcin"].attrs = {"units": "J kg-1", "long_name": "CIN strato rimescolato 100 hPa (≤ 0)"}

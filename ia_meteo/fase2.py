@@ -41,6 +41,7 @@ EVENTI = ["2017-09-10", "2018-08-20", "2018-09-28", "2019-07-10", "2019-09-12", 
           "2022-09-15", "2023-07-19", "2023-07-21", "2023-07-24", "2023-08-04", "2023-09-05", "2023-09-10",
           "2024-10-29"]
 ESSENZIALI = ("satellite", "radar")
+AMBIENTE_V = 2      # 2 = + t2m, d2m, sp, msl, q ai 4 livelli, ML-CAPE/CIN dai 23 livelli (20/10/2026)
 
 
 def _punteggio(riep: pd.DataFrame) -> pd.Series:
@@ -111,7 +112,7 @@ def costruisci_e_carica(r, via: str) -> str:
         raise RuntimeError(f"mancano {mancano}: {meta['errori']}")
     file = {f"finestre/{r.id}/{f.name}": f for f in sorted(d.iterdir()) if f.is_file()}
     voce = {"inizio": meta["inizio"], "fine": meta["fine"], "satellite": meta["satellite"], "rosa": r.rosa,
-            "ambiente_ml": "ambiente" in meta["file"],
+            "ambiente_v": AMBIENTE_V if _ambiente_v2(d / "ambiente.nc") else 0,
             "componente": r.componente,
             "insieme": r.insieme, "priorita": float(r.priorita), "via": via,
             "sorgenti": sorted(meta["file"]), "errori": meta["errori"]}
@@ -120,15 +121,27 @@ def costruisci_e_carica(r, via: str) -> str:
     return esito
 
 
+def _ambiente_v2(f) -> bool:
+    if not f.exists():
+        return False
+    try:
+        import xarray as xr
+        with xr.open_dataset(f) as ds:
+            return all(v in ds for v in ("mlcape", "mlcin", "msl", "t2m", "d2m", "sp", "q"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def completa_ambiente(ogni: int = 10) -> int:
     """Finestre caricate prima del 20/10/2026: si rifà ambiente.nc con superficie, pressione al livello
-    del mare e ML-CAPE/CIN dai profili completi (stessa funzione e stessa fonte CDS delle nuove) e si
-    sostituisce su HF, un commit ogni `ogni` finestre. Ritorna quante ne ha completate."""
+    del mare e ML-CAPE/CIN dai profili completi (stessa funzione e stesso percorso delle nuove) e si
+    sostituisce su HF, un commit ogni `ogni` finestre. Riprendibile: il registro segna `ambiente_v`
+    e i file rifatti ma non ancora caricati restano in staging e si riusano."""
     from huggingface_hub import CommitOperationAdd
     from fonti import era5
     a = ar.api()
     rid = ar.assicura_repo(a)
-    da_fare = [k for k, v in ar.registro(a)["finestre"].items() if not v.get("ambiente_ml")]
+    da_fare = [k for k, v in ar.registro(a)["finestre"].items() if v.get("ambiente_v") != AMBIENTE_V]
     print(f"ambiente da completare: {len(da_fare)} finestre", flush=True)
     fatte, lotto = 0, {}
 
@@ -140,7 +153,7 @@ def completa_ambiente(ogni: int = 10) -> int:
                 v = reg["finestre"][k]
                 v["file"][f"finestre/{k}/ambiente.nc"] = f.stat().st_size
                 v["GB"] = round(sum(v["file"].values()) / 1e9, 4)
-                v["ambiente_ml"] = True
+                v["ambiente_v"] = AMBIENTE_V
         ar._commit_con_registro(a, rid, ops, modifica, f"ambiente con ML-CAPE per {len(lotto)} finestre")
         for f in lotto.values():
             shutil.rmtree(f.parent, ignore_errors=True)
@@ -151,6 +164,10 @@ def completa_ambiente(ogni: int = 10) -> int:
         t0, t1 = pd.Timestamp(v["inizio"]).to_pydatetime(), pd.Timestamp(v["fine"]).to_pydatetime()
         d = ar.STAGING / f"ambiente_{k}"
         d.mkdir(parents=True, exist_ok=True)
+        if _ambiente_v2(d / "ambiente.nc"):          # già rifatto in una sessione interrotta prima del commit
+            lotto[k] = d / "ambiente.nc"
+            fatte += 1
+            continue
         try:
             ds, _ = era5.fetch_env(t0, t1, ar.DATA / "lavoro" / f"ambiente_{k}")
             fi._salva(ds, d / "ambiente.nc", {})

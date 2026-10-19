@@ -26,7 +26,11 @@ LIVELLI = np.array([1, 2, 3, 5, 7, 10, 20, 30, 50, 70, 100, 125, 150, 175, 200, 
 # nome ARCO → nome dei file CDS (così il resto del catalogo non cambia)
 NOMI = {"2m_temperature": "t2m", "2m_dewpoint_temperature": "d2m", "surface_pressure": "sp",
         "convective_available_potential_energy": "cape", "convective_inhibition": "cin",
-        "convective_precipitation": "cp", "temperature": "t", "specific_humidity": "q"}
+        "convective_precipitation": "cp", "temperature": "t", "specific_humidity": "q",
+        "k_index": "kx", "total_totals_index": "totalx", "total_column_water_vapour": "tcwv",
+        "zero_degree_level": "deg0l", "boundary_layer_height": "blh", "sea_surface_temperature": "sst",
+        "10m_u_component_of_wind": "u10", "10m_v_component_of_wind": "v10", "mean_sea_level_pressure": "msl",
+        "u_component_of_wind": "u", "v_component_of_wind": "v"}
 _BLOSC = Blosc()
 
 
@@ -92,3 +96,16 @@ def dataset(variabili, tempi, livelli=None, bb=DOMAIN_BBOX, flussi=4):
     if livelli is not None:
         coords["pressure_level"] = np.array([float(x) for x in livelli])
     return xr.Dataset(dati, coords=coords), byte / 1e9
+
+
+def umidita_relativa(t, q, p_hpa):
+    """Umidità relativa (%) come la calcola l'IFS per il parametro `r` di ERA5 (ARCO non ce l'ha):
+    saturazione sull'acqua sopra 0 °C, sul ghiaccio sotto −23 °C, miscela quadratica in mezzo
+    (IFS Documentation CY41R2, Part IV, §7.2.1)."""
+    T0, TICE = 273.16, 250.16
+    esw = 611.21 * np.exp(17.502 * (t - T0) / (t - 32.19))
+    esi = 611.21 * np.exp(22.587 * (t - T0) / (t + 0.7))
+    alfa = np.clip((t - TICE) / (T0 - TICE), 0, 1) ** 2
+    es = alfa * esw + (1 - alfa) * esi
+    e = p_hpa * 100 * q / (0.621981 + 0.378019 * q)
+    return 100 * e / es

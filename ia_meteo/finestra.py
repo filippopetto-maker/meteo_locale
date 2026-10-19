@@ -184,21 +184,25 @@ def costruisci(fid: str, t0: datetime, t1: datetime, sensore: str | None = None,
 
     passi = [("satellite", lambda: satellite(t0, t1, area, lavoro, sensore, tok, via), {"IR_108": "Tb", "WV_062": "Tb",
               "WV_073": "Tb", "ir_105": "Tb", "wv_63": "Tb", "wv_73": "Tb"}),
-             ("radar", lambda: radar(t0, t1, area, lavoro), {"dbz": "dBZ"}),
-             ("ambiente", lambda: era5.fetch_env(t0, t1, lavoro), {})]
+             ("radar", lambda: radar(t0, t1, area, lavoro), {"dbz": "dBZ"})]
     if t0 < FINE_IMERG_V07:
         passi.append(("imerg", lambda: precipitazione_imerg(t0, t1, lavoro), {}))
     if t0 >= INIZIO_LI:
         passi.append(("fulmini", lambda: fulmini(t0, t1, area, lavoro, tok), {}))
     if t0 < FINE_ITDPC:
         passi.append(("radar_italia", lambda: radar_italia(t0, t1, area), {"pioggia_max": "dBZ", "pioggia_media": "dBZ"}))
+    passi.append(("ambiente", lambda: era5.fetch_env(t0, t1, lavoro / "ambiente"), {}))
 
+    # l'ambiente (coda CDS di minuti) gira in parallelo agli altri passi, che usano la rete in altro modo
+    t_amb = time.perf_counter()
+    ex_amb = ThreadPoolExecutor(1)
+    fut_amb = {nome: ex_amb.submit(fn) for nome, fn, _ in passi if nome == "ambiente"}
     for nome, fn, tipo in passi:
-        t_start = time.perf_counter()
+        t_start = t_amb if nome in fut_amb else time.perf_counter()
         try:
-            ds, mis = fn()
+            ds, mis = fut_amb[nome].result() if nome in fut_amb else fn()
             if nome == "ambiente":
-                mis = {"MB_scaricati": round(mis, 2), "ore": int(ds.sizes["time"])}
+                mis = {"MB_scaricati": round(mis, 2), "ore": int(ds.sizes["time"]), "fonte": ds.attrs.get("fonte")}
             mis["MB_file"] = _salva(ds, out / f"{nome}.nc", tipo)
             mis["secondi"] = round(time.perf_counter() - t_start, 1)
             meta["misure"][nome] = mis
@@ -207,6 +211,7 @@ def costruisci(fid: str, t0: datetime, t1: datetime, sensore: str | None = None,
         except Exception as e:  # noqa: BLE001
             meta["errori"][nome] = repr(e)[:500]
             print(f"[{fid}] {nome} ERRORE: {e!r}")
+    ex_amb.shutdown(wait=False)
     shutil.rmtree(lavoro, ignore_errors=True)
     (out / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False, default=str))
     return out
