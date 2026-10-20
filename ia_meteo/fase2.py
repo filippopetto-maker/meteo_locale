@@ -57,6 +57,8 @@ def _punteggio(riep: pd.DataFrame) -> pd.Series:
 
 QUOTE = {"positiva": 770, "negativa": 550, "casuale": 200}   # entro ~90 GB (19/10/2026; +40 casuali 2022 il 20/10;
 # 20/10: 550 candidati negativi perché ~1/4 si scarta al controllo radar completo → ~400 negative, 1 ogni 2 positive)
+COPERTURA_PULITO = 0.8      # con 0,5 passavano riquadri della costa algerina con temporali nell'entroterra non coperto
+                            # (visti dai fulmini LI: 5 riquadri su 31 nell'agosto 2024)
 SCARTATE = ar.DATA / "negativi_scartati"      # un file per finestra negativa scartata (condiviso fra le corsie)
 
 
@@ -108,7 +110,7 @@ def ordine() -> pd.DataFrame:
 
 def verifica_negativa(fid: str, t0, t1, riquadri: list[str]) -> tuple[list[str], dict]:
     """Prima di costruire una finestra negativa: radar completo (OPERA ogni 5–15 min e, dove vede, il radar
-    italiano) sui riquadri negativi. Pulito = coperto (≥ 50%) e nessun pixel ≥ 40 dBZ / ≥ 10 mm/h in nessuna
+    italiano) sui riquadri negativi. Pulito = coperto (≥ COPERTURA_PULITO) e nessun pixel ≥ 40 dBZ / ≥ 10 mm/h in nessuna
     immagine. La scansione ogni 3 h lasciava passare celle brevi: 16 riquadri su 17 nelle prime 3 negative."""
     import zone
     from common import DOMAIN_BBOX, area_def_regular
@@ -134,7 +136,7 @@ def verifica_negativa(fid: str, t0, t1, riquadri: list[str]) -> tuple[list[str],
             bi = it[:, r, c]
             cop_it = float(np.isfinite(bi).mean())
             mx_it = float(np.nanmax(bi)) if np.isfinite(bi).any() else None
-        coperto = max(cop_op, cop_it) >= 0.5
+        coperto = max(cop_op, cop_it) >= COPERTURA_PULITO
         pulito = coperto and (mx_op is None or mx_op < 40) and (mx_it is None or mx_it < 10)
         det[k] = {"copertura_opera": round(cop_op, 3), "max_dbz": mx_op, "copertura_italia": round(cop_it, 3),
                   "max_mmh": mx_it, "pulito": pulito}
