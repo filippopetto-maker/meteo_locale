@@ -12,7 +12,8 @@ medicane, temporali orografici appenninici), con regole fisse sui dati della fin
   Balcani e Adriatico orientale → adriatico-balcanica; Italia → appenninica; ovest con flusso da
   sud-ovest a 500 hPa e aria calda a 850 hPa → plume spagnolo; altrimenti "altro" con la zona.
   Il regime sinottico vale solo se il minimo è entro DIST_MINIMO_KM dal riquadro con più convezione.
-  Categoria aggiunta al planning: "temporali orografici alpini e padani" (riquadro principale a nord di 45°N).
+  Categoria aggiunta al planning, approvata da Filippo il 20/10/2026: "temporali orografici alpini e padani"
+  (riquadro principale a nord di 45°N).
 Sono regole, non un giudizio sinottico esperto: vanno lette insieme ai controlli sugli eventi noti.
 
 Uso:
@@ -102,7 +103,7 @@ def regime(riq: pd.DataFrame, sin: pd.DataFrame) -> dict:
         if caldo_sw and lo_t < 12.5:
             reg = "plume spagnolo"
         elif la_t >= 47.5:
-            reg = "temporali orografici alpini e padani"       # categoria aggiunta: non è nel planning
+            reg = "temporali orografici alpini e padani"       # categoria aggiunta al planning (20/10/2026)
         else:
             reg = "temporali orografici appenninici"
     elif la_t >= 40 and lo_t < 12.5 and caldo_sw:
