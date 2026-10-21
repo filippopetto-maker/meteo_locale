@@ -33,7 +33,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 from features import build_feature_matrix  # noqa: E402
 
 M2_DIR = _PROJECT_ROOT / "model" / "m2"
+M2_HUM_DIR = _PROJECT_ROOT / "model" / "m2_hum"
 EXTRA_FEATURES = ("station_cat", "nwp_valid", "bias_st_hour")
+EXTRA_FEATURES_HUM = ("station_cat", "nwp_valid", "nwp_rh_valid", "bias_rh_hour")
 
 
 def build_m2_frame(nwp: pd.DataFrame, station: dict, feature_cols: list[str]) -> pd.DataFrame:
@@ -76,4 +78,37 @@ class M2:
         frame["bias_st_hour"] = [bias_by_hour.get(h) for h in frame.valid_for.dt.hour]
         frame["bias_st_hour"] = pd.to_numeric(frame.bias_st_hour, errors="coerce")
         pred = frame.nwp_valid.to_numpy() + self.booster.predict(frame[self.features])
+        return dict(zip(frame.valid_for, pred))
+
+
+class M2Humidity:
+    """M2 umidità (H1: residuo diretto su RH), congelato in model/m2_hum/.
+
+    previsione = RH dell'IFS a valid_for + residuo LightGBM, limitata a [0, 100].
+    Le feature sono quelle di M2 temperatura (build_m2_frame) più nwp_rh_valid e
+    bias_rh_hour (bias RH IFS − Netatmo della stazione all'ora UTC di valid_for,
+    media dei 30 giorni precedenti, da bias_table.bias_rh)."""
+
+    def __init__(self, model_dir: Path = M2_HUM_DIR):
+        self.meta = json.loads((model_dir / "meta.json").read_text())
+        with gzip.open(model_dir / "lgbm_m2_humidity.txt.gz", "rt") as f:
+            self.booster = lgb.Booster(model_str=f.read())
+        self.features = self.meta["features"]
+        self.base_features = [c for c in self.features if c not in EXTRA_FEATURES_HUM]
+        self.tag = self.meta["model_tag"]
+
+    def predict(self, nwp: pd.DataFrame, station: dict, valid_for: list[pd.Timestamp],
+                bias_rh_by_hour: dict[int, float | None]) -> dict[pd.Timestamp, float]:
+        """Umidità relativa M2 per ogni valid_for (UTC aware); le ore senza riga di input sono omesse."""
+        frame = build_m2_frame(nwp, station, self.base_features)
+        nwp_h = nwp[["recorded_at", "humidity"]].copy()
+        nwp_h["recorded_at"] = pd.to_datetime(nwp_h.recorded_at).dt.tz_localize("UTC")
+        frame = frame.merge(nwp_h.rename(columns={"recorded_at": "valid_for", "humidity": "nwp_rh_valid"}),
+                            on="valid_for", how="left")
+        frame = frame[frame.valid_for.isin(valid_for)].dropna(subset=["nwp_valid", "nwp_rh_valid"]).copy()
+        if frame.empty:
+            return {}
+        frame["bias_rh_hour"] = pd.to_numeric([bias_rh_by_hour.get(h) for h in frame.valid_for.dt.hour],
+                                              errors="coerce")
+        pred = np.clip(frame.nwp_rh_valid.to_numpy() + self.booster.predict(frame[self.features]), 0.0, 100.0)
         return dict(zip(frame.valid_for, pred))

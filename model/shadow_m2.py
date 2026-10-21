@@ -10,6 +10,11 @@ quattro varianti, scritte in forecasts_shadow. Non tocca forecasts né la mappa.
   t_e    t_ifs − bias (ripiego station_bias) da bias_table
   t_m2   M2 congelato in model/m2/           (model/m2.py)
 
+Umidità (stesso input IFS, aggiunta il 22/10/2026), colonne h_*:
+  h_ifs  RH dell'IFS a valid_for              (la produzione pubblica questo valore: h_v1 = h_ifs)
+  h_e    h_ifs − bias_rh (ripiego station_bias_rh) da bias_table
+  h_m2   M2 umidità H1 in model/m2_hum/       (model/m2.py, M2Humidity)
+
 Trigger: cron-job.org alle 09:15 e 21:15 UTC (.github/workflows/shadow-m2.yml).
 
 Utilizzo:
@@ -36,7 +41,7 @@ for p in (_PROJECT_ROOT, _PROJECT_ROOT / "model"):
 
 import db  # noqa: E402
 import inference as inf  # noqa: E402
-from m2 import M2  # noqa: E402
+from m2 import M2, M2Humidity  # noqa: E402
 
 logger = logging.getLogger("shadow_m2")
 
@@ -54,9 +59,10 @@ def ifs_run_time() -> datetime | None:
         return None
 
 
-def load_bias() -> dict[tuple[int, int], tuple[float | None, float | None]]:
-    """(stazione, ora UTC) → (bias, station_bias), una sola query."""
-    return {(r["station_id"], r["hour_utc"]): (r["bias"], r["station_bias"]) for r in db.get_bias_table()}
+def load_bias() -> dict[tuple[int, int], tuple[float | None, ...]]:
+    """(stazione, ora UTC) → (bias, station_bias, bias_rh, station_bias_rh), una sola query."""
+    return {(r["station_id"], r["hour_utc"]): (r["bias"], r["station_bias"], r.get("bias_rh"), r.get("station_bias_rh"))
+            for r in db.get_bias_table()}
 
 
 def _r(x) -> float | None:
@@ -65,6 +71,7 @@ def _r(x) -> float | None:
 
 def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
     m2 = M2()
+    m2h = M2Humidity()
     issue_at = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     run_at = ifs_run_time()
     if run_at is not None and issue_at - run_at > timedelta(hours=MAX_RUN_AGE_H):
@@ -74,7 +81,7 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
     bias = load_bias()
     logger.info(f"Emissione {issue_at:%Y-%m-%d %H:%M}Z, run IFS {run_at:%Y-%m-%d %HZ} " if run_at else
                 f"Emissione {issue_at:%Y-%m-%d %H:%M}Z ")
-    logger.info(f"{len(stations)} stazioni, lead {leads[0]}–{leads[-1]}, modello {m2.tag}, "
+    logger.info(f"{len(stations)} stazioni, lead {leads[0]}–{leads[-1]}, modelli {m2.tag} + {m2h.tag}, "
                 f"bias_table {len(bias)} celle")
 
     rows, no_bias, failed = [], [], []
@@ -87,16 +94,19 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
             failed.append(sid)
             continue
         base = inf.predict_from_df(df.copy(), st, leads, now_utc=issue_at)
-        hours = {h: bias.get((sid, h), (None, None)) for h in range(24)}
-        if all(b is None for b, _ in hours.values()):
+        hours = {h: bias.get((sid, h), (None, None, None, None)) for h in range(24)}
+        if all(v[0] is None for v in hours.values()):
             no_bias.append(sid)
-        t_m2 = m2.predict(df, st, [pd.Timestamp(p["valid_for"]) for p in base],
-                          {h: b for h, (b, _) in hours.items()})
+        valid = [pd.Timestamp(p["valid_for"]) for p in base]
+        t_m2 = m2.predict(df, st, valid, {h: v[0] for h, v in hours.items()})
+        h_m2 = m2h.predict(df, st, valid, {h: v[2] for h, v in hours.items()})
         for p in base:
             vf = pd.Timestamp(p["valid_for"])
-            b, sb = hours[vf.hour]
+            b, sb, brh, sbrh = hours[vf.hour]
             corr = b if b is not None else sb
+            corr_h = brh if brh is not None else sbrh
             t_ifs = p.get("nwp_temperature")
+            h_ifs = p.get("nwp_humidity")
             rows.append({
                 "station_id": sid, "issue_at": issue_at.isoformat(), "lead_hours": int(p["lead_hours"]),
                 "valid_for": vf.isoformat(), "nwp_run_at": run_at.isoformat() if run_at else None,
@@ -104,6 +114,10 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
                 "t_e": _r(t_ifs - corr) if t_ifs is not None and corr is not None else None,
                 "t_m2": _r(t_m2.get(vf)), "bias": None if b is None else round(float(b), 3),
                 "model_tag": m2.tag,
+                "h_ifs": _r(h_ifs), "h_v1": _r(p.get("humidity")),
+                "h_e": _r(min(max(h_ifs - corr_h, 0.0), 100.0)) if h_ifs is not None and corr_h is not None else None,
+                "h_m2": _r(h_m2.get(vf)), "bias_rh": None if brh is None else round(float(brh), 3),
+                "model_tag_h": m2h.tag,
             })
 
     df_out = pd.DataFrame(rows)
@@ -114,12 +128,15 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
     diff = (df_out.t_m2 - df_out.t_ifs).groupby(vf.dt.hour).mean().round(1)
     print("\nt_m2 − t_ifs medio per ora UTC (atteso: segno opposto del bias, positivo la sera):")
     print(" ".join(f"{h:02d}:{v:+.1f}" for h, v in diff.items()))
+    diff_h = (df_out.h_m2 - df_out.h_ifs).groupby(vf.dt.hour).mean().round(1)
+    print("\nh_m2 − h_ifs medio per ora UTC (atteso: segno opposto del bias RH, negativo la notte):")
+    print(" ".join(f"{h:02d}:{v:+.1f}" for h, v in diff_h.items()))
     sample = df_out[df_out.lead_hours.isin([1, 24, 48])].pivot_table(
-        index="station_id", columns="lead_hours", values=["t_ifs", "t_e", "t_v1", "t_m2"])
+        index="station_id", columns="lead_hours", values=["t_ifs", "t_e", "t_v1", "t_m2", "h_ifs", "h_e", "h_m2"])
     if dry_run:
         print("\n" + sample.round(1).to_string())
     missing_m2 = df_out.t_m2.isna().sum()
-    logger.info(f"Righe {len(df_out)} | t_m2 mancanti {missing_m2} | stazioni senza bias {no_bias or '-'} | "
+    logger.info(f"Righe {len(df_out)} | t_m2 mancanti {missing_m2} | h_m2 mancanti {df_out.h_m2.isna().sum()} | stazioni senza bias {no_bias or '-'} | "
                 f"stazioni fallite {failed or '-'}")
 
     if json_out:
@@ -134,7 +151,7 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Prova in ombra 1–48 h (IFS, E, modello attuale, M2)")
+    ap = argparse.ArgumentParser(description="Prova in ombra 1–48 h (IFS, E, modello attuale, M2; temperatura e umidità)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--max-lead", type=int, default=48)
     ap.add_argument("--json-out", default=None)
