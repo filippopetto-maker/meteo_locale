@@ -44,3 +44,13 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           python3 scripts/update_bias_table.py
+
+      # Feature di bias di M2b (tabella bias_features): serve prima del giro delle 09:15.
+      - name: Update bias features (M2b)
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python3 scripts/update_bias_features.py

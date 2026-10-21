@@ -44,3 +44,13 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           python3 model/shadow_m2.py
+
+      # M2b (temperatura, candidato): non deve mai far fallire il giro di M2 / M2 umidità.
+      - name: Run shadow M2b
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python3 model/shadow_m2b.py
