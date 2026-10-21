@@ -143,6 +143,48 @@ def upsert_forecasts_shadow(rows: list[dict], chunk: int = 500) -> int:
             rows[i:i + chunk], on_conflict="station_id,issue_at,lead_hours").execute()
     return len(rows)
 
+def upsert_forecasts_48h(rows: list[dict], chunk: int = 500) -> int:
+    """Ultima emissione a 48 h (forecasts_48h), sovrascritta per (station_id, valid_for)."""
+    for i in range(0, len(rows), chunk):
+        get_client().table("forecasts_48h").upsert(
+            rows[i:i + chunk], on_conflict="station_id,valid_for").execute()
+    return len(rows)
+
+def delete_forecasts_48h_before(valid_before) -> None:
+    """Toglie da forecasts_48h le ore già passate (valid_for < valid_before)."""
+    get_client().table("forecasts_48h").delete().lt(
+        "valid_for", valid_before.isoformat() if hasattr(valid_before, "isoformat") else valid_before).execute()
+
+def get_forecasts_48h() -> list[dict]:
+    rows, start = [], 0
+    while True:
+        page = (get_client().table("forecasts_48h").select("*").order("station_id").order("valid_for")
+                .range(start, start + 999).execute().data)
+        rows += page
+        if len(page) < 1000:
+            return rows
+        start += 1000
+
+def upsert_bias_features(rows: list[dict], chunk: int = 500) -> int:
+    """Feature di bias aggiuntive di M2b (bias_features), upsert a blocchi."""
+    for i in range(0, len(rows), chunk):
+        get_client().table("bias_features").upsert(rows[i:i + chunk], on_conflict="station_id,hour_utc").execute()
+    return len(rows)
+
+def get_bias_features() -> list[dict]:
+    return get_client().table("bias_features").select("*").execute().data
+
+def get_m2b_self_bias(p_end, p_days: int = 30) -> list[dict]:
+    """Errore medio di M2b su sé stesso per stazione × ora (funzione SQL m2b_self_bias)."""
+    return get_client().rpc("m2b_self_bias", {"p_end": p_end.isoformat(), "p_days": p_days}).execute().data
+
+def upsert_forecasts_shadow_m2b(rows: list[dict], chunk: int = 500) -> int:
+    """Previsioni in ombra di M2b (forecasts_shadow_m2b), upsert a blocchi."""
+    for i in range(0, len(rows), chunk):
+        get_client().table("forecasts_shadow_m2b").upsert(
+            rows[i:i + chunk], on_conflict="station_id,issue_at,lead_hours").execute()
+    return len(rows)
+
 def health_check() -> bool:
     try:
         get_client().table("stations").select("id").limit(1).execute()
