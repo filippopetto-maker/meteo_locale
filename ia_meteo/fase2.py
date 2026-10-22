@@ -60,6 +60,7 @@ QUOTE = {"positiva": 770, "negativa": 550, "casuale": 200}   # entro ~90 GB (19/
 COPERTURA_PULITO = 0.8      # con 0,5 passavano riquadri della costa algerina con temporali nell'entroterra non coperto
                             # (visti dai fulmini LI: 5 riquadri su 31 nell'agosto 2024)
 SCARTATE = ar.DATA / "negativi_scartati"      # un file per finestra negativa scartata (condiviso fra le corsie)
+SENZA_SATELLITE = ar.DATA / "finestre_senza_satellite"   # buchi nell'archivio EUMETSAT (es. FCI l'8/7/2025)
 
 
 def _positive() -> pd.DataFrame:
@@ -143,6 +144,13 @@ def verifica_negativa(fid: str, t0, t1, riquadri: list[str]) -> tuple[list[str],
         if pulito:
             puliti.append(k)
     return puliti, det
+
+
+def immagini_satellite(r) -> int:
+    """Quante immagini del satellite ha l'archivio EUMETSAT per la finestra (prima di scaricare il resto)."""
+    from fonti import eumetsat as eu
+    coll = eu.FCI if r.satellite == "fci" else eu.SEVIRI
+    return len(list(eu.cerca(coll, r.inizio.to_pydatetime(), r.fine.to_pydatetime(), eu.token())))
 
 
 def costruisci_e_carica(r, via: str, extra: dict | None = None) -> str:
@@ -324,7 +332,7 @@ def main():
     def leggi_coda():
         lista = pd.read_parquet(ORDINE)
         fatte = set(ar.registro()["finestre"]) | {k for s, k in ar.parcheggiati("finestre")} | \
-            {f.stem for f in SCARTATE.glob("*.json")}
+            {f.stem for f in SCARTATE.glob("*.json")} | {f.stem for f in SENZA_SATELLITE.glob("*.json")}
         coda = [r for r in lista.itertuples() if r.id not in fatte and (a.via == "completo" or r.satellite == "seviri")]
         print(f"{len(lista)} finestre in elenco, {len(fatte)} già fatte, {len(coda)} candidate per la corsia {a.via}", flush=True)
         return coda
@@ -356,6 +364,13 @@ def main():
         t = time.perf_counter()
         try:
             extra = None
+            n_img = immagini_satellite(r)
+            if n_img == 0:
+                SENZA_SATELLITE.mkdir(parents=True, exist_ok=True)
+                (SENZA_SATELLITE / f"{r.id}.json").write_text(json.dumps({"satellite": r.satellite, "immagini": 0}))
+                print(f"{r.id} [{r.componente}, pos {r.posizione}]: scartata, nessuna immagine {r.satellite} nell'archivio",
+                      flush=True)
+                continue
             if r.componente == "negativa":
                 puliti, det = verifica_negativa(r.id, r.inizio.to_pydatetime(), r.fine.to_pydatetime(),
                                                 negativi().get(r.id, []))
