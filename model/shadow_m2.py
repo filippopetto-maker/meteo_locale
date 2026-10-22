@@ -15,6 +15,13 @@ Umidità (stesso input IFS, aggiunta il 22/10/2026), colonne h_*:
   h_e    h_ifs − bias_rh (ripiego station_bias_rh) da bias_table
   h_m2   M2 umidità H1 in model/m2_hum/       (model/m2.py, M2Humidity)
 
+Vento, velocità km/h (aggiunta il 22/10/2026), colonne w_*:
+  w_ifs  velocità IFS a valid_for             (la produzione pubblica questo valore: w_v1 = w_ifs)
+  w_e    IFS corretto col bias in scala log   (expm1(log1p(w_ifs) − bias_ws), ripiego station_bias_ws)
+  w_m2   M2 vento in model/m2_wind/           (model/m2.py, M2Wind; None per le stazioni fuori dal training)
+La direzione non è modellata. Il confronto con il vivo ha senso solo sulle stazioni in
+meta["live_consistent_stations"] di model/m2_wind/meta.json (vedi scripts/validate_wind_live.py).
+
 Trigger: cron-job.org alle 09:15 e 21:15 UTC (.github/workflows/shadow-m2.yml).
 
 Utilizzo:
@@ -31,6 +38,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -41,7 +49,7 @@ for p in (_PROJECT_ROOT, _PROJECT_ROOT / "model"):
 
 import db  # noqa: E402
 import inference as inf  # noqa: E402
-from m2 import M2, M2Humidity  # noqa: E402
+from m2 import M2, M2Humidity, M2Wind  # noqa: E402
 
 logger = logging.getLogger("shadow_m2")
 
@@ -60,8 +68,9 @@ def ifs_run_time() -> datetime | None:
 
 
 def load_bias() -> dict[tuple[int, int], tuple[float | None, ...]]:
-    """(stazione, ora UTC) → (bias, station_bias, bias_rh, station_bias_rh), una sola query."""
-    return {(r["station_id"], r["hour_utc"]): (r["bias"], r["station_bias"], r.get("bias_rh"), r.get("station_bias_rh"))
+    """(stazione, ora UTC) → (bias, station_bias, bias_rh, station_bias_rh, bias_ws, station_bias_ws), una sola query."""
+    return {(r["station_id"], r["hour_utc"]): (r["bias"], r["station_bias"], r.get("bias_rh"), r.get("station_bias_rh"),
+                                               r.get("bias_ws"), r.get("station_bias_ws"))
             for r in db.get_bias_table()}
 
 
@@ -72,6 +81,7 @@ def _r(x) -> float | None:
 def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
     m2 = M2()
     m2h = M2Humidity()
+    m2w = M2Wind()
     issue_at = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     run_at = ifs_run_time()
     if run_at is not None and issue_at - run_at > timedelta(hours=MAX_RUN_AGE_H):
@@ -81,7 +91,7 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
     bias = load_bias()
     logger.info(f"Emissione {issue_at:%Y-%m-%d %H:%M}Z, run IFS {run_at:%Y-%m-%d %HZ} " if run_at else
                 f"Emissione {issue_at:%Y-%m-%d %H:%M}Z ")
-    logger.info(f"{len(stations)} stazioni, lead {leads[0]}–{leads[-1]}, modelli {m2.tag} + {m2h.tag}, "
+    logger.info(f"{len(stations)} stazioni, lead {leads[0]}–{leads[-1]}, modelli {m2.tag} + {m2h.tag} + {m2w.tag}, "
                 f"bias_table {len(bias)} celle")
 
     rows, no_bias, failed = [], [], []
@@ -94,19 +104,22 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
             failed.append(sid)
             continue
         base = inf.predict_from_df(df.copy(), st, leads, now_utc=issue_at)
-        hours = {h: bias.get((sid, h), (None, None, None, None)) for h in range(24)}
+        hours = {h: bias.get((sid, h), (None,) * 6) for h in range(24)}
         if all(v[0] is None for v in hours.values()):
             no_bias.append(sid)
         valid = [pd.Timestamp(p["valid_for"]) for p in base]
         t_m2 = m2.predict(df, st, valid, {h: v[0] for h, v in hours.items()})
         h_m2 = m2h.predict(df, st, valid, {h: v[2] for h, v in hours.items()})
+        w_m2 = m2w.predict(df, st, valid, {h: v[4] for h, v in hours.items()})
         for p in base:
             vf = pd.Timestamp(p["valid_for"])
-            b, sb, brh, sbrh = hours[vf.hour]
+            b, sb, brh, sbrh, bws, sbws = hours[vf.hour]
             corr = b if b is not None else sb
             corr_h = brh if brh is not None else sbrh
             t_ifs = p.get("nwp_temperature")
             h_ifs = p.get("nwp_humidity")
+            w_ifs = p.get("wind_speed")
+            corr_w = bws if bws is not None else sbws
             rows.append({
                 "station_id": sid, "issue_at": issue_at.isoformat(), "lead_hours": int(p["lead_hours"]),
                 "valid_for": vf.isoformat(), "nwp_run_at": run_at.isoformat() if run_at else None,
@@ -118,6 +131,10 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
                 "h_e": _r(min(max(h_ifs - corr_h, 0.0), 100.0)) if h_ifs is not None and corr_h is not None else None,
                 "h_m2": _r(h_m2.get(vf)), "bias_rh": None if brh is None else round(float(brh), 3),
                 "model_tag_h": m2h.tag,
+                "w_ifs": _r(w_ifs), "w_v1": _r(p.get("wind_speed")),
+                "w_e": _r(max(np.expm1(np.log1p(max(w_ifs, 0.0)) - corr_w), 0.0)) if w_ifs is not None and corr_w is not None else None,
+                "w_m2": _r(w_m2.get(vf)), "bias_ws": None if bws is None else round(float(bws), 4),
+                "model_tag_w": m2w.tag,
             })
 
     df_out = pd.DataFrame(rows)
@@ -131,12 +148,15 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
     diff_h = (df_out.h_m2 - df_out.h_ifs).groupby(vf.dt.hour).mean().round(1)
     print("\nh_m2 − h_ifs medio per ora UTC (atteso: segno opposto del bias RH, negativo la notte):")
     print(" ".join(f"{h:02d}:{v:+.1f}" for h, v in diff_h.items()))
+    ratio_w = (df_out.w_m2 / df_out.w_ifs.where(df_out.w_ifs > 0)).groupby(vf.dt.hour).median().round(2)
+    print("\nw_m2 / w_ifs mediano per ora UTC (atteso < 1: l'IFS sovrastima il vento di circa 2,5 volte):")
+    print(" ".join(f"{h:02d}:{v:.2f}" for h, v in ratio_w.items()))
     sample = df_out[df_out.lead_hours.isin([1, 24, 48])].pivot_table(
-        index="station_id", columns="lead_hours", values=["t_ifs", "t_e", "t_v1", "t_m2", "h_ifs", "h_e", "h_m2"])
+        index="station_id", columns="lead_hours", values=["t_ifs", "t_e", "t_v1", "t_m2", "h_ifs", "h_e", "h_m2", "w_ifs", "w_e", "w_m2"])
     if dry_run:
         print("\n" + sample.round(1).to_string())
     missing_m2 = df_out.t_m2.isna().sum()
-    logger.info(f"Righe {len(df_out)} | t_m2 mancanti {missing_m2} | h_m2 mancanti {df_out.h_m2.isna().sum()} | stazioni senza bias {no_bias or '-'} | "
+    logger.info(f"Righe {len(df_out)} | t_m2 mancanti {missing_m2} | h_m2 mancanti {df_out.h_m2.isna().sum()} | w_m2 mancanti {df_out.w_m2.isna().sum()} | stazioni senza bias {no_bias or '-'} | "
                 f"stazioni fallite {failed or '-'}")
 
     if json_out:

@@ -34,8 +34,10 @@ from features import build_feature_matrix  # noqa: E402
 
 M2_DIR = _PROJECT_ROOT / "model" / "m2"
 M2_HUM_DIR = _PROJECT_ROOT / "model" / "m2_hum"
+M2_WIND_DIR = _PROJECT_ROOT / "model" / "m2_wind"
 EXTRA_FEATURES = ("station_cat", "nwp_valid", "bias_st_hour")
 EXTRA_FEATURES_HUM = ("station_cat", "nwp_valid", "nwp_rh_valid", "bias_rh_hour")
+EXTRA_FEATURES_WIND = ("station_cat", "nwp_ws_valid", "nwp_wd_sin", "nwp_wd_cos", "bias_ws_hour")
 
 
 def build_m2_frame(nwp: pd.DataFrame, station: dict, feature_cols: list[str]) -> pd.DataFrame:
@@ -111,4 +113,44 @@ class M2Humidity:
         frame["bias_rh_hour"] = pd.to_numeric([bias_rh_by_hour.get(h) for h in frame.valid_for.dt.hour],
                                               errors="coerce")
         pred = np.clip(frame.nwp_rh_valid.to_numpy() + self.booster.predict(frame[self.features]), 0.0, 100.0)
+        return dict(zip(frame.valid_for, pred))
+
+
+class M2Wind:
+    """M2 vento (velocità), congelato in model/m2_wind/.
+
+    previsione = expm1(log1p(velocità IFS a valid_for) + residuo LightGBM), km/h, ≥ 0.
+    Feature: quelle di build_m2_frame + nwp_ws_valid, direzione IFS (seno e coseno) e
+    bias_ws_hour (media dei 30 giorni precedenti di log1p(IFS) − log1p(Netatmo) per stazione
+    e ora UTC, da bias_table.bias_ws). La direzione non è modellata. Le stazioni fuori dal
+    training (meta["train_stations"]) non hanno previsione."""
+
+    def __init__(self, model_dir: Path = M2_WIND_DIR):
+        self.meta = json.loads((model_dir / "meta.json").read_text())
+        with gzip.open(model_dir / "lgbm_m2_wind.txt.gz", "rt") as f:
+            self.booster = lgb.Booster(model_str=f.read())
+        self.features = self.meta["features"]
+        self.base_features = [c for c in self.features if c not in EXTRA_FEATURES_WIND]
+        self.tag = self.meta["model_tag"]
+        self.stations = set(self.meta["train_stations"])
+
+    def predict(self, nwp: pd.DataFrame, station: dict, valid_for: list[pd.Timestamp],
+                bias_ws_by_hour: dict[int, float | None]) -> dict[pd.Timestamp, float]:
+        """Velocità del vento M2 (km/h) per ogni valid_for (UTC aware); {} se la stazione non è nel training."""
+        if station["id"] not in self.stations:
+            return {}
+        frame = build_m2_frame(nwp, station, self.base_features)
+        w = nwp[["recorded_at", "wind_speed", "wind_direction"]].copy()
+        w["recorded_at"] = pd.to_datetime(w.recorded_at).dt.tz_localize("UTC")
+        w["nwp_wd_sin"] = np.sin(np.deg2rad(w.wind_direction))
+        w["nwp_wd_cos"] = np.cos(np.deg2rad(w.wind_direction))
+        frame = frame.merge(w.rename(columns={"recorded_at": "valid_for", "wind_speed": "nwp_ws_valid"})
+                            [["valid_for", "nwp_ws_valid", "nwp_wd_sin", "nwp_wd_cos"]], on="valid_for", how="left")
+        frame = frame[frame.valid_for.isin(valid_for)].dropna(subset=["nwp_ws_valid"]).copy()
+        if frame.empty:
+            return {}
+        frame["bias_ws_hour"] = pd.to_numeric([bias_ws_by_hour.get(h) for h in frame.valid_for.dt.hour],
+                                              errors="coerce")
+        base = np.log1p(frame.nwp_ws_valid.clip(lower=0).to_numpy())
+        pred = np.clip(np.expm1(base + self.booster.predict(frame[self.features])), 0.0, None)
         return dict(zip(frame.valid_for, pred))

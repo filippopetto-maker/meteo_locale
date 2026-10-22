@@ -8,10 +8,12 @@ Per ogni stazione attiva (Sigillo esclusa) e ogni ora UTC:
                 come in training (experiment_retrain_netatmo.hour_bias_table).
   station_bias  media su tutte le ore della finestra: ripiego solo per l'opzione E.
 Le stesse tre colonne per l'umidità relativa (bias_rh, station_bias_rh, n_samples_rh), usate
-dalla prova in ombra di M2 umidità (bias_rh_hour, in punti percentuali).
+dalla prova in ombra di M2 umidità (bias_rh_hour, in punti percentuali), e per il vento
+(bias_ws, station_bias_ws, n_samples_ws): differenza dei logaritmi log1p(velocità IFS) −
+log1p(velocità Netatmo) in km/h, usata come bias_ws_hour da M2 vento.
 
 Verità: osservazioni live Netatmo (QC < 2) entro ±15 min dall'ora esatta, media per ora.
-IFS: Historical Forecast API, models=ecmwf_ifs, temperature_2m e relative_humidity_2m, UTC.
+IFS: Historical Forecast API, models=ecmwf_ifs, temperature_2m, relative_humidity_2m e wind_speed_10m (km/h), UTC.
 
 Utilizzo:
     python3 scripts/update_bias_table.py --dry-run
@@ -28,6 +30,7 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -45,11 +48,11 @@ MIN_STATION_DAYS = 7      # sotto questa soglia nessuna correzione, nemmeno stat
 
 
 def fetch_ifs(stations: list[dict], start: pd.Timestamp, end: pd.Timestamp, retries: int = 4) -> dict[int, pd.DataFrame]:
-    """Serie oraria IFS (colonne t, rh), una chiamata multi-località."""
+    """Serie oraria IFS (colonne t, rh, ws), una chiamata multi-località."""
     params = {
         "latitude": ",".join(str(s["lat"]) for s in stations),
         "longitude": ",".join(str(s["lon"]) for s in stations),
-        "hourly": "temperature_2m,relative_humidity_2m", "models": NWP_MODEL, "timezone": "UTC",
+        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m", "models": NWP_MODEL, "timezone": "UTC",
         "start_date": start.date().isoformat(), "end_date": end.date().isoformat(),
     }
     for attempt in range(retries):
@@ -70,37 +73,41 @@ def fetch_ifs(stations: list[dict], start: pd.Timestamp, end: pd.Timestamp, retr
     out = {}
     for st, loc in zip(stations, data):
         h = loc["hourly"]
-        out[st["id"]] = pd.DataFrame({"t": h["temperature_2m"], "rh": h["relative_humidity_2m"]},
+        out[st["id"]] = pd.DataFrame({"t": h["temperature_2m"], "rh": h["relative_humidity_2m"],
+                                      "ws": h["wind_speed_10m"]},
                                      index=pd.to_datetime(h["time"]).tz_localize("UTC"), dtype=float)
     return out
 
 
 def hourly_obs(station_id: int, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    """Osservazioni Netatmo live per ora (colonne t, rh): media dei valori entro ±15 min dall'ora."""
+    """Osservazioni Netatmo live per ora (colonne t, rh, ws): media dei valori entro ±15 min dall'ora."""
     rows = db.get_netatmo_observations(station_id, start, end)
     if not rows:
-        return pd.DataFrame(columns=["t", "rh"], dtype=float)
+        return pd.DataFrame(columns=["t", "rh", "ws"], dtype=float)
     df = pd.DataFrame(rows)
     t = pd.to_datetime(df.recorded_at, utc=True, format="ISO8601")
     near = (t - t.dt.round("h")).abs() <= pd.Timedelta(minutes=15)
-    out = pd.DataFrame({"t": df.temperature[near].to_numpy(), "rh": _humidity(station_id, start, end, df, near).to_numpy()},
-                       index=t[near].dt.round("h"))
+    extra = _extra(station_id, start, end, df)
+    out = pd.DataFrame({"t": df.temperature[near].to_numpy(), "rh": extra["humidity"][near].to_numpy(),
+                        "ws": extra["wind_speed"][near].to_numpy()}, index=t[near].dt.round("h"))
     return out.groupby(level=0).mean()
 
 
-def _humidity(station_id: int, start: pd.Timestamp, end: pd.Timestamp, df: pd.DataFrame, near: pd.Series) -> pd.Series:
-    """Umidità delle stesse righe di `df` (get_netatmo_observations non la restituisce)."""
-    hum, offset = {}, 0
+def _extra(station_id: int, start: pd.Timestamp, end: pd.Timestamp, df: pd.DataFrame) -> pd.DataFrame:
+    """Umidità e vento delle stesse righe di `df` (get_netatmo_observations non li restituisce)."""
+    hum, wind, offset = {}, {}, 0
     while True:
-        rows = (db.get_client().table("observations").select("recorded_at, humidity")
+        rows = (db.get_client().table("observations").select("recorded_at, humidity, wind_speed")
                 .eq("station_id", station_id).lt("qc_flag", 2)
                 .gte("recorded_at", start.isoformat()).lt("recorded_at", end.isoformat())
                 .order("recorded_at").range(offset, offset + 999).execute().data)
         hum.update({r["recorded_at"]: r["humidity"] for r in rows})
+        wind.update({r["recorded_at"]: r["wind_speed"] for r in rows})
         if len(rows) < 1000:
             break
         offset += 1000
-    return pd.to_numeric(df.recorded_at.map(hum), errors="coerce")[near]
+    return pd.DataFrame({"humidity": pd.to_numeric(df.recorded_at.map(hum), errors="coerce"),
+                         "wind_speed": pd.to_numeric(df.recorded_at.map(wind), errors="coerce")})
 
 
 def _hour_bias(err: pd.Series, window_end: pd.Timestamp, window_days: int):
@@ -116,11 +123,15 @@ def station_rows(station_id: int, ifs: pd.DataFrame, obs: pd.DataFrame, window_e
                  window_days: int, min_days: int) -> list[dict]:
     ph_t, n_days, n_t, mean_t = _hour_bias(ifs.t - obs.t.reindex(ifs.index), window_end, window_days)
     ph_h, n_days_h, n_h, mean_h = _hour_bias(ifs.rh - obs.rh.reindex(ifs.index), window_end, window_days)
-    enough, enough_h = n_days >= MIN_STATION_DAYS, n_days_h >= MIN_STATION_DAYS
+    ph_w, n_days_w, n_w, mean_w = _hour_bias(np.log1p(ifs.ws.clip(lower=0)) - np.log1p(obs.ws.reindex(ifs.index).clip(lower=0)),
+                                             window_end, window_days)
+    enough, enough_h, enough_w = n_days >= MIN_STATION_DAYS, n_days_h >= MIN_STATION_DAYS, n_days_w >= MIN_STATION_DAYS
     rows = []
     for hour in range(24):
         n = int(ph_t["count"].get(hour, 0))
         n_hh = int(ph_h["count"].get(hour, 0))
+        n_ww = int(ph_w["count"].get(hour, 0))
+        bias_w = float(ph_w["mean"][hour]) if enough_w and n_ww >= min_days else None
         bias = float(ph_t["mean"][hour]) if enough and n >= min_days else None
         bias_h = float(ph_h["mean"][hour]) if enough_h and n_hh >= min_days else None
         rows.append({
@@ -131,6 +142,9 @@ def station_rows(station_id: int, ifs: pd.DataFrame, obs: pd.DataFrame, window_e
             "bias_rh": None if bias_h is None else round(bias_h, 3),
             "station_bias_rh": round(mean_h, 3) if enough_h and mean_h is not None else None,
             "n_samples_rh": n_hh,
+            "bias_ws": None if bias_w is None else round(bias_w, 4),
+            "station_bias_ws": round(mean_w, 4) if enough_w and mean_w is not None else None,
+            "n_samples_ws": n_ww,
             "window_end": window_end.isoformat(), "nwp_model": NWP_MODEL,
             "computed_at": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds"),
         })
@@ -174,6 +188,9 @@ def main() -> None:
     by_hour_h = df.groupby("hour_utc").bias_rh.mean().round(1)
     print("Bias medio IFS − Netatmo dell'umidità relativa per ora UTC (punti %):")
     print(" ".join(f"{h:02d}:{v:+.1f}" for h, v in by_hour_h.items()))
+    by_hour_w = df.groupby("hour_utc").bias_ws.mean().round(2)
+    print("Bias medio del vento (log1p IFS − log1p Netatmo) per ora UTC (positivo: IFS più forte):")
+    print(" ".join(f"{h:02d}:{v:+.2f}" for h, v in by_hour_w.items()))
     print(f"Stazioni corrette: {df.groupby('station_id').bias.apply(lambda b: b.notna().any()).sum()}/{len(stations)}"
           + (f" | incomplete o saltate: {', '.join(skipped)}" if skipped else ""))
 
