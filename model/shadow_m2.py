@@ -22,6 +22,11 @@ Vento, velocità km/h (aggiunta il 22/10/2026), colonne w_*:
 La direzione non è modellata. Il confronto con il vivo ha senso solo sulle stazioni in
 meta["live_consistent_stations"] di model/m2_wind/meta.json (vedi scripts/validate_wind_live.py).
 
+Vento a 10 m (verità METAR, aggiunto il 22/10/2026), tabella forecasts_shadow_wind10: velocità e
+direzione di M2 Wind10 (model/m2_wind10/) per 8 aeroporti del Lazio (kind=airport, point_id=ICAO) e per
+le stazioni del progetto (kind=station). Si valuta solo sugli aeroporti, contro i METAR
+(scripts/eval_wind10_shadow.py). Un errore in questo blocco non ferma il resto dell'emissione.
+
 Trigger: cron-job.org alle 09:15 e 21:15 UTC (.github/workflows/shadow-m2.yml).
 
 Utilizzo:
@@ -49,7 +54,7 @@ for p in (_PROJECT_ROOT, _PROJECT_ROOT / "model"):
 
 import db  # noqa: E402
 import inference as inf  # noqa: E402
-from m2 import M2, M2Humidity, M2Wind  # noqa: E402
+from m2 import M2, M2Humidity, M2Wind, M2Wind10  # noqa: E402
 
 logger = logging.getLogger("shadow_m2")
 
@@ -78,6 +83,44 @@ def _r(x) -> float | None:
     return None if x is None or pd.isna(x) else round(float(x), 2)
 
 
+def wind10_block(stations: list[dict], dfs: dict[int, pd.DataFrame], leads: list[int], issue_at: datetime,
+                 run_at: datetime | None) -> list[dict]:
+    """Righe di forecasts_shadow_wind10 (aeroporti + stazioni). Mai solleva: su errore ritorna ciò che ha."""
+    rows: list[dict] = []
+    try:
+        m10 = M2Wind10()
+        valid = [pd.Timestamp(issue_at) + timedelta(hours=int(L)) for L in leads]
+        points = [("airport", icao, {"id": a["id"], **{k: a.get(k) for k in
+                  ("lat", "lon", "altitude", "dist_sea_km", "dist_center_km", "bearing_sea", "microclima")}}, None)
+                  for icao, a in m10.airports.items()]
+        points += [("station", str(st["id"]), st, dfs.get(st["id"])) for st in stations]
+        failed = []
+        for kind, pid, pt, df in points:
+            try:
+                if df is None:
+                    df = inf.fetch_forecast(pt["lat"], pt["lon"], past_days=2, forecast_days=4, model=NWP_MODEL)
+                out = m10.predict(df, pt, valid)
+            except Exception as exc:
+                failed.append(pid)
+                logger.warning(f"wind10 {pid}: {exc}")
+                continue
+            for r in out.itertuples():
+                vf = pd.Timestamp(r.valid_for)
+                rows.append({"point_id": pid, "kind": kind, "issue_at": issue_at.isoformat(),
+                             "lead_hours": int(round((vf - pd.Timestamp(issue_at)).total_seconds() / 3600)),
+                             "valid_for": vf.isoformat(), "nwp_run_at": run_at.isoformat() if run_at else None,
+                             "w_ifs": _r(r.w_ifs), "w_m2": _r(r.w_m2), "d_ifs": _r(r.d_ifs), "d_m2": _r(r.d_m2),
+                             "model_tag": m10.tag})
+        d = pd.DataFrame(rows)
+        if len(d):
+            ap = d[d.kind == "airport"]
+            logger.info(f"wind10: {len(d)} righe ({d.point_id.nunique()} punti), punti falliti {failed or '-'} | aeroporti: "
+                        f"w_m2/w_ifs mediano {ap.w_m2.sum() / max(ap.w_ifs.sum(), 1e-9):.2f}")
+    except Exception as exc:
+        logger.error(f"wind10: blocco saltato ({exc})")
+    return rows
+
+
 def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
     m2 = M2()
     m2h = M2Humidity()
@@ -95,6 +138,7 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
                 f"bias_table {len(bias)} celle")
 
     rows, no_bias, failed = [], [], []
+    dfs: dict[int, pd.DataFrame] = {}
     for st in stations:
         sid = st["id"]
         try:
@@ -103,6 +147,7 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
             logger.error(f"st.{sid}: fetch IFS fallito ({exc})")
             failed.append(sid)
             continue
+        dfs[sid] = df
         base = inf.predict_from_df(df.copy(), st, leads, now_utc=issue_at)
         hours = {h: bias.get((sid, h), (None,) * 6) for h in range(24)}
         if all(v[0] is None for v in hours.values()):
@@ -161,11 +206,20 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
 
     if json_out:
         Path(json_out).write_text(json.dumps(rows, indent=1))
+    wind10_rows = wind10_block(stations, dfs, leads, issue_at, run_at)
     if dry_run:
         logger.info("--dry-run: nessuna scrittura")
         return
     n = db.upsert_forecasts_shadow(rows)
     logger.info(f"forecasts_shadow: {n} righe scritte")
+    if wind10_rows:
+        try:
+            for i in range(0, len(wind10_rows), 500):
+                db.get_client().table("forecasts_shadow_wind10").upsert(
+                    wind10_rows[i:i + 500], on_conflict="point_id,issue_at,lead_hours").execute()
+            logger.info(f"forecasts_shadow_wind10: {len(wind10_rows)} righe scritte")
+        except Exception as exc:  # il vento a 10 m non deve far fallire l'emissione principale
+            logger.error(f"forecasts_shadow_wind10: scrittura fallita ({exc})")
     if failed:
         sys.exit(1)
 

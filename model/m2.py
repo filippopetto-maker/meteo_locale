@@ -35,6 +35,7 @@ from features import build_feature_matrix  # noqa: E402
 M2_DIR = _PROJECT_ROOT / "model" / "m2"
 M2_HUM_DIR = _PROJECT_ROOT / "model" / "m2_hum"
 M2_WIND_DIR = _PROJECT_ROOT / "model" / "m2_wind"
+M2_WIND10_DIR = _PROJECT_ROOT / "model" / "m2_wind10"
 EXTRA_FEATURES = ("station_cat", "nwp_valid", "bias_st_hour")
 EXTRA_FEATURES_HUM = ("station_cat", "nwp_valid", "nwp_rh_valid", "bias_rh_hour")
 EXTRA_FEATURES_WIND = ("station_cat", "nwp_ws_valid", "nwp_wd_sin", "nwp_wd_cos", "bias_ws_hour")
@@ -154,3 +155,45 @@ class M2Wind:
         base = np.log1p(frame.nwp_ws_valid.clip(lower=0).to_numpy())
         pred = np.clip(np.expm1(base + self.booster.predict(frame[self.features])), 0.0, None)
         return dict(zip(frame.valid_for, pred))
+
+
+class M2Wind10:
+    """M2 vento a 10 m (verità METAR), congelato in model/m2_wind10/.
+
+    Velocità (km/h, residuo su log1p della velocità IFS) e direzione (angolo da seno e coseno previsti,
+    pesati con la velocità in training). Nessuna identità di stazione né bias: si applica a qualunque punto
+    con i descrittori statici (altitude, dist_sea_km, dist_center_km, bearing_sea, microclima).
+    Attesa (meta["expected"]): su siti già visti 2,73 km/h e 29,4°; su siti mai visti 3,19 km/h e
+    nessun guadagno sulla direzione (36,5° come l'IFS). La direzione ha senso con vento ≥ 3 km/h."""
+
+    def __init__(self, model_dir: Path = M2_WIND10_DIR):
+        self.meta = json.loads((model_dir / "meta.json").read_text())
+        self.features = self.meta["features"]
+        self.base_features = [c for c in self.features if c not in ("nwp_ws_valid", "nwp_wd_sin", "nwp_wd_cos")]
+        self.tag = self.meta["model_tag"]
+        self.airports = self.meta["airports"]
+        self.boosters = {}
+        for key, name in (("speed", "lgbm_speed"), ("dir_sin", "lgbm_dir_sin"), ("dir_cos", "lgbm_dir_cos")):
+            with gzip.open(model_dir / f"{name}.txt.gz", "rt") as f:
+                self.boosters[key] = lgb.Booster(model_str=f.read())
+
+    def predict(self, nwp: pd.DataFrame, point: dict, valid_for: list[pd.Timestamp]) -> pd.DataFrame:
+        """DataFrame (valid_for, w_ifs, w_m2, d_ifs, d_m2) per i valid_for con riga di input."""
+        frame = build_m2_frame(nwp, point, self.base_features)
+        w = nwp[["recorded_at", "wind_speed", "wind_direction"]].copy()
+        w["recorded_at"] = pd.to_datetime(w.recorded_at).dt.tz_localize("UTC")
+        w["nwp_wd_sin"] = np.sin(np.deg2rad(w.wind_direction))
+        w["nwp_wd_cos"] = np.cos(np.deg2rad(w.wind_direction))
+        frame = frame.merge(w.rename(columns={"recorded_at": "valid_for", "wind_speed": "nwp_ws_valid",
+                                              "wind_direction": "nwp_wd_valid"})
+                            [["valid_for", "nwp_ws_valid", "nwp_wd_valid", "nwp_wd_sin", "nwp_wd_cos"]],
+                            on="valid_for", how="left")
+        frame = frame[frame.valid_for.isin(valid_for)].dropna(subset=["nwp_ws_valid", "nwp_wd_valid"]).copy()
+        if frame.empty:
+            return pd.DataFrame(columns=["valid_for", "w_ifs", "w_m2", "d_ifs", "d_m2"])
+        X = frame[self.features]
+        speed = np.clip(np.expm1(np.log1p(frame.nwp_ws_valid.clip(lower=0).to_numpy())
+                                 + self.boosters["speed"].predict(X)), 0.0, None)
+        direction = np.rad2deg(np.arctan2(self.boosters["dir_sin"].predict(X), self.boosters["dir_cos"].predict(X))) % 360
+        return pd.DataFrame({"valid_for": frame.valid_for.to_numpy(), "w_ifs": frame.nwp_ws_valid.to_numpy(),
+                             "w_m2": speed, "d_ifs": frame.nwp_wd_valid.to_numpy(), "d_m2": direction})

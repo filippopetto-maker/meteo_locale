@@ -79,18 +79,19 @@ def ang_err(a, b):
 
 
 def fit_lgb(train, cols, label, weight_col=None, n_iter=None):
-    params = {**DEFAULT_LGB_PARAMS, "seed": 42}
+    params = {**DEFAULT_LGB_PARAMS, "seed": 42, "verbose": -1}
+    cat = ["station_cat"] if "station_cat" in cols else []
     w = None if weight_col is None else np.clip(train[weight_col].to_numpy(), 0.5, 15.0)
     if n_iter is None:
         cut = train.valid_for.max() - timedelta(days=56)
         a, b = train[train.valid_for <= cut], train[train.valid_for > cut]
         wa = None if weight_col is None else np.clip(a[weight_col].to_numpy(), 0.5, 15.0)
         wb = None if weight_col is None else np.clip(b[weight_col].to_numpy(), 0.5, 15.0)
-        bst = lgb.train(params, lgb.Dataset(a[cols], label=a[label], weight=wa, categorical_feature=["station_cat"]),
+        bst = lgb.train(params, lgb.Dataset(a[cols], label=a[label], weight=wa, categorical_feature=cat),
                         num_boost_round=3000, valid_sets=[lgb.Dataset(b[cols], label=b[label], weight=wb)],
                         callbacks=[lgb.early_stopping(100, verbose=False)])
         n_iter = max(bst.best_iteration, 50)
-    return lgb.train(params, lgb.Dataset(train[cols], label=train[label], weight=w, categorical_feature=["station_cat"]),
+    return lgb.train(params, lgb.Dataset(train[cols], label=train[label], weight=w, categorical_feature=cat),
                      num_boost_round=n_iter), n_iter
 
 
