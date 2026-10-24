@@ -24,8 +24,12 @@ Utilizzo:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import logging
+import os
 import sys
+import tempfile
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -55,6 +59,14 @@ def fetch_ifs(stations: list[dict], start: pd.Timestamp, end: pd.Timestamp, retr
         "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m", "models": NWP_MODEL, "timezone": "UTC",
         "start_date": start.date().isoformat(), "end_date": end.date().isoformat(),
     }
+    # Cache su disco (3 ore): update_bias_features.py e update_bias_features_rh.py chiedono gli stessi 90 giorni
+    # nello stesso job; una sola chiamata evita il limite di Open-Meteo (HTTP 429).
+    key = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:16]
+    cache = Path(os.environ.get("IFS_CACHE_DIR", tempfile.gettempdir())) / f"ifs_hist_{key}.json"
+    if cache.exists() and time.time() - cache.stat().st_mtime < 3 * 3600:
+        data = json.loads(cache.read_text())
+        data = data if isinstance(data, list) else [data]
+        return _ifs_frames(stations, data)
     for attempt in range(retries):
         try:
             r = requests.get(HISTORICAL_URL, params=params, timeout=90)
@@ -62,6 +74,10 @@ def fetch_ifs(stations: list[dict], start: pd.Timestamp, end: pd.Timestamp, retr
                 raise requests.HTTPError(f"HTTP {r.status_code}")
             r.raise_for_status()
             data = r.json()
+            try:
+                cache.write_text(json.dumps(data))
+            except OSError:
+                pass
             break
         except (requests.RequestException, ValueError) as exc:
             wait = 30 * (attempt + 1)
@@ -70,6 +86,10 @@ def fetch_ifs(stations: list[dict], start: pd.Timestamp, end: pd.Timestamp, retr
     else:
         raise RuntimeError("Historical Forecast API non risponde")
     data = data if isinstance(data, list) else [data]
+    return _ifs_frames(stations, data)
+
+
+def _ifs_frames(stations: list[dict], data: list[dict]) -> dict[int, pd.DataFrame]:
     out = {}
     for st, loc in zip(stations, data):
         h = loc["hourly"]

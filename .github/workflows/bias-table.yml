@@ -54,3 +54,13 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           python3 scripts/update_bias_features.py
+
+      # Feature di bias dell'umidità di M2 umidità H1b (tabella bias_features_rh).
+      - name: Update bias features RH (M2 umidità H1b)
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python3 scripts/update_bias_features_rh.py

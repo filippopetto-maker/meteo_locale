@@ -22,6 +22,11 @@ Vento, velocità km/h (aggiunta il 22/10/2026), colonne w_*:
 La direzione non è modellata. Il confronto con il vivo ha senso solo sulle stazioni in
 meta["live_consistent_stations"] di model/m2_wind/meta.json (vedi scripts/validate_wind_live.py).
 
+Umidità H1b (aggiunta il 25/10/2026), tabella forecasts_shadow_m2hb: M2 umidità con finestre di bias, senza
+stagionali e con il ritardo di produzione (model/m2hb/, bias_features_rh aggiornata alle 03:00 UTC da
+scripts/update_bias_features_rh.py). Confronto con h_m2 (H1) di forecasts_shadow sulle stesse chiavi.
+Stesso schema di M2b (temperatura); blocco isolato come il vento a 10 m.
+
 Vento a 10 m (verità METAR, aggiunto il 22/10/2026), tabella forecasts_shadow_wind10: velocità e
 direzione di M2 Wind10 (model/m2_wind10/) per 8 aeroporti del Lazio (kind=airport, point_id=ICAO) e per
 le stazioni del progetto (kind=station). Si valuta solo sugli aeroporti, contro i METAR
@@ -54,7 +59,7 @@ for p in (_PROJECT_ROOT, _PROJECT_ROOT / "model"):
 
 import db  # noqa: E402
 import inference as inf  # noqa: E402
-from m2 import M2, M2Humidity, M2Wind, M2Wind10  # noqa: E402
+from m2 import M2, M2Humidity, M2HumidityB, M2Wind, M2Wind10  # noqa: E402
 
 logger = logging.getLogger("shadow_m2")
 
@@ -118,6 +123,43 @@ def wind10_block(stations: list[dict], dfs: dict[int, pd.DataFrame], leads: list
                         f"w_m2/w_ifs mediano {ap.w_m2.sum() / max(ap.w_ifs.sum(), 1e-9):.2f}")
     except Exception as exc:
         logger.error(f"wind10: blocco saltato ({exc})")
+    return rows
+
+
+def m2hb_block(stations: list[dict], dfs: dict[int, pd.DataFrame], leads: list[int], issue_at: datetime,
+               run_at: datetime | None) -> list[dict]:
+    """Righe di forecasts_shadow_m2hb. Mai solleva: su errore ritorna ciò che ha."""
+    rows: list[dict] = []
+    try:
+        model = M2HumidityB()
+        feats = db.get_client().table("bias_features_rh").select("*").execute().data
+        if not feats:
+            logger.error("m2hb: bias_features_rh vuota (eseguire scripts/update_bias_features_rh.py)")
+            return rows
+        window_end = pd.Timestamp(max(r["window_end"] for r in feats))
+        age = (pd.Timestamp(issue_at) - window_end).days
+        if age > 2:
+            logger.warning(f"m2hb: bias_features_rh vecchia di {age} giorni (window_end {window_end:%Y-%m-%d})")
+        table = {(r["station_id"], r["hour_utc"]): {k: r.get(k) for k in model.BIAS_FEATURES} for r in feats}
+        valid = [pd.Timestamp(issue_at) + timedelta(hours=int(L)) for L in leads]
+        for st in stations:
+            df = dfs.get(st["id"])
+            if df is None:
+                continue
+            by_hour = {h: table.get((st["id"], h), {}) for h in range(24)}
+            out = model.predict(df, st, valid, by_hour, window_end)
+            nwp = df.drop_duplicates("recorded_at", keep="last").set_index("recorded_at").humidity
+            for L, vf in zip(leads, valid):
+                pred = out.get(vf)
+                rows.append({"station_id": st["id"], "issue_at": issue_at.isoformat(), "lead_hours": int(L),
+                             "valid_for": vf.isoformat(), "nwp_run_at": run_at.isoformat() if run_at else None,
+                             "h_ifs": _r(nwp.get(vf.tz_localize(None))), "h_m2hb": None if pred is None else _r(pred[0]),
+                             "bias_lag": None if pred is None else int(pred[1]), "model_tag": model.tag})
+        d = pd.DataFrame(rows)
+        if len(d):
+            logger.info(f"m2hb: {len(d)} righe, h_m2hb mancanti {d.h_m2hb.isna().sum()}, window_end {window_end:%Y-%m-%d}, modello {model.tag}")
+    except Exception as exc:
+        logger.error(f"m2hb: blocco saltato ({exc})")
     return rows
 
 
@@ -207,6 +249,7 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
     if json_out:
         Path(json_out).write_text(json.dumps(rows, indent=1))
     wind10_rows = wind10_block(stations, dfs, leads, issue_at, run_at)
+    m2hb_rows = m2hb_block(stations, dfs, leads, issue_at, run_at)
     if dry_run:
         logger.info("--dry-run: nessuna scrittura")
         return
@@ -220,6 +263,14 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
             logger.info(f"forecasts_shadow_wind10: {len(wind10_rows)} righe scritte")
         except Exception as exc:  # il vento a 10 m non deve far fallire l'emissione principale
             logger.error(f"forecasts_shadow_wind10: scrittura fallita ({exc})")
+    if m2hb_rows:
+        try:
+            for i in range(0, len(m2hb_rows), 500):
+                db.get_client().table("forecasts_shadow_m2hb").upsert(
+                    m2hb_rows[i:i + 500], on_conflict="station_id,issue_at,lead_hours").execute()
+            logger.info(f"forecasts_shadow_m2hb: {len(m2hb_rows)} righe scritte")
+        except Exception as exc:  # H1b non deve far fallire l'emissione principale
+            logger.error(f"forecasts_shadow_m2hb: scrittura fallita ({exc})")
     if failed:
         sys.exit(1)
 
