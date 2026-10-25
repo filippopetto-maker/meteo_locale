@@ -916,10 +916,88 @@ Per ultima, deliberatamente: parametrizzare una metodologia ancora in evoluzione
 
 Promessa onesta: non "iper-locale ovunque dal giorno 0", ma "operativo dal giorno 0, iper-locale dopo l'accumulo" — la traiettoria che Roma ha dimostrato fattibile.
 
+#### 🧭 Principio: griglia del territorio, non griglia del modello (25/10/2026)
+
+L'espansione del dominio (dal Lazio all'Italia) non deve far perdere l'unica cosa che ci distingue dai
+modelli globali: la località. Tre regole.
+
+**1. La previsione è un campo su griglia, corretto dalle stazioni vicine.** Due livelli:
+
+- *previsione di base su griglia*: il modello produce il campo su ogni cella del dominio. Verità di
+  addestramento: il radar per la pioggia (copre ogni cella), il satellite per la nuvolosità, le
+  stazioni insieme alle caratteristiche fisse del territorio per temperatura, umidità e vento;
+- *correzione locale (nowcasting)*: dove la rete è densa (Netatmo, METAR, MeteoNetwork) le
+  osservazioni recenti correggono le prime ore ("a Trastevere adesso fa 1,5 °C più del previsto").
+  Per la pioggia il ruolo lo fanno il radar in tempo reale e i pluviometri ("sta piovendo adesso").
+
+Vale uguale nel Lazio e in Italia: cambia solo quanto spesso la correzione locale entra in gioco.
+
+**2. Input grossolano, output alla risoluzione del territorio.** I modelli globali (IFS 9 km, GFS
+25 km) danno lo stato regionale e restano a quella risoluzione: non va inseguita. L'output invece
+segue il territorio, perché il modello impara una funzione
+
+> previsione locale = f(stato regionale del modello, **caratteristiche fisse del punto**, vicinato)
+
+e le caratteristiche fisse si calcolano su qualsiasi punto: quota, pendenza ed esposizione dal DEM a
+30 m, distanza e orientamento rispetto alla costa, uso del suolo e città (LCZ), forma del terreno
+(fondovalle, versante, cresta). Ne segue che **allargare il dominio rafforza la località invece di
+diluirla**: il modello non impara "com'è fatta Trastevere" ma "come si comporta un canyon urbano a
+30 m di quota e 20 km dal mare", e in Italia gli esempi di coste, fondovalle, città e montagne si
+moltiplicano. La località si perde solo se il modello usa l'identità della stazione o della cella
+(`station_cat`) al posto delle sue caratteristiche fisiche: nel modello generale va sostituita da
+descrittori del territorio.
+
+| Variabile | Risoluzione di output | Da cosa dipende |
+|:--|:--|:--|
+| Temperatura, umidità, percepita | 100 m – 1 km | DEM, uso del suolo, città: effetto forte e prevedibile |
+| Vento | ~1 km | orografia, canalizzazione, brezze |
+| Pioggia (probabilità) | 1–2 km (verità radar a 1 km) | effetti locali reali (innesco sui rilievi, convergenza delle brezze), ma predicibilità bassa al km: probabilità da smussare |
+| Nuvolosità | 2–5 km | satellite a 3–5 km |
+
+**3. Due modi di servire la previsione.** Per la mappa, una griglia **calcolata in anticipo a 1–2 km**
+a ogni nuova corsa dei modelli. Per il punto cliccato, il calcolo **al volo** alla risoluzione piena:
+basta una riga di feature (campi del modello già scaricati per la corsa + caratteristiche fisse del
+punto), senza nuove chiamate esterne.
+
+**Stima delle risorse per il dominio Italia** (ordini di grandezza, 25/10/2026; riquadro 35,5–47,1 N,
+6,6–18,6 E; terra ~302.000 km²):
+
+| Voce | Lazio oggi | Italia | Note |
+|:--|:--|:--|:--|
+| Celle di output | — | ~75.000 a 2 km, ~300.000 a 1 km | mappa a 2 km, clic a piena risoluzione |
+| Verità pioggia, radar 0,05° (2021–2026) | 0,4 GB su HF (passo 5 min) | ~0,6 GB su HF con massimo e media orari (~7,5 GB a 5 min) | ×21,6 celle; per addestrare su finestre orarie o di 3 h basta l'orario; a 1 km si tiene solo un campione di pixel |
+| Archivio NWP per l'addestramento (GFS dal 2021, IFS dal 2023; 8 campi, 2 corse/giorno, passi di 3 h fino a 48 h) | punti Open-Meteo | ~4 GB su HF | da AWS (GRIB con indice, solo i campi utili) con la tecnica di ia-meteo per ARCO-ERA5: scarica, ritaglia in memoria, butta. Traffico ~400 GB (GFS) + ~180 GB (IFS); ~150 GB per il GFS con 1 corsa/giorno e 6 campi. Open-Meteo per punto non regge (~1 mese di quota). Alternativa: Google Earth Engine (ritaglio lato server) |
+| Budget HF | dataset ia-meteo, 95 GB in comune | +4–5 GB | ia-meteo prevede ~90 GB: serve HF PRO o un dataset/account separato |
+| Mac | streaming, <1 GB | streaming, <5 GB | nessun dato tenuto in locale; il progetto va spostato fuori da iCloud |
+| Addestramento | 1 min (M2) | ~1 h per modello su un campione di 10–20 M righe | sul Mac, 8 GB di RAM |
+| Inferenza per corsa (GitHub Actions) | secondi | ~1,2 M righe per variabile, pochi minuti per corsa | gratuito e senza limite di minuti se il repo è pubblico |
+| Uscita per corsa (2 km × 16 finestre × 4 variabili) | <1 MB | ~5 MB | Pages via artifact (`publish.yml`): niente cronologia nel repo |
+| Input live dei modelli | Open-Meteo per punto | GRIB diretti: IFS open data (ECMWF), GFS NOMADS con ritaglio | Open-Meteo per punto non regge ~2.200 celle 0,25° a ogni corsa (quota ~10.000/giorno) |
+| Verifica temperatura/umidità/vento: Netatmo `getpublicdata` | 5 riquadri ogni 30 min (240/giorno) | ~90–100 riquadri (densità variabile) | limite Netatmo 500 chiamate/ora: ogni ora regge, ogni 30 min è al limite con il resto |
+| Verifica: METAR (IEM) | 1 chiamata | 1 chiamata per tutta Italia | trascurabile |
+| Verifica: MeteoNetwork | — | 1 chiamata `/data-realtime` se arriva il token BULK | col token standard (5/min, una stazione per chiamata) non è praticabile |
+| Verifica pioggia: radar DPC SRI | file nazionale | stesso file nazionale | il costo non dipende dal dominio: ogni 15 min = 192 richieste/giorno, ~34 MB/giorno; il firewall blocca chi va troppo veloce |
+| Verifica nuvolosità | Open-Meteo satellite per punto | maschera nuvole EUMETSAT (disco intero, ~0,5 MB ogni 15 min, giorno e notte) o Open-Meteo su un campione di punti una volta al giorno | il costo EUMETSAT non dipende dal dominio |
+
+**Cadenze sostenibili** (al posto di "tutto ogni 30 minuti"):
+
+| Cosa | Cadenza | Perché |
+|:--|:--|:--|
+| Griglia di previsione (mappa) | a ogni nuova corsa: 4 volte al giorno | prima della corsa successiva l'input non cambia |
+| Correzione locale con le stazioni (prime 6 h) | ogni ora | Netatmo regge l'orario su tutta Italia; il radar ogni 15 min solo dove serve |
+| Radar in mappa | lato browser, nessun backend | come oggi con RainViewer |
+| Verifica delle previsioni | una volta al giorno, sul giorno prima | radar, satellite e stazioni in blocco: poche chiamate |
+| Calcolo al clic | su richiesta, sui campi già scaricati | nessuna chiamata esterna in più; da scegliere se nel browser (alberi esportati in JS) o in una funzione serverless |
+
 1. [ ] `config.yaml` di deployment + refactor delle costanti
 2. [ ] Orografia automatica da coordinate (coastline + LCZ Copernicus)
 3. [ ] Ciclo di vita cold-start documentato
 4. [ ] Comando `bootstrap_location.py --lat --lon` che genera config + bootstrap
+5. [ ] Dominio come parametro (riquadro in `config.yaml`) e griglie comuni: 0,25° per i modelli, 0,05° per il radar (come ia-meteo), output a 1–2 km
+6. [ ] Descrittori del territorio al posto di `station_cat` (DEM 30 m, LCZ, costa, forma del terreno)
+7. [ ] Input live dei modelli da GRIB (IFS open data, GFS NOMADS) al posto di Open-Meteo per punto
+8. [ ] Spazio HF per l'Italia (PRO o dataset separato) e progetto fuori da iCloud
+9. [ ] Calcolo al clic: alberi esportati nel browser o funzione serverless
 
 ### 🟥 Fase 7 — Convettività e target difficili (continuativa, post-storico)
 
