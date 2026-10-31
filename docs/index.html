@@ -203,7 +203,7 @@
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
     }
-    .temp-legend.legend-radar-mode {
+    .temp-legend.legend-radar-mode, .temp-legend.legend-fc48-mode {
       bottom: 118px; /* fallback per browser senza supporto env() */
       bottom: calc(118px + env(safe-area-inset-bottom, 0px));
     }
@@ -352,7 +352,7 @@
         bottom: 20px; /* fallback per browser senza supporto env() */
         bottom: calc(20px + env(safe-area-inset-bottom, 0px));
       }
-      .temp-legend.legend-radar-mode {
+      .temp-legend.legend-radar-mode, .temp-legend.legend-fc48-mode {
         bottom: 100px; /* fallback per browser senza supporto env() */
         bottom: calc(100px + env(safe-area-inset-bottom, 0px));
       }
@@ -626,6 +626,7 @@
       text-shadow: 0 1px 5px rgba(0, 0, 0, .9);
     }
     .is-pwa .temp-legend.legend-radar-mode { bottom: 220px; }
+    .is-pwa .temp-legend.legend-fc48-mode { bottom: 236px; }
     .is-pwa #legend-title { display: none; }
     .is-pwa #legend-bar { box-shadow: 0 1px 6px rgba(0, 0, 0, .6); margin-bottom: 0; }
     .is-pwa #legend-labels { position: static; height: auto; margin-top: 0; }

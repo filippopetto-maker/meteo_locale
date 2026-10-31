@@ -19,6 +19,7 @@ Utilizzo:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import sys
@@ -29,6 +30,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import db  # noqa: E402
+import numpy as np  # noqa: E402
+
+from grid import compute_sea_blend_weight  # noqa: E402
+
+# Stessa griglia di scripts/export_static.py (temp_grid_* di latest.json)
+LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY = 41.18, 42.85, 11.40, 14.05, 250, 220
 
 logger = logging.getLogger("export_forecast_48h")
 
@@ -53,7 +60,15 @@ def build(rows: list[dict], names: dict[int, str]) -> dict:
     issue = max((r["issue_at"] for r in rows), default=None)
     tags = sorted({r["model_tag"] for r in rows if r.get("model_tag")})
     return {"generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "issue_at": issue, "model_tag": ",".join(tags), "stations": stations}
+            "issue_at": issue, "model_tag": ",".join(tags), "stations": stations, "land_weight": land_weight()}
+
+
+def land_weight() -> dict:
+    """Peso terra (1 − peso del blend SST) sulla griglia di latest.json, 0–100 in byte base64.
+    La mappa lo usa per non applicare al mare la variazione oraria delle stazioni di terra."""
+    w = 1.0 - compute_sea_blend_weight(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, NX, NY)
+    raw = np.clip(np.round(w * 100), 0, 100).astype(np.uint8).tobytes()
+    return {"nx": NX, "ny": NY, "b64": base64.b64encode(raw).decode()}
 
 
 def main() -> None:

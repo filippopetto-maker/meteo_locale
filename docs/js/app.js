@@ -292,6 +292,7 @@
 
   let arrowMarkers = [];
   let stationMarkers = [];
+  let fc48Ctl = null;  // scorrimento orario +1…+48 h (vedi setupForecast48)
 
   function clearArrowLayer(map) {
     arrowMarkers.forEach(m => map.removeLayer(m));
@@ -900,6 +901,7 @@
 
       function switchLayer(layer) {
         activeLayer = layer;
+        fc48Ctl?.refresh();
         if (heatOverlay) map.removeLayer(heatOverlay);
         heatOverlay = null;
 
@@ -994,6 +996,7 @@
 
       function switchTime(time) {
         activeTime = time;
+        fc48Ctl?.refresh();
         document.getElementById('btn-now').classList.toggle('active', time === 'observed');
         document.getElementById('btn-plus1').classList.toggle('active', time === 'forecast');
         const label = document.getElementById('valid-for-label');
@@ -1020,6 +1023,196 @@
         document.getElementById('btn-hreal').classList.toggle('active', mode === 'real');
         document.getElementById('btn-hwb').classList.toggle('active', mode === 'wetbulb');
         if (activeLayer === 'humidity') switchLayer('humidity');
+      }
+
+      function setupForecast48(latest, stations) {
+        const base = {
+          t: latest.temp_grid_forecast, h: latest.humidity_grid_forecast, ws: latest.wind_speed_grid,
+          a: apparentGridFc, wb: wetBulbGridFc,
+          st: stations.map(s => (s.forecast ? { ...s.forecast } : null)),
+        };
+        let data = null;        // {times: [...ISO], series: Map(id → {t, rh, ws, wd} allineate a times)}
+        let weights = null;     // Float32Array celle × stazioni (IDW normalizzato), calcolata una volta
+        let wIds = [];
+        let idx = 0;            // posizione nella timeline (0 = +1h)
+        let timer = null;
+        const cache = new Map();
+
+        const el = document.createElement('div');
+        el.className = 'radar-timeline';
+        el.id = 'fc48-timeline';
+        el.style.display = 'none';
+        el.innerHTML =
+          (isPWA ? `<div class="radar-timeline-header"><span class="hdr-title">PREVISIONE ORARIA</span>` +
+                   `<span class="hdr-credit">modello M2 · fino a +48 h</span></div>` : '') +
+          `<div class="radar-timeline-row">` +
+          `<button id="fc48-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
+          `<div class="radar-track-wrap"><input type="range" id="fc48-slider" class="radar-slider" min="0" max="0" step="1" value="0"></div>` +
+          `</div>` +
+          `<div class="radar-timeline-labels"><span id="fc48-start"></span><span id="fc48-now"></span><span id="fc48-end"></span></div>` +
+          (isPWA ? '' : `<div class="radar-credit">Previsioni M2 · scorrimento fino a +48 h</div>`);
+        document.body.appendChild(el);
+        const slider = el.querySelector('#fc48-slider');
+        const playBtn = el.querySelector('#fc48-play');
+
+        const fmt = iso => new Date(iso).toLocaleString('it-IT', {
+          timeZone: 'Europe/Rome', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+
+        fetch('data/forecast_48h.json', { cache: 'no-store' })
+          .then(r => (r.ok ? r.json() : null))
+          .then(j => { if (j) init(j); })
+          .catch(() => {});
+
+        function init(j) {
+          const ageH = (Date.now() - new Date(j.issue_at).getTime()) / 3.6e6;
+          if (!(ageH < 6)) return;  // file vecchio: niente timeline
+          const ref = stations.find(s => s.forecast?.valid_for);
+          if (!ref) return;
+          const start = new Date(ref.forecast.valid_for).getTime();  // ora della +1h di latest.json
+          const series = new Map();
+          let times = null;
+          for (const s of stations) {
+            const e = j.stations?.[String(s.id)];
+            if (!e) continue;
+            const t0 = e.valid_for.findIndex(v => new Date(v).getTime() === start);
+            if (t0 < 0) continue;
+            const sl = (a) => a.slice(t0);
+            series.set(s.id, { t: sl(e.t), rh: sl(e.rh), ws: sl(e.ws), wd: sl(e.wd) });
+            if (!times || e.valid_for.length - t0 > times.length) times = e.valid_for.slice(t0);
+          }
+          if (!times || times.length < 2 || series.size < 2) return;
+          let land = null;  // peso terra 0–1 per cella (1 = terraferma), dal file; senza, nessun peso
+          const lw = j.land_weight;
+          if (lw && lw.nx === base.t?.nx && lw.ny === base.t?.ny) {
+            const bin = atob(lw.b64);
+            land = new Float32Array(bin.length);
+            for (let c = 0; c < bin.length; c++) land[c] = bin.charCodeAt(c) / 100;
+          }
+          data = { times, series, land };
+          // Scala colori fissa su tutte le 48 ore, così lo scorrimento resta confrontabile
+          for (const ser of series.values()) {
+            for (const v of ser.t)  if (v != null) { globalTMin = Math.min(globalTMin, v); globalTMax = Math.max(globalTMax, v); }
+            for (const v of ser.rh) if (v != null) { globalHMin = Math.min(globalHMin, v); globalHMax = Math.max(globalHMax, v); }
+          }
+          slider.max = String(times.length - 1);
+          el.querySelector('#fc48-start').textContent = '+1h';
+          el.querySelector('#fc48-end').textContent = `+${times.length}h`;
+          slider.addEventListener('input', e => { pause(); show(parseInt(e.target.value, 10)); });
+          const btn = document.getElementById('btn-plus1');
+          if (btn) btn.textContent = 'Previsione';  // non più solo +1h: l'ora si sceglie dalla timeline
+          playBtn.addEventListener('click', () => (timer ? pause() : play()));
+          show(0, true);
+          refresh();
+        }
+
+        function buildWeights(grid) {
+          const pts = stations.filter(s => data.series.has(s.id));
+          wIds = pts.map(s => s.id);
+          const { nx, ny, lat_min, lat_max, lon_min, lon_max } = grid;
+          const k = pts.length, w = new Float32Array(nx * ny * k);
+          const cosLat = Math.cos(((lat_min + lat_max) / 2) * Math.PI / 180);
+          for (let r = 0; r < ny; r++) {
+            const lat = lat_max - (lat_max - lat_min) * r / (ny - 1);
+            for (let c = 0; c < nx; c++) {
+              const lon = lon_min + (lon_max - lon_min) * c / (nx - 1);
+              const o = (r * nx + c) * k;
+              let sum = 0;
+              for (let i = 0; i < k; i++) {
+                const d2 = (lat - pts[i].lat) ** 2 + ((lon - pts[i].lon) * cosLat) ** 2 + 1e-6;
+                const wi = 1 / d2;
+                w[o + i] = wi; sum += wi;
+              }
+              for (let i = 0; i < k; i++) w[o + i] /= sum;
+            }
+          }
+          return w;
+        }
+
+        function shifted(grid, key, i) {
+          if (!grid?.values) return grid;
+          if (!weights) weights = buildWeights(grid);
+          const k = wIds.length, n = grid.values.length;
+          const delta = wIds.map(id => {
+            const s = data.series.get(id)[key];
+            return (s[i] != null && s[0] != null) ? s[i] - s[0] : 0;
+          });
+          const out = new Array(n);
+          let vMin = Infinity, vMax = -Infinity;
+          for (let c = 0; c < n; c++) {
+            let d = 0;
+            const o = c * k;
+            for (let j = 0; j < k; j++) d += weights[o + j] * delta[j];
+            if (data.land) d *= data.land[c];  // sul mare la variazione delle stazioni di terra non si applica
+            let v = grid.values[c] + d;
+            if (key === 'rh') v = Math.min(100, Math.max(0, v));
+            if (key === 'ws') v = Math.max(0, v);
+            out[c] = v;
+            if (v < vMin) vMin = v;
+            if (v > vMax) vMax = v;
+          }
+          return { ...grid, values: out, v_min: vMin, v_max: vMax };
+        }
+
+        function gridsFor(i) {
+          if (i === 0) return base;
+          if (cache.has(i)) return cache.get(i);
+          const t = shifted(base.t, 't', i), h = shifted(base.h, 'rh', i), ws = shifted(base.ws, 'ws', i);
+          const derive = (fn, wg) => {
+            if (!t?.values || !h?.values) return null;
+            const vals = t.values.map((tv, c) => fn(tv, h.values[c], wg ? wg.values[c] : null));
+            return { ...t, values: vals, v_min: Math.min(...vals), v_max: Math.max(...vals) };
+          };
+          const g = { t, h, ws, a: derive(apparentTemp, ws), wb: derive((tv, hv) => wetBulbStull(tv, hv), null) };
+          cache.set(i, g);
+          return g;
+        }
+
+        function show(i, silent) {
+          idx = i;
+          slider.value = String(i);
+          const g = gridsFor(i);
+          latest.temp_grid_forecast = g.t;
+          latest.humidity_grid_forecast = g.h;
+          apparentGridFc = g.a;
+          wetBulbGridFc = g.wb;
+          stations.forEach((s, n) => {
+            const b = base.st[n];
+            const ser = data.series.get(s.id);
+            if (!b) return;
+            if (i === 0 || !ser) { s.forecast = { ...b }; return; }
+            s.forecast = { ...b, valid_for: data.times[i], temperature: ser.t[i], humidity: ser.rh[i],
+                           wind_speed: ser.ws[i], wind_direction: ser.wd[i] };
+          });
+          el.querySelector('#fc48-now').textContent = `+${i + 1}h · ${fmt(data.times[i])}`;
+          if (silent) return;
+          updateStationPopups(stationMarkers, stations);
+          switchTime(activeTime);
+        }
+
+        function play() {
+          playBtn.textContent = '❚❚';
+          timer = setInterval(() => show((idx + 1) % data.times.length), 900);
+        }
+        function pause() {
+          if (timer) clearInterval(timer);
+          timer = null;
+          playBtn.textContent = '▶';
+        }
+
+        function refresh() {
+          const on = !!data && activeTime === 'forecast' &&
+                     (activeLayer === 'temperature' || activeLayer === 'humidity');
+          el.style.display = on ? '' : 'none';
+          // Stesso spazio della timeline radar: la legenda sale sopra la timeline
+          document.querySelector('.temp-legend')?.classList.toggle('legend-fc48-mode', on);
+          if (!on) {
+            pause();
+            // Fuori dalla previsione (Adesso, vento, radar) tutto torna alla +1h
+            if (data && idx !== 0) { show(0, true); updateStationPopups(stationMarkers, stations); }
+          }
+        }
+
+        return { refresh };
       }
 
       document.getElementById('btn-wind').addEventListener('click', () => switchLayer('wind'));
@@ -1062,6 +1255,14 @@
       const stations = latest.stations || [];
       stationMarkers = renderStations(map, stations);
       switchLayer('temperature');
+
+      // ── Scorrimento orario +1…+48 h (data/forecast_48h.json, previsioni M2) ─────────────────
+      // La griglia dell'ora scelta = griglia +1h di latest.json (ERA5 + correzioni delle stazioni,
+      // calcolata dal server) + IDW della variazione prevista a ogni stazione tra +1h e l'ora scelta:
+      // la struttura spaziale resta quella della +1h, cambia l'andamento nel tempo. Le griglie derivate
+      // (percepita, bulbo umido) si ricalcolano con le stesse formule. Senza il file, o con un file vecchio,
+      // la timeline non compare e la mappa resta com'è.
+      fc48Ctl = setupForecast48(latest, stations);
 
       if (stations.length > 0) {
         const bounds = stations.map(st => [st.lat, st.lon]);

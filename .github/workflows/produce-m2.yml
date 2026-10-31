@@ -1,11 +1,14 @@
 name: Produzione M2 (1–48 h)
 
-# Scheletro dati di M2 in produzione. SOLO workflow_dispatch: nessun cron, nessun
-# trigger da cron-job.org finché non si decide di passare a M2 sulla mappa.
-# Scrive forecasts_48h (ultima emissione, sovrascritta). Il lead 1 in forecasts si
-# attiva solo con l'input write_lead1 = true: in quel caso il workflow inference.yml
-# va disattivato, perché i due scriverebbero la stessa riga (station_id, valid_for, lead 1).
+# M2 in produzione dal 31/10/2026: scrive forecasts_48h (ultima emissione, sovrascritta) e,
+# con write_lead1 = true o da schedule, il lead 1 in forecasts al posto di inference.yml
+# (che resta solo manuale: i due scriverebbero la stessa riga station_id, valid_for, lead 1).
+# Ritorno indietro: riattivare inference su cron-job.org e fermare il job di produce-m2.
 on:
+  # Rete di sicurezza: GitHub salta o ritarda gli schedule su repo poco attivi; il trigger principale
+  # è cron-job.org (ogni ora al minuto 5, body {"ref":"main","inputs":{"write_lead1":"true"}}).
+  schedule:
+    - cron: "20 * * * *"
   workflow_dispatch:
     inputs:
       write_lead1:
@@ -49,7 +52,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          if [ "${{ inputs.write_lead1 }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.write_lead1 }}" = "true" ]; then
             python3 model/produce_m2.py --write-lead1
           else
             python3 model/produce_m2.py

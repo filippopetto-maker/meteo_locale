@@ -1,12 +1,9 @@
 name: Inference operativa (T+1h)
 
-# Esegue model/inference.py ogni 30 minuti per pubblicare nuove previsioni
-# su Supabase. Schedulato in UTC (GitHub Actions usa cron UTC).
+# Modello attuale (v1). Dal lancio di M2 (31/10/2026) il lead 1 in forecasts lo scrive
+# produce-m2.yml: questo workflow resta solo manuale, come ritorno indietro (riattivarlo
+# insieme al job di cron-job.org e fermare produce-m2).
 on:
-  schedule:
-    # Ogni 30 minuti: minuto 0 e 30 di ogni ora.
-    - cron: "0,30 * * * *"
-  # Permette anche il trigger manuale dalla UI di Actions.
   workflow_dispatch:
 
 jobs:
