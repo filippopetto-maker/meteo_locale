@@ -6,7 +6,7 @@ name: Produzione M2 (1–48 h)
 # Ritorno indietro: riattivare inference su cron-job.org e fermare il job di produce-m2.
 on:
   # Rete di sicurezza: GitHub salta o ritarda gli schedule su repo poco attivi; il trigger principale
-  # è cron-job.org (ogni ora al minuto 5, body {"ref":"main","inputs":{"write_lead1":"true"}}).
+  # è cron-job.org (ogni ora al minuto 0, prima dell'export delle :05, body {"ref":"main","inputs":{"write_lead1":"true"}}).
   schedule:
     - cron: "20 * * * *"
   workflow_dispatch:
