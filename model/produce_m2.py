@@ -149,8 +149,8 @@ def run(leads: list[int], dry_run: bool, write_lead1: bool, json_out: str | None
         return
 
     db.upsert_forecasts_48h(table_rows)
-    db.delete_forecasts_48h_before(issue_at)
-    logger.info(f"forecasts_48h: {len(table_rows)} righe scritte, ore passate eliminate")
+    db.delete_forecasts_48h_issued_before(issue_at)
+    logger.info(f"forecasts_48h: {len(table_rows)} righe scritte, emissioni precedenti eliminate")
     if write_lead1:
         n = 0
         for r in rows:

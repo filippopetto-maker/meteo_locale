@@ -150,10 +150,11 @@ def upsert_forecasts_48h(rows: list[dict], chunk: int = 500) -> int:
             rows[i:i + chunk], on_conflict="station_id,valid_for").execute()
     return len(rows)
 
-def delete_forecasts_48h_before(valid_before) -> None:
-    """Toglie da forecasts_48h le ore già passate (valid_for < valid_before)."""
+def delete_forecasts_48h_issued_before(issue_at) -> None:
+    """Toglie da forecasts_48h le righe delle emissioni precedenti (issue_at < issue_at): le ore passate
+    e quella con valid_for = nuova issue_at, che la nuova emissione (lead 1 = issue_at + 1 h) non sovrascrive."""
     get_client().table("forecasts_48h").delete().lt(
-        "valid_for", valid_before.isoformat() if hasattr(valid_before, "isoformat") else valid_before).execute()
+        "issue_at", issue_at.isoformat() if hasattr(issue_at, "isoformat") else issue_at).execute()
 
 def get_forecasts_48h() -> list[dict]:
     rows, start = [], 0
