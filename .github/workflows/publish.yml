@@ -94,6 +94,7 @@ jobs:
           # SST: se manca (es. prima del primo deploy via Actions) resta la
           # copia committata; sst.py la considera scaduta e rifà il fetch.
           fetch sst_cache.json data/sst_cache.json || true
+          fetch forecast_48h.json docs/data/forecast_48h.json || true
 
           echo "static=$need_static" >> "$GITHUB_OUTPUT"
           echo "dashboard=$need_dashboard" >> "$GITHUB_OUTPUT"
@@ -120,6 +121,16 @@ jobs:
             sleep 20
           done
           exit 1
+
+      # Previsioni M2 1–48 h (forecasts_48h → forecast_48h.json). Facoltativo: se fallisce resta
+      # la copia ripristinata dal sito e la pubblicazione prosegue.
+      - name: Export forecast_48h.json
+        if: steps.restore.outputs.static == 'true'
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python3 scripts/export_forecast_48h.py --out docs/data/forecast_48h.json
 
       - name: Export dashboard (dashboard_data.json)
         if: steps.restore.outputs.dashboard == 'true'

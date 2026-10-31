@@ -1,0 +1,56 @@
+name: Produzione M2 (1–48 h)
+
+# Scheletro dati di M2 in produzione. SOLO workflow_dispatch: nessun cron, nessun
+# trigger da cron-job.org finché non si decide di passare a M2 sulla mappa.
+# Scrive forecasts_48h (ultima emissione, sovrascritta). Il lead 1 in forecasts si
+# attiva solo con l'input write_lead1 = true: in quel caso il workflow inference.yml
+# va disattivato, perché i due scriverebbero la stessa riga (station_id, valid_for, lead 1).
+on:
+  workflow_dispatch:
+    inputs:
+      write_lead1:
+        description: "Scrive anche il lead 1 in forecasts (sostituisce inference.yml)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: produce-m2
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    name: Run produce_m2
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: "Setup Miniconda (env: meteo, Python 3.12)"
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: meteo
+          python-version: "3.12"
+          auto-activate-base: false
+          use-mamba: true
+
+      - name: Install pip dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run produce_m2
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ "${{ inputs.write_lead1 }}" = "true" ]; then
+            python3 model/produce_m2.py --write-lead1
+          else
+            python3 model/produce_m2.py
+          fi
