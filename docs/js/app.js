@@ -573,6 +573,7 @@
       if (!latestRes.ok) throw new Error('latest.json non trovato');
       const latest   = await latestRes.json();
       const windGrid = windRes.ok ? await windRes.json() : null;
+      let windGridNow = windGrid;  // griglia particelle dell'ora mostrata (timeline +48 h)
 
       // Range unificato T / T+1 — scala fissa per rendere confrontabile il toggle
       const tgObs = latest.temp_grid_observed;
@@ -1036,6 +1037,7 @@
         let wIds = [];
         let idx = 0;            // posizione nella timeline (0 = +1h)
         let timer = null;
+        let wsRange = null;     // scala colori del vento fissa sulle 48 ore
         const cache = new Map();
 
         const el = document.createElement('div');
@@ -1090,9 +1092,15 @@
           }
           data = { times, series, land };
           // Scala colori fissa su tutte le 48 ore, così lo scorrimento resta confrontabile
+          let wsMin = base.ws ? base.ws.ws_min : Infinity, wsMax = base.ws ? base.ws.ws_max : -Infinity;
           for (const ser of series.values()) {
             for (const v of ser.t)  if (v != null) { globalTMin = Math.min(globalTMin, v); globalTMax = Math.max(globalTMax, v); }
             for (const v of ser.rh) if (v != null) { globalHMin = Math.min(globalHMin, v); globalHMax = Math.max(globalHMax, v); }
+            for (const v of ser.ws) if (v != null) { wsMin = Math.min(wsMin, v); wsMax = Math.max(wsMax, v); }
+          }
+          if (base.ws) {
+            wsRange = { min: Math.round(wsMin), max: Math.round(wsMax) };
+            base.ws = { ...base.ws, ws_min: wsRange.min, ws_max: wsRange.max };
           }
           slider.max = String(times.length - 1);
           el.querySelector('#fc48-start').textContent = '+1h';
@@ -1142,7 +1150,9 @@
             let d = 0;
             const o = c * k;
             for (let j = 0; j < k; j++) d += weights[o + j] * delta[j];
-            if (data.land) d *= data.land[c];  // sul mare la variazione delle stazioni di terra non si applica
+            // Sul mare la variazione delle stazioni di terra non si applica (riscaldamento diurno);
+            // il vento invece cambia anche al largo, come nella griglia delle particelle
+            if (data.land && key !== 'ws') d *= data.land[c];
             let v = grid.values[c] + d;
             if (key === 'rh') v = Math.min(100, Math.max(0, v));
             if (key === 'ws') v = Math.max(0, v);
@@ -1156,7 +1166,9 @@
         function gridsFor(i) {
           if (i === 0) return base;
           if (cache.has(i)) return cache.get(i);
-          const t = shifted(base.t, 't', i), h = shifted(base.h, 'rh', i), ws = shifted(base.ws, 'ws', i);
+          const t = shifted(base.t, 't', i), h = shifted(base.h, 'rh', i);
+          let ws = shifted(base.ws, 'ws', i);
+          if (ws && wsRange) ws = { ...ws, ws_min: wsRange.min, ws_max: wsRange.max };
           const derive = (fn, wg) => {
             if (!t?.values || !h?.values) return null;
             const vals = t.values.map((tv, c) => fn(tv, h.values[c], wg ? wg.values[c] : null));
@@ -1183,25 +1195,73 @@
             s.forecast = { ...b, valid_for: data.times[i], temperature: ser.t[i], humidity: ser.rh[i],
                            wind_speed: ser.ws[i], wind_direction: ser.wd[i] };
           });
+          latest.wind_speed_grid = g.ws;
+          currentWsMin = g.ws ? g.ws.ws_min : WIND_SPEED_MIN;
+          currentWsMax = g.ws ? g.ws.ws_max : WIND_SPEED_MAX;
+          windGridNow = windGridFor(i);
+          if (windLayer) windLayer.setData(windGridNow);
           el.querySelector('#fc48-now').textContent = `+${i + 1}h · ${fmt(data.times[i])}`;
           if (silent) return;
           updateStationPopups(stationMarkers, stations);
-          switchTime(activeTime);
+          if (activeLayer !== 'wind') { switchTime(activeTime); return; }
+          // Scheda Vento: si ridisegnano solo sfondo, legenda ed eventuali frecce
+          if (heatOverlay) map.removeLayer(heatOverlay);
+          heatOverlay = renderWindSpeed(latest);
+          if (heatOverlay) heatOverlay.addTo(map);
+          updateWindLegend();
+          if (document.getElementById('arrow-check')?.checked) renderArrowLayer(map, windGridNow);
+        }
+
+        // Particelle dell'ora i: stessa interpolazione del server (export_static.build_wind_grid_json,
+        // IDW potenza 2 in gradi) sul vento delle stazioni; alla +1h resta la griglia del server
+        function windGridFor(i) {
+          if (i === 0 || !windGrid?.[0]?.data?.length) return windGrid;
+          const { nx, ny, la1, la2, lo1, lo2 } = windGrid[0].header;
+          const pts = [];
+          for (const s of stations) {
+            const f = s.forecast;
+            if (f?.wind_speed == null || f?.wind_direction == null) continue;
+            const rad = f.wind_direction * Math.PI / 180, ms = f.wind_speed / 3.6;
+            pts.push([s.lat, s.lon, -ms * Math.sin(rad), -ms * Math.cos(rad)]);
+          }
+          if (pts.length < 2) return windGrid;
+          const u = new Array(nx * ny), v = new Array(nx * ny);
+          for (let r = 0; r < ny; r++) {
+            const lat = la1 - (la1 - la2) * r / (ny - 1);
+            for (let c = 0; c < nx; c++) {
+              const lon = lo1 + (lo2 - lo1) * c / (nx - 1);
+              let su = 0, sv = 0, sw = 0, hit = null;
+              for (const p of pts) {
+                const d2 = (lat - p[0]) ** 2 + (lon - p[1]) ** 2;
+                if (d2 === 0) { hit = p; break; }
+                su += p[2] / d2; sv += p[3] / d2; sw += 1 / d2;
+              }
+              u[r * nx + c] = Math.round((hit ? hit[2] : su / sw) * 1e4) / 1e4;
+              v[r * nx + c] = Math.round((hit ? hit[3] : sv / sw) * 1e4) / 1e4;
+            }
+          }
+          return [{ ...windGrid[0], data: u }, { ...windGrid[1], data: v }];
         }
 
         function play() {
           playBtn.textContent = '❚❚';
-          timer = setInterval(() => show((idx + 1) % data.times.length), 900);
+          // Sul vento le particelle ripartono a ogni ora: passo più lento per lasciarle muovere
+          const step = () => {
+            timer = setTimeout(() => { show((idx + 1) % data.times.length); step(); },
+                               activeLayer === 'wind' ? 1600 : 900);
+          };
+          step();
         }
         function pause() {
-          if (timer) clearInterval(timer);
+          if (timer) clearTimeout(timer);
           timer = null;
           playBtn.textContent = '▶';
         }
 
         function refresh() {
-          const on = !!data && activeTime === 'forecast' &&
-                     (activeLayer === 'temperature' || activeLayer === 'humidity');
+          // Il vento è sempre una previsione (niente Adesso/Previsione): timeline sempre visibile
+          const on = !!data && (activeLayer === 'wind' ||
+                     (activeTime === 'forecast' && (activeLayer === 'temperature' || activeLayer === 'humidity')));
           el.style.display = on ? '' : 'none';
           // Stesso spazio della timeline radar: la legenda sale sopra la timeline
           document.querySelector('.temp-legend')?.classList.toggle('legend-fc48-mode', on);
@@ -1278,7 +1338,7 @@
       map.on('zoomend', () => {
         if (activeLayer === 'wind') {
           const arrowCheck = document.getElementById('arrow-check');
-          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGrid);
+          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGridNow);
         }
       });
 
@@ -1384,7 +1444,7 @@
         if (e.target.checked) {
           if (windLayer) map.removeLayer(windLayer);
           hideStations(map, stationMarkers);
-          renderArrowLayer(map, windGrid);
+          renderArrowLayer(map, windGridNow);
         } else {
           clearArrowLayer(map);
           showStations(map, stationMarkers);
