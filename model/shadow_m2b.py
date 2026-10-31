@@ -39,7 +39,7 @@ for p in (_PROJECT_ROOT, _PROJECT_ROOT / "model"):
 import db  # noqa: E402
 import inference as inf  # noqa: E402
 from m2b import BIAS_FEATURES, M2b  # noqa: E402
-from shadow_m2 import MAX_RUN_AGE_H, NWP_MODEL, _r, ifs_run_time  # noqa: E402
+from shadow_m2 import MAX_RUN_AGE_H, NWP_MODEL, _r, ifs_run_time, prefetch  # noqa: E402
 
 logger = logging.getLogger("shadow_m2b")
 
@@ -80,10 +80,13 @@ def run(leads: list[int], dry_run: bool) -> None:
 
     rows, failed = [], []
     valid = [pd.Timestamp(issue_at + timedelta(hours=L)) for L in leads]
+    pre = prefetch(stations)  # una chiamata multi-località: da GitHub le 31 chiamate singole superavano il timeout
     for st in stations:
         sid = st["id"]
         try:
-            df = inf.fetch_forecast(st["lat"], st["lon"], past_days=2, forecast_days=4, model=NWP_MODEL)
+            df = pre.get(sid)
+            if df is None:
+                df = inf.fetch_forecast(st["lat"], st["lon"], past_days=2, forecast_days=4, model=NWP_MODEL)
         except Exception as exc:  # una stazione in errore non deve fermare le altre
             logger.error(f"st.{sid}: fetch IFS fallito ({exc})")
             failed.append(sid)

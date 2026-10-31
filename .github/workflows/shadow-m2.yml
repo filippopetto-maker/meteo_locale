@@ -14,7 +14,7 @@ jobs:
   shadow-m2:
     name: Run shadow M2
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
 
     defaults:
       run:
@@ -48,7 +48,7 @@ jobs:
       # M2b (temperatura, candidato): non deve mai far fallire il giro di M2 / M2 umidità.
       - name: Run shadow M2b
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 12
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

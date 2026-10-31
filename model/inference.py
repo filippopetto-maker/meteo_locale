@@ -128,14 +128,62 @@ def fetch_forecast(
     else:
         raise last_exc
 
-    hourly = data["hourly"]
+    return _hourly_frame(data["hourly"])
+
+
+def _hourly_frame(hourly: dict) -> pd.DataFrame:
     df = pd.DataFrame({"recorded_at": pd.to_datetime(hourly["time"])})
     for var in ERA5_VARIABLES:
         if var in hourly:
             df[var] = hourly[var]
+    return df.rename(columns={k: v for k, v in ERA5_RENAME.items() if k in df.columns})
 
-    df = df.rename(columns={k: v for k, v in ERA5_RENAME.items() if k in df.columns})
-    return df
+
+def fetch_forecast_many(
+    points: list[tuple[float, float]],
+    past_days: int = 2,
+    forecast_days: int = 4,
+    model: Optional[str] = None,
+    chunk: int = 40,
+    retries: int = 4,
+) -> list[pd.DataFrame]:
+    """
+    Come fetch_forecast ma per molti punti con chiamate multi-località (chunk punti per
+    chiamata, stesso ordine di `points`). Da GitHub Actions 31 chiamate singole possono
+    richiedere diversi minuti; una chiamata multipla pochi secondi.
+    """
+    out: list[pd.DataFrame] = []
+    for i in range(0, len(points), chunk):
+        part = points[i:i + chunk]
+        params = {
+            "latitude":      ",".join(str(p[0]) for p in part),
+            "longitude":     ",".join(str(p[1]) for p in part),
+            "hourly":        ",".join(ERA5_VARIABLES),
+            "past_days":     past_days,
+            "forecast_days": forecast_days,
+            "timezone":      "UTC",
+        }
+        if model:
+            params["models"] = model
+        last_exc: Exception = RuntimeError("Nessun tentativo eseguito")
+        for attempt in range(retries):
+            try:
+                r = requests.get(OPEN_METEO_FORECAST_URL, params=params, timeout=120)
+                r.raise_for_status()
+                data = r.json()
+                break
+            except requests.RequestException as exc:
+                last_exc = exc
+                if attempt < retries - 1:
+                    wait = 10 * (attempt + 1)
+                    logger.warning(f"Open-Meteo multi-località tentativo {attempt + 1}/{retries} fallito: {exc}. "
+                                   f"Riprovo in {wait}s")
+                    _time.sleep(wait)
+        else:
+            raise last_exc
+        data = data if isinstance(data, list) else [data]
+        out.extend(_hourly_frame(d["hourly"]) for d in data)
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────

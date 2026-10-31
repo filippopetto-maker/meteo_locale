@@ -88,6 +88,17 @@ def _r(x) -> float | None:
     return None if x is None or pd.isna(x) else round(float(x), 2)
 
 
+def prefetch(points: list[dict]) -> dict:
+    """IFS per tutti i punti con chiamate multi-località; {} se fallisce (si ripiega sulle chiamate singole)."""
+    try:
+        frames = inf.fetch_forecast_many([(p["lat"], p["lon"]) for p in points], past_days=2, forecast_days=4,
+                                         model=NWP_MODEL)
+        return {p["id"]: f for p, f in zip(points, frames)}
+    except Exception as exc:
+        logger.warning(f"fetch multi-località fallito ({exc}): chiamate singole")
+        return {}
+
+
 def wind10_block(stations: list[dict], dfs: dict[int, pd.DataFrame], leads: list[int], issue_at: datetime,
                  run_at: datetime | None) -> list[dict]:
     """Righe di forecasts_shadow_wind10 (aeroporti + stazioni). Mai solleva: su errore ritorna ciò che ha."""
@@ -99,6 +110,8 @@ def wind10_block(stations: list[dict], dfs: dict[int, pd.DataFrame], leads: list
                   ("lat", "lon", "altitude", "dist_sea_km", "dist_center_km", "bearing_sea", "microclima")}}, None)
                   for icao, a in m10.airports.items()]
         points += [("station", str(st["id"]), st, dfs.get(st["id"])) for st in stations]
+        pre = prefetch([p[2] for p in points if p[3] is None])
+        points = [(k, pid, pt, df if df is not None else pre.get(pt["id"])) for k, pid, pt, df in points]
         failed = []
         for kind, pid, pt, df in points:
             try:
@@ -181,10 +194,13 @@ def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
 
     rows, no_bias, failed = [], [], []
     dfs: dict[int, pd.DataFrame] = {}
+    pre = prefetch(stations)
     for st in stations:
         sid = st["id"]
         try:
-            df = inf.fetch_forecast(st["lat"], st["lon"], past_days=2, forecast_days=4, model=NWP_MODEL)
+            df = pre.get(sid)
+            if df is None:
+                df = inf.fetch_forecast(st["lat"], st["lon"], past_days=2, forecast_days=4, model=NWP_MODEL)
         except Exception as exc:  # una stazione in errore non deve fermare le altre
             logger.error(f"st.{sid}: fetch IFS fallito ({exc})")
             failed.append(sid)
