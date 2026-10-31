@@ -8,9 +8,9 @@ Formato compatto, una voce per stazione, serie ordinate per valid_for:
                           "t": [...], "rh": [...], "ws": [...], "wd": [...],
                           "src": {"t": "m2", "rh": "ifs", "ws": "ifs"}}}}
 
-Lo esegue publish.yml (modo static) dal 31/10/2026; la mappa lo usa per lo scorrimento orario.
-Se l'ultima emissione è più vecchia di --max-age-h ore non scrive nulla (esce con errore) e il sito
-tiene la copia precedente.
+In produzione il file lo scrive scripts/export_static.py (build() di questo modulo), dalla stessa
+lettura di forecasts_48h della +1h; questo script resta per l'uso a mano. Se l'ultima emissione è
+più vecchia di --max-age-h ore non scrive nulla (esce con errore).
 
 Utilizzo:
     python3 scripts/export_forecast_48h.py --out docs/data/forecast_48h.json

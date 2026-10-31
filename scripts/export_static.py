@@ -2,8 +2,14 @@
 export_static.py — Esporta dati da Supabase in JSON statici per il sito.
 
 Output:
-  docs/data/latest.json    — stazioni + griglia temperatura
-  docs/data/wind_grid.json — griglia vento formato leaflet-velocity
+  docs/data/latest.json        — stazioni + griglia temperatura
+  docs/data/wind_grid.json     — griglia vento formato leaflet-velocity
+  docs/data/forecast_48h.json  — previsioni M2 1–48 h (scorrimento orario della mappa)
+
+Dal 31/10/2026 la +1h (latest.json, wind_grid.json) e forecast_48h.json vengono da una sola
+lettura di forecasts_48h, ultima emissione: i tre file sono sempre della stessa emissione anche
+se produce_m2 scrive mentre l'export gira. Se forecasts_48h è vecchia (oltre MAX_AGE_H, es.
+ritorno indietro a inference.yml) la +1h si legge da forecasts e forecast_48h.json non si scrive.
 
 Utilizzo:
   python3 scripts/export_static.py
@@ -22,7 +28,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from db import get_client, get_active_stations
+from db import get_client, get_active_stations, get_forecasts_48h
+import export_forecast_48h  # noqa: E402  (stessa cartella scripts/)
 from grid import compute_idw_grid, wind_to_uv, fetch_era5_batch, bilinear_to_fine, compute_sea_blend_weight, SEA_BLEND_BAND_KM
 from sst import get_sst_values, SST_POINTS
 
@@ -73,6 +80,30 @@ def fetch_latest_forecasts(station_ids: list[int]) -> dict[int, dict]:
         if rows:
             result[sid] = rows[0]
     return result
+
+
+def fetch_m2_emission() -> tuple[dict[int, dict], list[dict]] | None:
+    """Ultima emissione di forecasts_48h, se entro MAX_AGE_H: (lead 1 per stazione nel formato di
+    forecasts, righe 1–48 h dell'emissione). None se la tabella è vuota o vecchia."""
+    rows = get_forecasts_48h()
+    if not rows:
+        return None
+    newest = max(datetime.fromisoformat(r["issue_at"]) for r in rows)
+    if datetime.now(timezone.utc) - newest > timedelta(hours=MAX_AGE_H):
+        log.warning(f"forecasts_48h vecchia (emissione {newest:%Y-%m-%d %H:%M}Z): +1h da forecasts")
+        return None
+    # Le ore di un'emissione precedente non ancora cancellate (valid_for = issue_at nuova) si scartano
+    rows = [r for r in rows if datetime.fromisoformat(r["issue_at"]) == newest]
+    lead1 = {
+        r["station_id"]: {
+            "station_id": r["station_id"], "forecast_at": r["issue_at"], "valid_for": r["valid_for"],
+            "temperature": r["temperature"], "humidity": r["humidity"],
+            "wind_speed": r["wind_speed"], "wind_direction": r["wind_direction"],
+            "lead_hours": 1, "model_version": r["model_tag"], "corrected": False,
+        }
+        for r in rows if r["lead_hours"] == 1
+    }
+    return lead1, rows
 
 
 def fetch_latest_observations(station_ids: list[int]) -> dict[int, dict]:
@@ -239,8 +270,13 @@ def main() -> None:
     station_ids = [s["id"] for s in stations]
 
     log.info("Fetch previsioni recenti...")
-    forecasts = fetch_latest_forecasts(station_ids)
-    log.info(f"  {len(forecasts)}/{len(stations)} stazioni con forecast recente")
+    m2 = fetch_m2_emission()
+    if m2:
+        forecasts = {sid: fc for sid, fc in m2[0].items() if sid in set(station_ids)}
+        log.info(f"  {len(forecasts)}/{len(stations)} stazioni con +1h M2 (emissione {m2[1][0]['issue_at']})")
+    else:
+        forecasts = fetch_latest_forecasts(station_ids)
+        log.info(f"  {len(forecasts)}/{len(stations)} stazioni con forecast recente (tabella forecasts)")
 
     log.info("Fetch osservazioni recenti...")
     observations = fetch_latest_observations(station_ids)
@@ -502,6 +538,15 @@ def main() -> None:
     wind_path = DOCS_DATA / "wind_grid.json"
     wind_path.write_text(json.dumps(wind, separators=(",", ":"), ensure_ascii=False))
     log.info(f"  Scritto {wind_path}")
+
+    if m2:
+        try:  # facoltativo: un errore qui non deve far fallire latest.json e wind_grid.json
+            f48 = export_forecast_48h.build(m2[1], {s["id"]: s["name"] for s in stations})
+            f48_path = DOCS_DATA / "forecast_48h.json"
+            f48_path.write_text(json.dumps(f48, separators=(",", ":")))
+            log.info(f"  Scritto {f48_path} ({len(f48['stations'])} stazioni, emissione {f48['issue_at']})")
+        except Exception as exc:
+            log.error(f"  forecast_48h.json non scritto ({exc}): resta la copia precedente")
 
     log.info("Export completato.")
 

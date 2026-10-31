@@ -109,7 +109,9 @@ jobs:
         if: steps.restore.outputs.static == 'true' || steps.restore.outputs.dashboard == 'true'
         run: pip install supabase pandas numpy scipy python-dotenv requests matplotlib
 
-      - name: Export static (latest.json, wind_grid.json)
+      # Dal 31/10/2026 scrive anche forecast_48h.json, dalla stessa lettura di forecasts_48h della +1h
+      # (i file della mappa restano della stessa emissione). Se M2 è fermo resta la copia ripristinata.
+      - name: Export static (latest.json, wind_grid.json, forecast_48h.json)
         if: steps.restore.outputs.static == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -121,16 +123,6 @@ jobs:
             sleep 20
           done
           exit 1
-
-      # Previsioni M2 1–48 h (forecasts_48h → forecast_48h.json). Facoltativo: se fallisce resta
-      # la copia ripristinata dal sito e la pubblicazione prosegue.
-      - name: Export forecast_48h.json
-        if: steps.restore.outputs.static == 'true'
-        continue-on-error: true
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python3 scripts/export_forecast_48h.py --out docs/data/forecast_48h.json
 
       - name: Export dashboard (dashboard_data.json)
         if: steps.restore.outputs.dashboard == 'true'
