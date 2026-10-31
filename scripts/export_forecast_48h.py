@@ -87,6 +87,9 @@ def main() -> None:
     if age_h > args.max_age_h:
         logger.error(f"forecasts_48h: ultima emissione {newest:%Y-%m-%d %H:%M}Z, vecchia di {age_h:.1f} h: nessun file scritto")
         sys.exit(1)
+    # Solo l'ultima emissione: le ore di un'emissione precedente non ancora cancellate
+    # (valid_for = issue_at della nuova) finirebbero in testa alle serie
+    rows = [r for r in rows if datetime.fromisoformat(r["issue_at"]) == newest]
     names = {s["id"]: s["name"] for s in db.get_active_stations()}
     payload = build(rows, names)
     out = Path(args.out)
