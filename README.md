@@ -651,7 +651,7 @@ non committato): `brief_fase4a_m2_shadow.md`.
 |:--|:--|:--|:--|
 | `bias-table.yml` | ogni giorno 03:00 | `scripts/update_bias_table.py` | `bias_table` — bias IFS − Netatmo per stazione × ora UTC sui 30 giorni precedenti: temperatura, umidità (`bias_rh`), vento (`bias_ws`) |
 | | | `scripts/update_bias_features.py` | `bias_features` — sei riassunti del bias per M2b |
-| `shadow-m2.yml` | ogni giorno 09:15 e 21:15 | `model/shadow_m2.py` | `forecasts_shadow` — 31 stazioni × lead 1–48 per emissione; per il vento a 10 m anche `forecasts_shadow_wind10` |
+| `shadow-m2.yml` | ogni giorno 09:15 e 21:15 | `model/shadow_m2.py` | `forecasts_shadow` — 31 stazioni × lead 1–48 per emissione (dal 31/10/2026 solo temperatura e umidità, riferimento per M2b e H1b; `forecasts_shadow_wind10` non più scritta) |
 | | | `model/shadow_m2b.py` | `forecasts_shadow_m2b` (passo con `continue-on-error`: non ferma gli altri) |
 
 Ogni emissione usa lo stesso input IFS (Forecast API, `models=ecmwf_ifs`). Colonne di
@@ -1106,12 +1106,13 @@ python3 db.py   # verifica connessione
 **Riferimento GitHub:** `https://github.com/filippopetto-maker/meteo_locale`
 
 **Stato corrente (settembre 2026):** Fase 1, 2a, 2b, 3 in produzione (Fase 3 include carta del vento e dashboard Chart.js). Fase 2c parziale (bias correction ARSIAL attiva, Protezione Civile Lazio ancora da integrare). **Fase 4a in corso:** inference multi-lead pronta ma non pubblicata, prima fase della prova in ombra di M2 chiusa il 21/10/2026 (MAE 0,88 °C), seconda fase dal 22/10 con M2b, M2 umidità e M2 vento. Radar RainViewer in corso (vedi *Sviluppo a lungo termine*). Roadmap strategica di lungo periodo (48h, retraining dicembre, generalizzazione, convettività) → [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47). GitHub Actions attivi. Trigger primario per tutti i workflow: cron-job.org (`workflow_dispatch`), l'unico che non ha mai saltato un run. I due workflow a 30 minuti hanno in più uno `schedule:` interno GitHub come rete di sicurezza (inaffidabile da solo su repo a bassa attività, ma innocuo come doppione):
-- `inference.yml` — previsioni, ogni 30 min (cron-job.org + `schedule:` interno di riserva)
+- `produce-m2.yml` — previsioni M2 (temperatura, umidità H1, vento a 10 m) 1–48 h in `forecasts_48h` e +1h in `forecasts`, ogni ora al minuto 5 (cron-job.org + `schedule:` interno di riserva al minuto 20), dal 31/10/2026
+- `inference.yml` — modello attuale v1, solo manuale dal 31/10/2026 (ritorno indietro)
 - `ingestion.yml` — osservazioni METAR + Netatmo, ogni 30 min (cron-job.org + `schedule:` interno di riserva)
 - `export.yml` — export griglia statica (`latest.json`, `wind_grid.json`), ogni ora (solo cron-job.org)
 - `export-dashboard.yml` — export `dashboard_data.json`, 2×/giorno (8:00, 20:00) (solo cron-job.org)
 - `bias-table.yml` — bias IFS − Netatmo per stazione × ora in `bias_table`, ogni giorno 03:00 UTC, più `bias_features` per M2b (solo cron-job.org, prova in ombra)
-- `shadow-m2.yml` — previsioni in ombra 1–48 h in `forecasts_shadow` e `forecasts_shadow_m2b` (M2, M2b, umidità, vento), 09:15 e 21:15 UTC (solo cron-job.org, prova in ombra)
+- `shadow-m2.yml` — previsioni in ombra 1–48 h in `forecasts_shadow`, `forecasts_shadow_m2b` e `forecasts_shadow_m2hb` (riferimento M2/H1 e candidati M2b/H1b), 09:15 e 21:15 UTC (solo cron-job.org, prova in ombra)
 
 **Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
 
