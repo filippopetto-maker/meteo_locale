@@ -2,7 +2,7 @@
 
 Sistema di previsione meteo su scala comunale che cala lo stato meteorologico regionale sul singolo punto, catturando i microclimi che i modelli globali non vedono. Accuratezza territoriale superiore alle app mainstream, infrastruttura a costo zero.
 
-**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità/vento + particelle/frecce). **Restyling estetico dark theme completato (luglio 2026)**: basemap CartoDB Dark Matter, pannello controlli unificato con segmented control e switch stile iOS, popup e legenda ristilizzati mantenendo invariata la logica di calcolo dati. GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **32 stazioni attive** su tutto il Lazio (6 Roma metro + 26 espansione Lazio) con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h). **Dashboard Chart.js live** (`dashboard.html`) con forecast vs observed 7 giorni per stazione, MAE per stazione, switch Temperatura/Umidità.
+**Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità/vento + particelle/frecce). **Restyling estetico dark theme completato (luglio 2026)**: basemap CartoDB Dark Matter, pannello controlli unificato con segmented control e switch stile iOS, popup e legenda ristilizzati mantenendo invariata la logica di calcolo dati. GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **32 stazioni attive** su tutto il Lazio (6 Roma metro + 26 espansione Lazio) con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h). **Dashboard Chart.js live** (`dashboard.html`) con forecast vs observed 7 giorni per stazione, MAE per stazione, errore per anticipo 1–48 h (M2 contro IFS grezzo), switch Temperatura/Umidità/Vento.
 
 **Modello (settembre 2026):** il backtest su tre mesi di run ECMWF archiviati mostra che il modello di produzione peggiora l'IFS grezzo contro il target Netatmo (MAE 2,68 contro 2,13 °C su 1–48 h). Un modello riaddestrato sullo storico Netatmo ricostruito — **M2**: IFS + residuo LightGBM — scende a 0,97 °C nel backtest e a 0,88 °C nella prima fase della prova in ombra (25/09 → 21/10/2026, senza effetti sulla mappa); dal 22/10 la seconda fase prova M2b (corregge il bias freddo), M2 umidità e M2 vento (vedi Fase 4a).
 
@@ -430,6 +430,10 @@ dichiarato: **battere l'NWP grezzo a ogni lead**, non raggiungere un MAE assolut
 - `forecasts_48h` — ultima emissione 1–48 h, una riga per (stazione, `valid_for`) sovrascritta a
   ogni esecuzione, quindi non cresce: scheletro dati per la mappa, non ancora alimentato da un
   workflow
+- `forecasts_verifica` — archivio a rotazione delle emissioni delle 09 e 21 UTC (1–48 h, con IFS
+  grezzo), scritto da `produce_m2.py` e tenuto 10 giorni (~7 MB fissi): l'errore per anticipo della
+  dashboard. Finché non copre la finestra di 7 giorni (≈ 11/11/2026) temperatura e umidità vengono
+  da `forecasts_shadow`
 - `netatmo_hourly_history` — storico orario del target Netatmo prima delle osservazioni live
   (14/03/2024 → 07/06/2026, 574.764 righe)
 

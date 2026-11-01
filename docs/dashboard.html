@@ -38,8 +38,12 @@
         🌡️ Temperatura
       </button>
       <button id="btn-hum" onclick="setVariable('hum')"
-        style="background:rgba(255,255,255,0.08); color:white; border:none; padding:6px 16px; border-radius:0 4px 4px 0; cursor:pointer; font-size:13px;">
+        style="background:rgba(255,255,255,0.08); color:white; border:none; padding:6px 16px; border-radius:0; cursor:pointer; font-size:13px;">
         💧 Umidità
+      </button>
+      <button id="btn-ws" onclick="setVariable('ws')"
+        style="background:rgba(255,255,255,0.08); color:white; border:none; padding:6px 16px; border-radius:0 4px 4px 0; cursor:pointer; font-size:13px;">
+        💨 Vento
       </button>
     </div>
 
@@ -47,6 +51,19 @@
     <div style="background:rgba(255,255,255,0.05); border-radius:8px; padding:16px; margin-bottom:20px;">
       <h2 id="series-title" style="font-size:15px; margin:0 0 12px 0;">Previsto vs Osservato — Temperatura</h2>
       <canvas id="chart-series" height="120"></canvas>
+    </div>
+
+    <!-- Chart errore per anticipo -->
+    <div style="background:rgba(255,255,255,0.05); border-radius:8px; padding:16px; margin-bottom:20px;">
+      <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:0 0 4px 0;">
+        <h2 style="font-size:15px; margin:0;">Errore per anticipo</h2>
+        <select id="lead-scope" style="background:#2a2a4a; color:white; border:1px solid rgba(255,255,255,0.2); border-radius:4px; padding:2px 6px; font-size:12px;">
+          <option value="all">Tutte le stazioni</option>
+          <option value="station">Stazione selezionata</option>
+        </select>
+      </div>
+      <p id="lead-note" style="font-size:12px; opacity:0.7; margin:0 0 12px 0;"></p>
+      <div style="position:relative; height:280px;"><canvas id="chart-lead"></canvas></div>
     </div>
 
     <!-- Chart MAE per stazione -->
@@ -61,17 +78,26 @@
   <script>
     let seriesChart = null;
     let maeChart = null;
+    let leadChart = null;
     let dashboardData = null;
     let activeVar = 'temp';
 
+    // Per variabile: unità, nome, soglia MAE (verde/rosso), campi di mae_per_station, chiave di lead_errors
+    const VARS = {
+      temp: { unit: '°C',   name: 'Temperatura', threshold: 1.0, mae: 'mae',     n: 'n_pairs',     global: 'mae_global',     lead: 'temp' },
+      hum:  { unit: '%',    name: 'Umidità',     threshold: 5.0, mae: 'mae_hum', n: 'n_pairs_hum', global: 'mae_global_hum', lead: 'hum' },
+      ws:   { unit: 'km/h', name: 'Vento',       threshold: 3.0, mae: 'mae_ws',  n: 'n_pairs_ws',  global: 'mae_global_ws',  lead: 'wind' },
+    };
+
     function setVariable(v) {
       activeVar = v;
-      document.getElementById('btn-temp').style.background =
-        v === 'temp' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)';
-      document.getElementById('btn-hum').style.background =
-        v === 'hum'  ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)';
+      for (const k of Object.keys(VARS)) {
+        document.getElementById('btn-' + k).style.background =
+          v === k ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)';
+      }
       updateSeriesChart(document.getElementById('station-select').value);
       buildMaeChart();
+      buildLeadChart();
     }
 
     async function loadData() {
@@ -105,7 +131,8 @@
         select.appendChild(opt);
       });
 
-      select.addEventListener('change', () => updateSeriesChart(select.value));
+      select.addEventListener('change', () => { updateSeriesChart(select.value); buildLeadChart(); });
+      document.getElementById('lead-scope').addEventListener('change', buildLeadChart);
 
       document.getElementById('dashboard-content').style.display = 'block';
 
@@ -115,6 +142,67 @@
       }
 
       buildMaeChart();
+      buildLeadChart();
+    }
+
+    function buildLeadChart() {
+      const cfg = VARS[activeVar];
+      const le = dashboardData.lead_errors;
+      const byStation = document.getElementById('lead-scope').value === 'station';
+      const sel = document.getElementById('station-select');
+      const scope = byStation ? sel.value : 'all';
+      const d = le && le[scope] ? le[scope][cfg.lead] : null;
+      const n = d ? d.n.reduce((a, b) => a + b, 0) : 0;
+      const where = byStation ? sel.options[sel.selectedIndex].text : 'tutte le stazioni';
+
+      document.getElementById('lead-note').textContent = n > 0
+        ? `${cfg.name}, ${where}: MAE di M2 e di IFS grezzo per ore di anticipo (ultimi 7 giorni, emissioni delle 09 e 21 UTC, ${n} confronti)`
+        : `${cfg.name}, ${where}: nessun confronto disponibile negli ultimi 7 giorni`;
+
+      if (leadChart) {
+        leadChart.destroy();
+        leadChart = null;
+      }
+      if (!d || n === 0) return;
+
+      const ctx = document.getElementById('chart-lead').getContext('2d');
+      leadChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: le.leads.map(l => '+' + l),
+          datasets: [
+            { label: 'M2 (in produzione)', data: d.m2, borderColor: '#3498db', backgroundColor: 'transparent',
+              pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true },
+            { label: 'IFS grezzo', data: d.ifs, borderColor: 'rgba(255,255,255,0.45)', backgroundColor: 'transparent',
+              pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0.3, spanGaps: true },
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            x: {
+              title: { display: true, text: 'ore di anticipo', color: 'rgba(255,255,255,0.7)' },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)', maxTicksLimit: 12 }
+            },
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: `MAE (${cfg.unit})`, color: 'rgba(255,255,255,0.7)' },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)' }
+            }
+          },
+          plugins: {
+            legend: { labels: { color: 'white' } },
+            tooltip: { callbacks: {
+              label: c => `${c.dataset.label}: ${c.parsed.y === null ? 'n/d' : c.parsed.y.toFixed(2)} ${cfg.unit}`,
+              footer: items => `${d.n[items[0].dataIndex]} confronti`
+            } }
+          }
+        }
+      });
     }
 
     function updateSeriesChart(stationId) {
@@ -126,9 +214,8 @@
       const obsData = s.observed.map(p => ({ x: new Date(p.t), y: p[activeVar] }))
                                  .filter(p => p.y !== null && p.y !== undefined);
 
-      const unit = activeVar === 'temp' ? '°C' : '%';
-      document.getElementById('series-title').textContent =
-        activeVar === 'temp' ? 'Previsto vs Osservato — Temperatura' : 'Previsto vs Osservato — Umidità';
+      const unit = VARS[activeVar].unit;
+      document.getElementById('series-title').textContent = 'Previsto vs Osservato — ' + VARS[activeVar].name;
 
       if (seriesChart) {
         seriesChart.destroy();
@@ -182,11 +269,7 @@
     }
 
     function buildMaeChart() {
-      const maeField    = activeVar === 'temp' ? 'mae'        : 'mae_hum';
-      const pairsField  = activeVar === 'temp' ? 'n_pairs'    : 'n_pairs_hum';
-      const globalField = activeVar === 'temp' ? 'mae_global' : 'mae_global_hum';
-      const unit        = activeVar === 'temp' ? '°C'         : '%';
-      const threshold   = activeVar === 'temp' ? 1.0          : 5.0;
+      const { mae: maeField, global: globalField, unit, threshold } = VARS[activeVar];
 
       const maeData = [...dashboardData.mae_per_station].sort((a, b) => {
         const av = a[maeField], bv = b[maeField];

@@ -9,6 +9,8 @@ input ECMWF IFS della produzione e della prova in ombra. Scrive:
   forecasts       solo il lead 1, solo con --write-lead1 (default: spento). È la riga che la
                   mappa legge oggi: attivarlo equivale a sostituire inference.py come
                   scrittore del lead 1.
+  forecasts_verifica  copia delle emissioni delle 09 e 21 UTC (1–48 h, con IFS grezzo), tenuta
+                  10 giorni: la verifica per anticipo della dashboard (scripts/export_static.py).
 
 Per ogni variabile si registra da dove viene il valore (colonne *_source):
   temperatura  m2     M2 (model/m2/), ove la stazione ha il modello
@@ -51,6 +53,19 @@ from m2 import M2, M2Humidity, M2Wind10  # noqa: E402
 from shadow_m2 import MAX_RUN_AGE_H, NWP_MODEL, _r, ifs_run_time, load_bias, prefetch  # noqa: E402
 
 logger = logging.getLogger("produce_m2")
+
+# Emissioni copiate in forecasts_verifica (ore UTC di issue_at) e quanti giorni restano.
+# 10 giorni: il +48 h con valid_for di 7 giorni fa (finestra della dashboard) è stato emesso 9 giorni fa.
+VERIFICA_HOURS = (9, 21)
+VERIFICA_DAYS = 10
+
+
+def verifica_rows(rows: list[dict]) -> list[dict]:
+    """Righe di forecasts_verifica: la previsione pubblicata più IFS grezzo per il confronto."""
+    keep = ("station_id", "issue_at", "lead_hours", "valid_for", "temperature", "humidity", "wind_speed",
+            "wind_direction", "temp_source", "hum_source", "wind_source", "model_tag")
+    return [{**{k: r[k] for k in keep}, "t_ifs": r["_nwp_t"], "h_ifs": r["_nwp_h"], "w_ifs": _r(r["_nwp_w"])}
+            for r in rows]
 
 
 def station_rows(st: dict, df: pd.DataFrame | None, m2: M2, m2h: M2Humidity, m10: M2Wind10, issue_at: datetime,
@@ -95,6 +110,7 @@ def station_rows(st: dict, df: pd.DataFrame | None, m2: M2, m2h: M2Humidity, m10
             "wind_speed": ws, "wind_direction": wd,
             "temp_source": src, "hum_source": hsrc, "wind_source": wsrc,
             "model_tag": f"{m2.tag}+{m2h.tag}+{m10.tag}", "_nwp_t": _r(t_ifs), "_nwp_h": p.get("nwp_humidity"),
+            "_nwp_w": p.get("wind_speed"),
             "_corrected": bool(p.get("corrected", False)),
         })
     return rows
@@ -151,6 +167,13 @@ def run(leads: list[int], dry_run: bool, write_lead1: bool, json_out: str | None
     db.upsert_forecasts_48h(table_rows)
     db.delete_forecasts_48h_issued_before(issue_at)
     logger.info(f"forecasts_48h: {len(table_rows)} righe scritte, emissioni precedenti eliminate")
+    if issue_at.hour in VERIFICA_HOURS:
+        try:  # l'archivio di verifica non deve far fallire la produzione
+            db.upsert_forecasts_verifica(verifica_rows(rows))
+            db.delete_forecasts_verifica_issued_before(issue_at - timedelta(days=VERIFICA_DAYS))
+            logger.info(f"forecasts_verifica: emissione archiviata, tolte quelle oltre {VERIFICA_DAYS} giorni")
+        except Exception as exc:
+            logger.error(f"forecasts_verifica: {exc}")
     if write_lead1:
         n = 0
         for r in rows:

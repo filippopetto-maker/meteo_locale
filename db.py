@@ -156,6 +156,18 @@ def delete_forecasts_48h_issued_before(issue_at) -> None:
     get_client().table("forecasts_48h").delete().lt(
         "issue_at", issue_at.isoformat() if hasattr(issue_at, "isoformat") else issue_at).execute()
 
+def upsert_forecasts_verifica(rows: list[dict], chunk: int = 500) -> int:
+    """Archivio a rotazione delle emissioni per la verifica per anticipo (forecasts_verifica), upsert a blocchi."""
+    for i in range(0, len(rows), chunk):
+        get_client().table("forecasts_verifica").upsert(
+            rows[i:i + chunk], on_conflict="station_id,issue_at,lead_hours").execute()
+    return len(rows)
+
+def delete_forecasts_verifica_issued_before(issue_at) -> None:
+    """Toglie da forecasts_verifica le emissioni più vecchie di issue_at (rotazione)."""
+    get_client().table("forecasts_verifica").delete().lt(
+        "issue_at", issue_at.isoformat() if hasattr(issue_at, "isoformat") else issue_at).execute()
+
 def get_forecasts_48h() -> list[dict]:
     rows, start = [], 0
     while True:

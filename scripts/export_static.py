@@ -559,7 +559,7 @@ def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
     for sid in station_ids:
         fc_rows = (
             client.table("forecasts")
-            .select("valid_for, temperature, humidity, forecast_at")
+            .select("valid_for, temperature, humidity, wind_speed, forecast_at")
             .eq("station_id", sid)
             .eq("lead_hours", 1)
             .gte("valid_for", since)
@@ -574,14 +574,14 @@ def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
             if vf not in fc_by_valid or row["forecast_at"] > fc_by_valid[vf]["forecast_at"]:
                 fc_by_valid[vf] = row
         forecast_series = [
-            {"t": r["valid_for"], "temp": r["temperature"], "hum": r["humidity"]}
+            {"t": r["valid_for"], "temp": r["temperature"], "hum": r["humidity"], "ws": r["wind_speed"]}
             for r in sorted(fc_by_valid.values(), key=lambda x: x["valid_for"])
             if r["temperature"] is not None
         ]
 
         obs_rows = (
             client.table("observations")
-            .select("recorded_at, temperature, humidity")
+            .select("recorded_at, temperature, humidity, wind_speed")
             .eq("station_id", sid)
             .gte("recorded_at", since)
             .lt("qc_flag", 2)
@@ -590,7 +590,7 @@ def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
             .data
         )
         observed_series = [
-            {"t": r["recorded_at"], "temp": r["temperature"], "hum": r["humidity"]}
+            {"t": r["recorded_at"], "temp": r["temperature"], "hum": r["humidity"], "ws": r["wind_speed"]}
             for r in obs_rows
             if r["temperature"] is not None
         ]
@@ -599,7 +599,115 @@ def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:
     return result
 
 
-def build_dashboard_json(stations: list[dict], series: dict) -> dict:
+def _fetch_valid_window(table: str, columns: str, days: int) -> list[dict]:
+    """Righe di `table` con valid_for negli ultimi `days` giorni e già osservabili, paginate a 1000."""
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=days)).isoformat()
+    rows, start = [], 0
+    while True:
+        page = (
+            get_client().table(table).select(columns)
+            .gte("valid_for", since).lte("valid_for", now.isoformat())
+            .order("station_id").order("issue_at").order("lead_hours")
+            .range(start, start + 999).execute().data
+        )
+        rows += page
+        if len(page) < 1000:
+            return rows
+        start += 1000
+
+
+def fetch_lead_rows(days: int = 7) -> list[dict]:
+    """Previsioni 1–48 h per l'errore per anticipo, emissioni delle 09 e 21 UTC, nel formato di
+    forecasts_shadow (t_m2/t_ifs, h_m2/h_ifs, w_m2/w_ifs).
+
+    Fonte: forecasts_verifica (la previsione pubblicata, scritta da produce_m2) quando copre tutta la
+    finestra, cioè quando la sua emissione più vecchia risale ad almeno days + 2 giorni (il +48 h).
+    Fino ad allora temperatura e umidità vengono dallo shadow M2 (stessi modelli) e il vento
+    dall'archivio, perché lo shadow non lo scrive più dal 31/10/2026."""
+    arch = [
+        {"station_id": r["station_id"], "valid_for": r["valid_for"], "lead_hours": r["lead_hours"],
+         "t_m2": r["temperature"], "t_ifs": r["t_ifs"], "h_m2": r["humidity"], "h_ifs": r["h_ifs"],
+         "w_m2": r["wind_speed"], "w_ifs": r["w_ifs"], "issue_at": r["issue_at"]}
+        for r in _fetch_valid_window(
+            "forecasts_verifica",
+            "station_id, issue_at, valid_for, lead_hours, temperature, t_ifs, humidity, h_ifs, wind_speed, w_ifs",
+            days)
+    ]
+    oldest = min((datetime.fromisoformat(r["issue_at"]) for r in arch), default=None)
+    if oldest and oldest <= datetime.now(timezone.utc) - timedelta(days=days + 2):
+        return arch
+    shadow = _fetch_valid_window(
+        "forecasts_shadow", "station_id, valid_for, lead_hours, t_m2, t_ifs, h_m2, h_ifs, w_m2, w_ifs", days)
+    return shadow + [{**r, "t_m2": None, "h_m2": None} for r in arch]
+
+
+# Variabile dashboard → (prefisso colonne forecasts_shadow, chiave delle serie)
+LEAD_VARS = {"temp": "t", "hum": "h", "wind": "w"}
+SERIES_KEY = {"temp": "temp", "hum": "hum", "wind": "ws"}
+
+
+def build_lead_errors(series: dict, lead_rows: list[dict]) -> dict:
+    """MAE per anticipo (1–48 h) di M2 e di IFS grezzo contro la media oraria osservata (±30 min),
+    per stazione e su tutte le stazioni. M2 e IFS sono valutati sulle stesse coppie."""
+    obs: dict[tuple[int, datetime], dict[str, list]] = {}
+    for sid, s in series.items():
+        for o in s.get("observed", []):
+            t = datetime.fromisoformat(o["t"].replace("Z", "+00:00")) + timedelta(minutes=30)
+            cell = obs.setdefault((int(sid), t.replace(minute=0, second=0, microsecond=0)), {})
+            for var, key in SERIES_KEY.items():
+                if o.get(key) is not None:
+                    cell.setdefault(var, []).append(o[key])
+
+    leads = list(range(1, 49))
+    acc: dict[str, dict[str, np.ndarray]] = {}  # scope → var → [somma M2, somma IFS, n] × lead
+    for r in lead_rows:
+        cell = obs.get((r["station_id"], datetime.fromisoformat(r["valid_for"])))
+        if not cell:
+            continue
+        i = r["lead_hours"] - 1
+        for var, p in LEAD_VARS.items():
+            m2, ifs, o = r.get(f"{p}_m2"), r.get(f"{p}_ifs"), cell.get(var)
+            if m2 is None or ifs is None or not o or not 0 <= i < 48:
+                continue
+            o = sum(o) / len(o)
+            for scope in ("all", str(r["station_id"])):
+                a = acc.setdefault(scope, {}).setdefault(var, np.zeros((3, 48)))
+                a[:, i] += (abs(m2 - o), abs(ifs - o), 1)
+
+    out: dict = {"leads": leads}
+    for scope, by_var in acc.items():
+        out[scope] = {}
+        for var, a in by_var.items():
+            n = a[2]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                m2, ifs = a[0] / n, a[1] / n
+            out[scope][var] = {
+                "m2": [None if k == 0 else round(float(v), 3) for v, k in zip(m2, n)],
+                "ifs": [None if k == 0 else round(float(v), 3) for v, k in zip(ifs, n)],
+                "n": [int(k) for k in n],
+            }
+    return out
+
+
+def _mae_pairs(fc_list: list[dict], obs_list: list[dict], key: str) -> list[float]:
+    """Errori assoluti previsto − osservato: per ogni osservazione la prima previsione entro ±30 min."""
+    pairs = []
+    for obs in obs_list:
+        if obs.get(key) is None:
+            continue
+        obs_t = datetime.fromisoformat(obs["t"].replace("Z", "+00:00"))
+        for fc in fc_list:
+            if fc.get(key) is None:
+                continue
+            fc_t = datetime.fromisoformat(fc["t"].replace("Z", "+00:00"))
+            if abs((fc_t - obs_t).total_seconds()) <= 1800:  # ±30 min
+                pairs.append(abs(fc[key] - obs[key]))
+                break
+    return pairs
+
+
+def build_dashboard_json(stations: list[dict], series: dict, lead_rows: list[dict] | None = None) -> dict:
     """Calcola MAE forecast vs observed e costruisce il payload dashboard."""
     mae_per_station = []
     for s in stations:
@@ -607,54 +715,24 @@ def build_dashboard_json(stations: list[dict], series: dict) -> dict:
         fc_list = series.get(str(sid), {}).get("forecast", [])
         obs_list = series.get(str(sid), {}).get("observed", [])
 
-        pairs = []
-        for obs in obs_list:
-            obs_t = datetime.fromisoformat(obs["t"].replace("Z", "+00:00"))
-            for fc in fc_list:
-                fc_t = datetime.fromisoformat(fc["t"].replace("Z", "+00:00"))
-                if abs((fc_t - obs_t).total_seconds()) <= 1800:  # ±30 min
-                    pairs.append(abs(fc["temp"] - obs["temp"]))
-                    break
+        pairs = _mae_pairs(fc_list, obs_list, "temp")
+        pairs_hum = _mae_pairs(fc_list, obs_list, "hum")
+        pairs_ws = _mae_pairs(fc_list, obs_list, "ws")
 
-        pairs_hum = []
-        for obs in obs_list:
-            if obs.get("hum") is None:
-                continue
-            obs_t = datetime.fromisoformat(obs["t"].replace("Z", "+00:00"))
-            for fc in fc_list:
-                if fc.get("hum") is None:
-                    continue
-                fc_t = datetime.fromisoformat(fc["t"].replace("Z", "+00:00"))
-                if abs((fc_t - obs_t).total_seconds()) <= 1800:
-                    pairs_hum.append(abs(fc["hum"] - obs["hum"]))
-                    break
+        mae_per_station.append({
+            "id": sid,
+            "name": s["name"],
+            "mae": round(sum(pairs) / len(pairs), 3) if pairs else None,
+            "n_pairs": len(pairs),
+            "mae_hum": round(sum(pairs_hum) / len(pairs_hum), 3) if pairs_hum else None,
+            "n_pairs_hum": len(pairs_hum),
+            "mae_ws": round(sum(pairs_ws) / len(pairs_ws), 3) if pairs_ws else None,
+            "n_pairs_ws": len(pairs_ws),
+        })
 
-        mae_hum = round(sum(pairs_hum) / len(pairs_hum), 3) if pairs_hum else None
-
-        if pairs:
-            mae_per_station.append({
-                "id": sid,
-                "name": s["name"],
-                "mae": round(sum(pairs) / len(pairs), 3),
-                "n_pairs": len(pairs),
-                "mae_hum": mae_hum,
-                "n_pairs_hum": len(pairs_hum),
-            })
-        else:
-            mae_per_station.append({
-                "id": sid,
-                "name": s["name"],
-                "mae": None,
-                "n_pairs": 0,
-                "mae_hum": mae_hum,
-                "n_pairs_hum": len(pairs_hum),
-            })
-
-    valid_maes = [e["mae"] for e in mae_per_station if e["n_pairs"] > 0]
-    mae_global = round(sum(valid_maes) / len(valid_maes), 3) if valid_maes else None
-
-    valid_maes_hum = [e["mae_hum"] for e in mae_per_station if e["n_pairs_hum"] > 0]
-    mae_global_hum = round(sum(valid_maes_hum) / len(valid_maes_hum), 3) if valid_maes_hum else None
+    def global_mae(field: str, n_field: str) -> float | None:
+        vals = [e[field] for e in mae_per_station if e[n_field] > 0]
+        return round(sum(vals) / len(vals), 3) if vals else None
 
     return {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -664,8 +742,10 @@ def build_dashboard_json(stations: list[dict], series: dict) -> dict:
         ],
         "series": series,
         "mae_per_station": mae_per_station,
-        "mae_global": mae_global,
-        "mae_global_hum": mae_global_hum,
+        "mae_global": global_mae("mae", "n_pairs"),
+        "mae_global_hum": global_mae("mae_hum", "n_pairs_hum"),
+        "mae_global_ws": global_mae("mae_ws", "n_pairs_ws"),
+        "lead_errors": build_lead_errors(series, lead_rows) if lead_rows else None,
     }
 
 
@@ -675,7 +755,12 @@ if __name__ == "__main__":
         stations = get_active_stations()
         station_ids = [s["id"] for s in stations]
         dashboard_series = fetch_dashboard_series(station_ids, days=7)
-        dashboard = build_dashboard_json(stations, dashboard_series)
+        try:
+            lead_rows = fetch_lead_rows(days=7)
+        except Exception as e:  # l'errore per anticipo non deve impedire il resto della dashboard
+            log.warning(f"previsioni per anticipo non disponibili: {e}")
+            lead_rows = None
+        dashboard = build_dashboard_json(stations, dashboard_series, lead_rows)
         dashboard_path = DOCS_DATA / "dashboard_data.json"
         dashboard_path.write_text(json.dumps(dashboard, indent=2, ensure_ascii=False))
         log.info(f"Scritto {dashboard_path}")
