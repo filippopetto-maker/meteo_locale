@@ -8,8 +8,10 @@ licenza CC-BY 4.0, senza quote). Qui, per ogni corsa non ancora archiviata, si l
     (lazio_sri.centri_griglia), più il massimo sui pixel per pioggia, CAPE e fulmini; la pioggia ICON-2I
     anche ai pixel nativi (per la rete neurale);
   - modelli più larghi (GFS, IFS, ICON-EU): i pixel nativi del ritaglio con un margine di 0,5°;
-  - ensemble IFS (O1280, 51 membri): i punti della griglia gaussiana nel ritaglio, primi 72 h.
-Vento come componenti u/v (m/s). Valori float16. L'asse del tempo di ogni campo parte da `tempi[0]` (l'istante
+  - ensemble IFS (O1280, 51 membri): i punti della griglia gaussiana nel ritaglio.
+Per tutti solo le prime ORE_MAX ore (48 h di prodotto più l'età della corsa quando la si usa).
+Vento come componenti u/v (m/s). Valori float16, arrotondati al passo di PASSI (0,1 mm, 1 %, 10 J/kg...):
+le cifre oltre il passo sono rumore che la compressione non riesce a togliere. L'asse del tempo di ogni campo parte da `tempi[0]` (l'istante
 della corsa; la pioggia lì è vuota) e può avere un passo in meno di `tempi` alla fine. I .npz vanno negli asset di una release GitHub per mese
 (corse-AAAA-MM), così l'archivio non pesa sul repository né sul Mac.
 
@@ -33,7 +35,13 @@ BUCKET = "openmeteo/data_run"
 DOMINIO = dict(lat_min=40.7, lat_max=43.0, lon_min=11.3, lon_max=14.1)     # = lazio_sri.BBOX_LAZIO
 MARGINE = 0.5
 PASSO_CELLA = 0.05
-ORE_ENS = 72
+ORE_MAX = 60
+
+# passo di arrotondamento per prefisso del nome del campo (il primo che combacia); il resto a 0,1
+PASSI = [(("precipitation", "showers", "rain"), 0.1), (("cloud_cover",), 1), (("relative_humidity",), 1),
+         (("cape", "convective_inhibition", "freezing_level", "geopotential", "boundary_layer",
+           "convective_cloud_top"), 10), (("shortwave", "direct"), 5), (("vertical_velocity",), 0.01)]
+PASSO_NUBI_ENS = 5     # le nubi dei 51 membri a passi del 5 %: da sole erano metà dell'archivio
 
 PRESSIONE = [850, 700, 500]
 MODELLI = {
@@ -108,6 +116,12 @@ def punti_o1280(meta: dict):
     return np.array(la), np.array(lo)
 
 
+def compatta(nome: str, a: np.ndarray, passo: float | None = None) -> np.ndarray:
+    if passo is None:
+        passo = next((q for pref, q in PASSI if nome.startswith(pref)), 0.1)
+    return (np.round(a / passo) * passo).astype("float16")
+
+
 INTERO_MB = 50     # sotto questa taglia il file si scarica intero: più veloce di centinaia di letture a pezzi
 
 
@@ -151,6 +165,8 @@ def archivia(fs, nome: str, corsa: datetime, uscita: Path) -> Path | None:
         return None
     presenti = {Path(p).stem for p in fs.ls(f"{BUCKET}/{cartella}", detail=False)}
     tempi = np.array([t.replace("Z", "") for t in meta["valid_times"]], dtype="datetime64[m]")
+    nt = int((tempi <= np.datetime64(corsa.replace(tzinfo=None), "m") + np.timedelta64(ORE_MAX, "h")).sum())
+    tempi = tempi[:nt]
     import omfiles
     campione = next(v for v in ("precipitation", "cape", "cloud_cover") if v in presenti)
     forma = omfiles.OmFileReader.from_fsspec(fs, f"{BUCKET}/{cartella}/{campione}.om").shape
@@ -160,21 +176,20 @@ def archivia(fs, nome: str, corsa: datetime, uscita: Path) -> Path | None:
         assert len(la) == forma[1], f"O1280: {len(la)} punti calcolati, {forma[1]} nel file"
         k = np.where((la >= DOMINIO["lat_min"] - MARGINE) & (la <= DOMINIO["lat_max"] + MARGINE)
                      & (lo >= DOMINIO["lon_min"] - MARGINE) & (lo <= DOMINIO["lon_max"] + MARGINE))[0]
-        nt = min(ORE_ENS + 1, forma[3])
-        out["lat"], out["lon"], out["tempi"] = la[k], lo[k], tempi[:nt]
+        out["lat"], out["lon"] = la[k], lo[k]
         tagli = np.split(k, np.where(np.diff(k) > 1)[0] + 1)               # un segmento contiguo per riga
         import omfiles
         for v in variabili:
             if v in presenti:
                 r = omfiles.OmFileReader.from_fsspec(fs, f"{BUCKET}/{cartella}/{v}.om")
-                out[v] = np.concatenate([np.asarray(r[0, s[0]:s[-1] + 1, :, :nt], dtype="float32")
-                                         for s in tagli]).astype("float16")      # punti × membri × ore
+                a = np.concatenate([np.asarray(r[0, s[0]:s[-1] + 1, :, :nt], dtype="float32") for s in tagli])
+                out[v] = compatta(v, a, PASSO_NUBI_ENS if v == "cloud_cover" else None)   # punti × membri × ore
     else:
         lat, lon = griglia_regolare(meta, forma[:2])
         m = 0.0 if a_celle else MARGINE
         ri = np.where((lat >= DOMINIO["lat_min"] - m - 0.05) & (lat <= DOMINIO["lat_max"] + m + 0.05))[0]
         ci = np.where((lon >= DOMINIO["lon_min"] - m - 0.05) & (lon <= DOMINIO["lon_max"] + m + 0.05))[0]
-        sel = (slice(ri.min(), ri.max() + 1), slice(ci.min(), ci.max() + 1), slice(None))
+        sel = (slice(ri.min(), ri.max() + 1), slice(ci.min(), ci.max() + 1), slice(0, nt))
         la, lo = lat[ri.min():ri.max() + 1], lon[ci.min():ci.max() + 1]
         campi = {}
         for v in variabili:
@@ -204,19 +219,19 @@ def archivia(fs, nome: str, corsa: datetime, uscita: Path) -> Path | None:
                 n = np.zeros((n_celle, a.shape[-1]), "float32")
                 np.add.at(n, idx[valido], (~vuoto).astype("float32"))
                 media = np.where(n > 0, s / np.maximum(n, 1), np.nan)
-                out[v] = media.reshape(len(lat_c), len(lon_c), -1).astype("float16")
+                out[v] = compatta(v, media.reshape(len(lat_c), len(lon_c), -1))
                 if v in MASSIMO:
                     mx = np.full((n_celle, a.shape[-1]), -np.inf, "float32")
                     np.maximum.at(mx, idx[valido], np.where(vuoto, -np.inf, piatto))
-                    out[f"{v}_max"] = np.where(np.isfinite(mx), mx, np.nan).reshape(len(lat_c), len(lon_c), -1).astype("float16")
+                    out[f"{v}_max"] = compatta(v, np.where(np.isfinite(mx), mx, np.nan).reshape(len(lat_c), len(lon_c), -1))
             if nome == "icon2i" and "precipitation" in campi:
-                out["precipitation_nativa"] = campi["precipitation"].astype("float16")
+                out["precipitation_nativa"] = compatta("precipitation", campi["precipitation"])
                 out["lat_nativa"], out["lon_nativa"] = la, lo
             del conta
         else:
             out["lat"], out["lon"] = la, lo
             for v, a in campi.items():
-                out[v] = a.astype("float16")
+                out[v] = compatta(v, a)
     f = uscita / f"{nome}_{corsa:%Y%m%d%H}.npz"
     np.savez_compressed(f, **out)
     logger.info(f"{f.name}: {len([k for k in out if k not in ('tempi', 'corsa', 'lat', 'lon')])} campi, "
