@@ -20,7 +20,9 @@ della corsa; la pioggia lì è vuota) e può avere un passo in meno di `tempi` a
 
     python scripts/archivio_corse.py --uscita /tmp/corse [--dal 2026-07-25] [--salta-esistenti elenco.txt]
 
-Senza --dal guarda le corse degli ultimi 2 giorni. Stampa i file nuovi, uno per riga, su stdout.
+Senza --dal parte dal 25/07/2026 (inizio dell'archivio su AWS): con --salta-esistenti ogni giro fa prima le
+corse nuove, poi recupera all'indietro quelle mancanti finché non scadono i --minuti. Stampa i file nuovi,
+uno per riga, su stdout.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -40,6 +43,7 @@ ITALIA = dict(lat_min=35.5, lat_max=47.5, lon_min=6.0, lon_max=19.0)       # cop
 MARGINE = 0.5
 PASSO_CELLA = 0.05
 ORE_MAX = 60
+PRIMO_GIORNO = "2026-07-25"                    # corse più vecchie su AWS (data_run)
 
 # passo di arrotondamento per prefisso del nome del campo (il primo che combacia); il resto a 0,1
 PASSI = [(("precipitation", "showers", "rain"), 0.1), (("cloud_cover",), 1), (("relative_humidity",), 1),
@@ -313,10 +317,11 @@ def archivia(fs, nome: str, corsa: datetime, uscita: Path) -> Path | None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--uscita", type=Path, required=True)
-    ap.add_argument("--dal", help="prima data da archiviare (AAAA-MM-GG); senza, gli ultimi 2 giorni")
+    ap.add_argument("--dal", default=PRIMO_GIORNO, help="prima data da archiviare (AAAA-MM-GG)")
     ap.add_argument("--al", help="ultima data (compresa)")
     ap.add_argument("--salta-esistenti", type=Path, help="file con i nomi già archiviati, uno per riga")
     ap.add_argument("--modelli", default=",".join(MODELLI))
+    ap.add_argument("--minuti", type=float, help="non comincia corse nuove dopo questi minuti (giri a tempo)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S", stream=sys.stderr)
     import s3fs
@@ -324,15 +329,21 @@ def main():
     args.uscita.mkdir(parents=True, exist_ok=True)
     fatti = set(args.salta_esistenti.read_text().split()) if args.salta_esistenti and args.salta_esistenti.exists() else set()
     adesso = datetime.now(timezone.utc)
-    inizio = datetime.fromisoformat(args.dal).replace(tzinfo=timezone.utc) if args.dal else adesso - timedelta(days=2)
+    t0 = time.time()
+    inizio = datetime.fromisoformat(args.dal).replace(tzinfo=timezone.utc)
     fine = (datetime.fromisoformat(args.al).replace(tzinfo=timezone.utc) + timedelta(days=1)) if args.al else adesso
-    giorno = inizio.replace(hour=0, minute=0, second=0, microsecond=0)
-    while giorno < fine:
+    primo = inizio.replace(hour=0, minute=0, second=0, microsecond=0)
+    giorno = (fine - timedelta(microseconds=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # dal giorno più recente all'indietro: le corse nuove prima, il recupero del passato col tempo che resta
+    while giorno >= primo:
         for nome in args.modelli.split(","):
-            for h in MODELLI[nome][1]:
+            for h in sorted(MODELLI[nome][1], reverse=True):
                 corsa = giorno.replace(hour=h)
                 if corsa > adesso or f"{nome}_{corsa:%Y%m%d%H}.npz" in fatti:
                     continue
+                if args.minuti and time.time() - t0 > args.minuti * 60:
+                    logger.info(f"{args.minuti:.0f} min passati: il resto al prossimo giro")
+                    return
                 try:
                     f = archivia(fs, nome, corsa, args.uscita)
                 except Exception as e:                        # una corsa rotta non deve fermare le altre
@@ -340,7 +351,7 @@ def main():
                     continue
                 if f:
                     print(f, flush=True)
-        giorno += timedelta(days=1)
+        giorno -= timedelta(days=1)
 
 
 if __name__ == "__main__":
