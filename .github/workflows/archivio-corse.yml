@@ -3,10 +3,9 @@ name: Archivio corse modelli (Lazio, da Open-Meteo su AWS)
 # Ogni 3 ore archivia le corse vere di ICON-2I, AROME HD, GFS, IFS, ICON-EU ed ensemble IFS sul Lazio
 # allargato (scripts/archivio_corse.py) e le carica come asset della release del mese (corse-AAAA-MM).
 # Riprendibile: salta le corse già caricate, quindi un giro saltato si recupera al successivo.
+# Trigger esterno: cron-job.org ogni 3 h al minuto 40 UTC (il cron di GitHub saltava i giri), body {"ref":"main"}.
 # A mano (workflow_dispatch) con "dal"/"al" si recupera il passato ancora presente su AWS (dal 25/07/2026).
 on:
-  schedule:
-    - cron: "40 */3 * * *"
   workflow_dispatch:
     inputs:
       dal:
