@@ -37,7 +37,7 @@ jobs:
           python-version: "3.12"
 
       - name: Dipendenze
-        run: pip install "numpy<2.3" omfiles==1.2.0 s3fs
+        run: pip install "numpy<2.3" scipy omfiles==1.2.0 s3fs
 
       - name: Corse già archiviate
         env:
