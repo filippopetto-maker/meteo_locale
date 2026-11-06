@@ -488,9 +488,11 @@
     .is-pwa #brand-lockup .brand-word {
       font-weight: 500; font-size: 13px; letter-spacing: -.01em; color: var(--text);
     }
-    .is-pwa #brand-meta,
-    .is-pwa #info-radar {
-      display: block;
+    /* Ora e aggiornamento non si mostrano più qui: li dice già la barra in basso
+       (#brand-meta torna visibile solo con "Dati non disponibili") */
+    .is-pwa #brand-meta:not(.is-error),
+    .is-pwa #info-radar { display: none !important; }
+    .is-pwa #brand-meta {
       font-weight: 400; font-size: 9.5px; color: var(--text-3);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
@@ -582,7 +584,7 @@
     /* ─── Popover preferenze — riusa .ctrl-row/.switch/.pill-group/.pill/.dashboard-link
            (stessi id/markup del pannello legacy, solo skin diversa qui sotto) ─── */
     .is-pwa #prefs-popover {
-      position: fixed; right: 14px; bottom: 112px; z-index: 1000;
+      position: fixed; right: 14px; bottom: 112px; z-index: 1001;
       width: 232px; padding: 12px 14px; border-radius: 18px;
       background: var(--glass-strong); border: .5px solid var(--border);
       backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
@@ -591,6 +593,7 @@
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     .is-pwa #prefs-popover.hidden { display: none; }
+    .is-pwa #prefs-popover.lifted::after { display: none; }
     .is-pwa #prefs-popover::after {
       content: ''; position: absolute; right: 32px; bottom: -6px;
       width: 12px; height: 12px; transform: rotate(45deg);

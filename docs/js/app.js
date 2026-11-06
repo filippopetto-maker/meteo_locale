@@ -858,8 +858,18 @@
       let prefsOpen = false;
       function renderPrefsVisibility() {
         if (!isPWA) return;
-        document.getElementById('prefs-popover')?.classList.toggle('hidden', !prefsOpen);
+        const pop = document.getElementById('prefs-popover');
+        pop?.classList.toggle('hidden', !prefsOpen);
         document.getElementById('prefs-btn')?.classList.toggle('active', prefsOpen);
+        // Con la barra Ora/+48 h o radar aperta il popover si apre sopra di essa, non dietro
+        if (pop && prefsOpen) {
+          const bar = [...document.querySelectorAll('#fc48-timeline, #radar-timeline')]
+            .find(el => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0);
+          pop.style.bottom = bar
+            ? `${Math.round(window.innerHeight - bar.getBoundingClientRect().top + 10)}px`
+            : '';
+          pop.classList.toggle('lifted', !!bar);   // alzato: la freccetta punterebbe alla barra
+        }
       }
 
       // Solo PWA: sul layer Radar la timeline occupa spazio variabile in fondo (testo che
@@ -1557,7 +1567,7 @@
         // Bug preesistente (#updated-at non esiste nel markup, citato nel README): fixato
         // solo qui, nel ramo PWA. Il ramo legacy sotto resta byte-per-byte quello di oggi.
         const brandMeta = document.getElementById('brand-meta');
-        if (brandMeta) brandMeta.textContent = 'Dati non disponibili';
+        if (brandMeta) { brandMeta.textContent = 'Dati non disponibili'; brandMeta.classList.add('is-error'); }
         window.hideSplash?.();
       } else {
         document.getElementById('updated-at').textContent = 'Errore caricamento dati';
