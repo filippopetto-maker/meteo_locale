@@ -319,6 +319,8 @@
       border: 2px solid var(--accent);
       cursor: pointer;
     }
+    /* Radar: un livello per fotogramma, si passa dall'uno all'altro con una breve dissolvenza (radar.js) */
+    .radar-frame { transition: opacity .18s linear; }
     .radar-now-marker {
       position: absolute;
       top: -3px;
@@ -512,16 +514,15 @@
     }
     .is-pwa #time-toggle button.active { background: var(--accent); color: var(--accent-on); }
 
-    /* ─── Pillole modalità (sotto la pillola tempo) ─── */
-    /* top: 51px è una stima (pillola tempo: 9px + ~38px altezza + 4px gap). Da
-       verificare sul device e correggere se la spaziatura non convince. */
+    /* ─── Pillole modalità (top-right, dove stava la pillola tempo Adesso/+1h) ─── */
     .is-pwa #tempmode-toggle,
     .is-pwa #hummode-toggle {
       display: flex; gap: 2px; padding: 3px; border-radius: 999px;
       background: rgba(20, 22, 34, .8); border: .5px solid rgba(255, 255, 255, .1);
       backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
       position: fixed;
-      top: calc(env(safe-area-inset-top, 0px) + 51px);
+      top: 9px; /* fallback per browser senza supporto env() */
+      top: calc(env(safe-area-inset-top, 0px) + 9px); /* la pillola Adesso/Previsione non c'è più */
       right: 14px;
       z-index: 1000;
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -658,6 +659,32 @@
     .is-pwa .radar-slider::-webkit-slider-thumb { width: 18px; height: 18px; }
     .is-pwa .radar-slider::-moz-range-thumb { width: 18px; height: 18px; }
     .is-pwa .radar-timeline-labels { font-size: 10px; color: rgba(233, 233, 237, .6); }
+
+    /* ─── Barra Ora/+48 h (fc48) e barra radar — stessa card compatta: play, cursore e ora su
+           una riga, sotto la scala colori (la .temp-legend viene spostata dentro la card attiva
+           da app.js). Siedono sopra il rail (bordo superiore ~104px) con bottom 112px. ─── */
+    .is-pwa #fc48-timeline, .is-pwa #radar-timeline { padding: 8px 12px 9px; }
+    .is-pwa #fc48-timeline .radar-timeline-row, .is-pwa #radar-timeline .radar-timeline-row { gap: 10px; }
+    .is-pwa #fc48-timeline .radar-play-btn, .is-pwa #radar-timeline .radar-play-btn { width: 34px; height: 34px; flex: 0 0 auto; }
+    .is-pwa .fc48-now {
+      /* larghezza fissa sul testo più lungo ("Adesso 22:40"): il cursore non cambia misura scorrendo */
+      flex: 0 0 88px; width: 88px; text-align: right; white-space: nowrap; overflow: hidden;
+      font-weight: 600; font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums;
+    }
+    .is-pwa .fc48-now.radar-note { text-decoration: none; cursor: help; } /* tooltip coi limiti del dato radar */
+    .is-pwa .fc48-legend-slot, .is-pwa .radar-legend-slot { margin-top: 7px; }
+    .is-pwa .fc48-legend-slot:empty, .is-pwa .radar-legend-slot:empty { display: none; }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) .temp-legend {
+      position: static; left: auto; right: auto; bottom: auto;
+      display: flex; flex-direction: row; align-items: center; gap: 8px;
+      text-shadow: none;
+    }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) #legend-bar { order: 1; flex: 1; height: 5px; box-shadow: none; }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) #legend-labels { display: contents; }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) .legend-tick { position: static; transform: none; order: 0; }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) .legend-tick:last-child { order: 2; }
+    /* Radar: tre tick (debole, moderata, intensa) — nella riga restano solo gli estremi */
+    .is-pwa :is(#fc48-timeline, #radar-timeline) .legend-tick:not(:first-child):not(:last-child) { display: none; }
   </style>
   <script>
     // Redesign "Metek" (splash, brand lockup, rail, popover) attivo SOLO in PWA standalone
@@ -710,6 +737,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet-velocity@2.1.1/dist/leaflet-velocity.min.js"></script>
   <script src="js/radar.js"></script>
+  <script src="js/luogo.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

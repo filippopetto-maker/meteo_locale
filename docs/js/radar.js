@@ -24,7 +24,6 @@
   let playing = false;
   let active = false;
   let updateCallback = null;
-  const preloadedUrls = new Set();
 
   // ─── DOM ──────────────────────────────────────────────────────────────
   let elTimeline, elPlayBtn, elSlider, elNowMarker,
@@ -41,13 +40,21 @@
     elTimeline.id = 'radar-timeline';
     elTimeline.className = 'radar-timeline';
     elTimeline.style.display = 'none';
-    elTimeline.innerHTML =
-      (isPWA
-        ? `<div class="radar-timeline-header">` +
-          `<span class="hdr-title">TIMELINE RADAR</span>` +
-          `<span class="hdr-credit radar-note" title="${RADAR_DISCLAIMER}">RainViewer · ultime 2h osservate</span>` +
-          `</div>`
-        : '') +
+    // PWA: card compatta come la barra Ora/+48 h — play, cursore e ora del fotogramma su una riga,
+    // sotto la scala colori (spostata qui da app.js). Credito RainViewer nell'attribuzione della mappa.
+    elTimeline.innerHTML = isPWA ?
+      `<div class="radar-timeline-row" id="radar-controls">` +
+      `<button id="radar-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
+      `<div class="radar-track-wrap">` +
+      `<input type="range" id="radar-slider" class="radar-slider" min="0" max="0" step="1" value="0" aria-label="Fotogramma radar">` +
+      `<div id="radar-now-marker" class="radar-now-marker"></div>` +
+      `</div>` +
+      `<span id="radar-label-now" class="fc48-now radar-note" title="${RADAR_DISCLAIMER}"></span>` +
+      `</div>` +
+      `<div id="radar-labels-row" hidden><span id="radar-label-start"></span><span id="radar-label-end"></span></div>` +
+      `<div class="radar-legend-slot"></div>` +
+      `<div id="radar-unavailable" class="radar-unavailable" style="display:none">⚠️ Radar non disponibile</div>`
+      :
       `<div class="radar-timeline-row" id="radar-controls">` +
       `<button id="radar-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
       `<div class="radar-track-wrap">` +
@@ -61,12 +68,10 @@
       `<span id="radar-label-end"></span>` +
       `</div>` +
       `<div id="radar-unavailable" class="radar-unavailable" style="display:none">⚠️ Radar non disponibile</div>` +
-      (isPWA
-        ? ''
-        : `<div class="radar-credit">` +
-          `Radar: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>` +
-          ` · <span class="radar-note" title="${RADAR_DISCLAIMER}">ⓘ limiti del dato</span>` +
-          `</div>`);
+      `<div class="radar-credit">` +
+      `Radar: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>` +
+      ` · <span class="radar-note" title="${RADAR_DISCLAIMER}">ⓘ limiti del dato</span>` +
+      `</div>`;
     document.body.appendChild(elTimeline);
 
     elControls    = document.getElementById('radar-controls');
@@ -144,43 +149,77 @@
     return (nowIndex >= 0 && frames[nowIndex]) ? frames[nowIndex].time : null;
   }
 
-  // ─── Precaching tile adiacenti (viewport corrente) ─────────────────────
-  function getVisibleTileCoords() {
-    const zoom = Math.min(Math.round(map.getZoom()), MAX_NATIVE_ZOOM);
-    const bounds = map.getBounds();
-    const nw = map.project(bounds.getNorthWest(), zoom).divideBy(TILE_SIZE).floor();
-    const se = map.project(bounds.getSouthEast(), zoom).divideBy(TILE_SIZE).floor();
-    const coords = [];
-    for (let x = nw.x; x <= se.x; x++) {
-      for (let y = nw.y; y <= se.y; y++) coords.push({ x, y, z: zoom });
-    }
-    return coords;
-  }
-
-  function preloadFrame(index) {
-    if (index < 0 || index >= frames.length || !map) return;
-    const frame = frames[index];
-    getVisibleTileCoords().forEach(c => {
-      const url = frame.url.replace('{z}', c.z).replace('{x}', c.x).replace('{y}', c.y);
-      if (preloadedUrls.has(url)) return;
-      preloadedUrls.add(url);
-      const img = new Image();
-      img.src = url;
-    });
-  }
-
   // ─── Rendering frame ────────────────────────────────────────────────
+  // Scorrimento fluido: un livello per fotogramma, caricato in anticipo (opacità 0); cambiare
+  // fotogramma = cambiare quale livello è visibile, con una breve dissolvenza (.radar-frame in
+  // index.html). Se il fotogramma scelto non ha ancora finito di caricare, quello di prima resta
+  // visibile finché non arriva, così la mappa non resta vuota.
+  // Per contenere rete e memoria sulla mappa stanno solo i fotogrammi vicini a quello mostrato
+  // (±NEIGHBORS); durante il play tutti, perché l'animazione li attraversa in fila. I livelli
+  // tolti liberano le immagini decodificate; i riquadri restano nella cache HTTP del browser.
+  const frameLayers = new Map();   // path → { layer, loaded }
+  let shownPath = null;            // fotogramma visibile adesso
+
+  function layerFor(frame) {
+    let entry = frameLayers.get(frame.path);
+    if (entry) return entry;
+    const layer = L.tileLayer(frame.url, {
+      opacity: 0, maxZoom: 19, maxNativeZoom: MAX_NATIVE_ZOOM, className: 'radar-frame',
+      attribution: isPWA ? 'Radar <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>' : '',
+    });
+    entry = { layer, loaded: false };
+    layer.on('loading', () => { entry.loaded = false; });
+    layer.on('load', () => {
+      entry.loaded = true;
+      // era il fotogramma richiesto ma non ancora pronto: ora si può nascondere il precedente
+      if (frames[currentIndex] && frames[currentIndex].path === frame.path) reveal(frame.path);
+    });
+    frameLayers.set(frame.path, entry);
+    layer.addTo(map);
+    return entry;
+  }
+
+  function reveal(path) {
+    for (const [p, e] of frameLayers) e.layer.setOpacity(p === path ? OPACITY : 0);
+    shownPath = path;
+    tileLayer = frameLayers.get(path).layer;
+  }
+
+  const NEIGHBORS = 2;
+
+  // Livelli per i fotogrammi da tenere pronti; via gli altri (mai quello ancora a schermo)
+  function syncFrameLayers() {
+    const wanted = playing
+      ? frames
+      : frames.filter((_, i) => Math.abs(i - currentIndex) <= NEIGHBORS);
+    const keep = new Set(wanted.map(f => f.path));
+    if (shownPath) keep.add(shownPath);
+    for (const [p, e] of frameLayers) {
+      if (!keep.has(p)) { map.removeLayer(e.layer); frameLayers.delete(p); }
+    }
+    // prima i più vicini al fotogramma corrente, così arrivano per primi
+    wanted.slice()
+      .sort((a, b) => Math.abs(frames.indexOf(a) - currentIndex) - Math.abs(frames.indexOf(b) - currentIndex))
+      .forEach(layerFor);
+  }
+
+  function clearFrameLayers() {
+    for (const e of frameLayers.values()) map.removeLayer(e.layer);
+    frameLayers.clear();
+    shownPath = null;
+    tileLayer = null;
+  }
+
   function showFrame(index) {
     if (!map || index < 0 || index >= frames.length) return;
     currentIndex = index;
     const frame = frames[index];
-    const newLayer = L.tileLayer(frame.url, { opacity: OPACITY, maxZoom: 19, maxNativeZoom: MAX_NATIVE_ZOOM });
-    newLayer.addTo(map);
-    if (tileLayer) map.removeLayer(tileLayer);
-    tileLayer = newLayer;
+    const entry = layerFor(frame);
+    // Non ancora pronto (e c'è già qualcosa a schermo): resta il precedente, il 'load' farà il cambio
+    if (entry.loaded || !shownPath || !frameLayers.has(shownPath)) reveal(frame.path);
+    syncFrameLayers();
     syncSliderPosition();
-    preloadFrame(index + 1);
-    preloadFrame(index - 1);
+    updateNowLabel();
   }
 
   // ─── Timeline UI ────────────────────────────────────────────────────
@@ -200,6 +239,7 @@
     const startDiffMin = Math.round((frames[0].time - nowTime) / 60);
     elLabelStart.textContent = `${minutesLabel(startDiffMin)} fa`;
     elLabelNow.textContent = `Adesso (${formatEpoch(nowTime)})`;
+    updateNowLabel();
 
     if (nowIndex < total - 1) {
       const endDiffMin = Math.round((frames[total - 1].time - nowTime) / 60);
@@ -209,6 +249,13 @@
       elLabelEnd.textContent = '';
       elLabelEnd.style.visibility = 'hidden';
     }
+  }
+
+  // PWA: l'etichetta a destra del cursore dice l'ora del fotogramma mostrato
+  function updateNowLabel() {
+    if (!isPWA || !elLabelNow || currentIndex < 0 || !frames[currentIndex]) return;
+    const t = formatEpoch(frames[currentIndex].time);
+    elLabelNow.textContent = currentIndex === nowIndex ? `Adesso ${t}` : t;
   }
 
   function syncSliderPosition() {
@@ -232,6 +279,7 @@
     if (playTimer || frames.length < 2) return;
     playing = true;
     updatePlayButtonUI();
+    syncFrameLayers();   // in play servono tutti
     playTimer = setInterval(() => {
       let next = currentIndex + 1;
       if (next >= frames.length) next = 0;
@@ -243,6 +291,7 @@
     if (playTimer) { clearInterval(playTimer); playTimer = null; }
     playing = false;
     updatePlayButtonUI();
+    if (map && active) syncFrameLayers();   // torna ai soli vicini
   }
 
   function togglePlay() { playing ? pause() : play(); }
@@ -253,6 +302,7 @@
     refreshTimer = setInterval(async () => {
       const ok = await fetchRadarFrames();
       if (ok) {
+        syncFrameLayers();
         renderTimelineStructure();
         if (updateCallback) updateCallback(getLastObservedTime());
       }
@@ -277,7 +327,7 @@
     }
     showUnavailable(false);
     renderTimelineStructure();
-    showFrame(currentIndex);
+    showFrame(currentIndex);   // carica anche i vicini
     startAutoRefresh();
     if (updateCallback) updateCallback(getLastObservedTime());
   }
@@ -286,7 +336,7 @@
     active = false;
     stopAutoRefresh();
     pause();
-    if (tileLayer && map) { map.removeLayer(tileLayer); tileLayer = null; }
+    if (map) clearFrameLayers();
     if (elTimeline) elTimeline.style.display = 'none';
   }
 

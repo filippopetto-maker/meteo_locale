@@ -709,15 +709,8 @@
           }
         });
 
-        // ─── Pillola tempo (top-right) — id "time-toggle" riusato dal pannello legacy ───
-        const timeToggle = L.DomUtil.create('div');
-        timeToggle.id = 'time-toggle';
-        timeToggle.innerHTML =
-          `<button id="btn-now" class="active">Adesso</button>` +
-          `<button id="btn-plus1">+1h</button>`;
-        document.body.appendChild(timeToggle);
-
-        // ─── Pillole modalità (sotto la pillola tempo) — mutuamente esclusive per tab ───
+        // ─── Pillole modalità (top-right) — mutuamente esclusive per tab. L'ora (Ora / +N h)
+        // si sceglie dalla barra in basso: la pillola Adesso/Previsione non c'è più ───
         const tempModeToggle = L.DomUtil.create('div');
         tempModeToggle.id = 'tempmode-toggle';
         tempModeToggle.innerHTML =
@@ -781,10 +774,6 @@
           `<div class="layer-toggle" id="hummode-toggle">` +
           `<button id="btn-hreal" class="active">Reale</button>` +
           `<button id="btn-hwb">Bulbo umido</button>` +
-          `</div>` +
-          `<div class="layer-toggle" id="time-toggle">` +
-          `<button id="btn-now" class="active">Adesso</button>` +
-          `<button id="btn-plus1">+1h</button>` +
           `</div>` +
           prefsRowsHtml +
           `<div class="panel-divider"></div>` +
@@ -884,9 +873,22 @@
         if (!isPWA) return;
         const legendEl = document.querySelector('.temp-legend');
         if (!legendEl) return;
-        if (activeLayer !== 'radar') { legendEl.style.bottom = ''; return; }
+        const radarSlot = document.querySelector('#radar-timeline .radar-legend-slot');
+        if (activeLayer !== 'radar') {
+          legendEl.style.bottom = '';
+          // Uscendo dal radar la scala lascia la card radar (la barra Ora/+48 h se la riprende)
+          if (radarSlot && legendEl.parentNode === radarSlot) document.body.appendChild(legendEl);
+          return;
+        }
         const timelineEl = document.getElementById('radar-timeline');
         const visible = timelineEl && getComputedStyle(timelineEl).display !== 'none';
+        // Card radar compatta: la scala colori sta dentro la card, sotto il cursore
+        if (visible && radarSlot) {
+          legendEl.style.bottom = '';
+          if (legendEl.parentNode !== radarSlot) radarSlot.appendChild(legendEl);
+          return;
+        }
+        if (radarSlot && legendEl.parentNode === radarSlot) document.body.appendChild(legendEl);
         if (!visible) {
           // Al primo switch su Radar la timeline non esiste ancora (creata lazy dentro
           // RadarLayer.activate(), asincrono) o non è ancora visibile: misurarla ora darebbe
@@ -910,8 +912,6 @@
         document.getElementById('btn-temp').classList.toggle('active', layer === 'temperature');
         document.getElementById('btn-hum').classList.toggle('active',  layer === 'humidity');
         document.getElementById('btn-radar').classList.toggle('active', layer === 'radar');
-        document.getElementById('time-toggle').style.display =
-          (layer === 'temperature' || layer === 'humidity') ? 'flex' : 'none';
         document.getElementById('tempmode-toggle').style.display =
           layer === 'temperature' ? 'flex' : 'none';
         document.getElementById('hummode-toggle').style.display =
@@ -995,21 +995,11 @@
         setNoDataOverlay(!heatOverlay && layer !== 'radar');
       }
 
+      // L'ora mostrata si sceglie solo dalla barra (setupForecast48 → setPos): "Ora" = osservato,
+      // +1…+48 h = previsione. Non c'è più l'interruttore Adesso/Previsione.
       function switchTime(time) {
         activeTime = time;
-        fc48Ctl?.refresh();
-        document.getElementById('btn-now').classList.toggle('active', time === 'observed');
-        document.getElementById('btn-plus1').classList.toggle('active', time === 'forecast');
-        const label = document.getElementById('valid-for-label');
-        if (label) {
-          const firstFc  = (latest.stations || []).find(s => s.forecast?.valid_for);
-          const firstFc1 = (latest.stations || []).find(s => s.forecast1?.valid_for);
-          const src = time === 'observed' ? firstFc : firstFc1;
-          const validOreNow = src ? formatTime(src.forecast?.valid_for || src.forecast1?.valid_for) : '';
-          // Stessi valori (src, orario), solo il TESTO differisce: formato breve in PWA
-          // (evita la collisione con la pillola tempo, vedi CSS), invariato in legacy.
-          label.textContent = !src ? '' : (isPWA ? ` · previsioni ${validOreNow}` : `Previsioni per le ore ${validOreNow}`);
-        }
+        fc48Ctl?.updateValidLabel();
         if (activeLayer === 'temperature' || activeLayer === 'humidity') switchLayer(activeLayer);
       }
 
@@ -1035,7 +1025,8 @@
         let data = null;        // {times: [...ISO], series: Map(id → {t, rh, ws, wd} allineate a times)}
         let weights = null;     // Float32Array celle × stazioni (IDW normalizzato), calcolata una volta
         let wIds = [];
-        let idx = 0;            // posizione nella timeline (0 = +1h)
+        let idx = 0;            // ora di previsione mostrata (0 = +1h)
+        let pos = 0;            // posizione nella barra: 0 = Ora (osservato), k = +k h (idx = k − 1)
         let timer = null;
         let wsRange = null;     // scala colori del vento fissa sulle 48 ore
         const cache = new Map();
@@ -1044,15 +1035,23 @@
         el.className = 'radar-timeline';
         el.id = 'fc48-timeline';
         el.style.display = 'none';
-        el.innerHTML =
-          (isPWA ? `<div class="radar-timeline-header"><span class="hdr-title">PREVISIONE ORARIA</span>` +
-                   `<span class="hdr-credit">modello M2 · fino a +48 h</span></div>` : '') +
+        // PWA: card unica e bassa: play, cursore e ora scelta su una riga; sotto, la scala colori
+        // (la .temp-legend viene spostata qui dentro da refresh()). Niente titolo né etichette Ora/+48h.
+        el.innerHTML = isPWA ?
+          `<div class="radar-timeline-row">` +
+          `<button id="fc48-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
+          `<div class="radar-track-wrap"><input type="range" id="fc48-slider" class="radar-slider" min="0" max="0" step="1" value="0" aria-label="Ora mostrata sulla mappa"></div>` +
+          `<span id="fc48-now" class="fc48-now"></span>` +
+          `</div>` +
+          `<div class="fc48-legend-slot"></div>` +
+          `<span id="fc48-start" hidden></span><span id="fc48-end" hidden></span>`
+          :
           `<div class="radar-timeline-row">` +
           `<button id="fc48-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
           `<div class="radar-track-wrap"><input type="range" id="fc48-slider" class="radar-slider" min="0" max="0" step="1" value="0"></div>` +
           `</div>` +
           `<div class="radar-timeline-labels"><span id="fc48-start"></span><span id="fc48-now"></span><span id="fc48-end"></span></div>` +
-          (isPWA ? '' : `<div class="radar-credit">Previsioni M2 · scorrimento fino a +48 h</div>`);
+          `<div class="radar-credit">Ora: stazioni · poi previsioni M2 fino a +48 h</div>`;
         document.body.appendChild(el);
         const slider = el.querySelector('#fc48-slider');
         const playBtn = el.querySelector('#fc48-play');
@@ -1060,14 +1059,25 @@
         const fmt = iso => new Date(iso).toLocaleString('it-IT', {
           timeZone: 'Europe/Rome', weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
+        let readyResolve;
+        const whenReady = new Promise(r => { readyResolve = r; });  // true se le 48 ore sono caricate
         fetch('data/forecast_48h.json', { cache: 'no-store' })
           .then(r => (r.ok ? r.json() : null))
-          .then(j => { if (j) init(j); })
-          .catch(() => {});
+          .then(j => { init(j); readyResolve(!!data && data.series.size > 0); })
+          .catch(() => { init(null); readyResolve(!!data && data.series.size > 0); });
+
+        // Senza 48 ore valide la barra resta, con due posizioni: Ora e la +1h di latest.json
+        function initLite() {
+          const ref = stations.find(s => s.forecast?.valid_for);
+          if (!ref || data) return;
+          data = { times: [ref.forecast.valid_for], series: new Map(), land: null };
+          setupControls();
+        }
 
         function init(j) {
+          if (!j) { initLite(); return; }
           const ageH = (Date.now() - new Date(j.issue_at).getTime()) / 3.6e6;
-          if (!(ageH < 6)) return;  // file vecchio: niente timeline
+          if (!(ageH < 6)) { initLite(); return; }  // file vecchio: solo Ora e +1h
           const ref = stations.find(s => s.forecast?.valid_for);
           if (!ref) return;
           const start = new Date(ref.forecast.valid_for).getTime();  // ora della +1h di latest.json
@@ -1082,7 +1092,7 @@
             series.set(s.id, { t: sl(e.t), rh: sl(e.rh), ws: sl(e.ws), wd: sl(e.wd) });
             if (!times || e.valid_for.length - t0 > times.length) times = e.valid_for.slice(t0);
           }
-          if (!times || times.length < 2 || series.size < 2) return;
+          if (!times || times.length < 2 || series.size < 2) { initLite(); return; }
           let land = null;  // peso terra 0–1 per cella (1 = terraferma), dal file; senza, nessun peso
           const lw = j.land_weight;
           if (lw && lw.nx === base.t?.nx && lw.ny === base.t?.ny) {
@@ -1102,15 +1112,27 @@
             wsRange = { min: Math.round(wsMin), max: Math.round(wsMax) };
             base.ws = { ...base.ws, ws_min: wsRange.min, ws_max: wsRange.max };
           }
-          slider.max = String(times.length - 1);
-          el.querySelector('#fc48-start').textContent = '+1h';
-          el.querySelector('#fc48-end').textContent = `+${times.length}h`;
-          slider.addEventListener('input', e => { pause(); show(parseInt(e.target.value, 10)); });
-          const btn = document.getElementById('btn-plus1');
-          if (btn) btn.textContent = 'Previsione';  // non più solo +1h: l'ora si sceglie dalla timeline
+          setupControls();
+        }
+
+        function setupControls() {
+          slider.max = String(data.times.length);
+          el.querySelector('#fc48-end').textContent = `+${data.times.length}h`;
+          slider.addEventListener('input', e => { pause(); setPos(parseInt(e.target.value, 10)); });
           playBtn.addEventListener('click', () => (timer ? pause() : play()));
-          show(0, true);
+          setPos(0, true);
           refresh();
+        }
+
+        // Il vento non ha un "Ora" osservato su griglia: lì la barra parte dalla +1h
+        const minPos = () => (activeLayer === 'wind' ? 1 : 0);
+
+        function setPos(p, silent) {
+          p = Math.max(minPos(), Math.min(data.times.length, p));
+          pos = p;
+          slider.value = String(p);
+          activeTime = p === 0 ? 'observed' : 'forecast';
+          show(Math.max(0, p - 1), silent);
         }
 
         function buildWeights(grid) {
@@ -1181,7 +1203,6 @@
 
         function show(i, silent) {
           idx = i;
-          slider.value = String(i);
           const g = gridsFor(i);
           latest.temp_grid_forecast = g.t;
           latest.humidity_grid_forecast = g.h;
@@ -1200,7 +1221,10 @@
           currentWsMax = g.ws ? g.ws.ws_max : WIND_SPEED_MAX;
           windGridNow = windGridFor(i);
           if (windLayer) windLayer.setData(windGridNow);
-          el.querySelector('#fc48-now').textContent = `+${i + 1}h · ${fmt(data.times[i])}`;
+          el.querySelector('#fc48-now').textContent = isPWA
+            ? (pos === 0 ? `Ora ${formatTime(latest.generated_at)}` : fmt(data.times[i]))
+            : (pos === 0 ? `Ora · ${fmt(latest.generated_at)}` : `+${i + 1}h · ${fmt(data.times[i])}`);
+          updateValidLabel();
           if (silent) return;
           updateStationPopups(stationMarkers, stations);
           if (activeLayer !== 'wind') { switchTime(activeTime); return; }
@@ -1247,7 +1271,7 @@
           playBtn.textContent = '❚❚';
           // Sul vento le particelle ripartono a ogni ora: passo più lento per lasciarle muovere
           const step = () => {
-            timer = setTimeout(() => { show((idx + 1) % data.times.length); step(); },
+            timer = setTimeout(() => { setPos(pos >= data.times.length ? minPos() : pos + 1); step(); },
                                activeLayer === 'wind' ? 1600 : 900);
           };
           step();
@@ -1259,28 +1283,91 @@
         }
 
         function refresh() {
-          // Il vento è sempre una previsione (niente Adesso/Previsione): timeline sempre visibile
-          const on = !!data && (activeLayer === 'wind' ||
-                     (activeTime === 'forecast' && (activeLayer === 'temperature' || activeLayer === 'humidity')));
+          // Una sola barra per Ora e +1…+48 h su temperatura, umidità e vento; sul radar c'è la sua
+          const on = !!data && activeLayer !== 'radar';
           el.style.display = on ? '' : 'none';
           // Stesso spazio della timeline radar: la legenda sale sopra la timeline
-          document.querySelector('.temp-legend')?.classList.toggle('legend-fc48-mode', on);
+          const legendEl = document.querySelector('.temp-legend');
+          legendEl?.classList.toggle('legend-fc48-mode', on);
+          if (isPWA && legendEl) {
+            // Telefono: la scala colori sta dentro la card della barra; sul radar torna al suo posto
+            const slot = el.querySelector('.fc48-legend-slot');
+            if (on && legendEl.parentNode !== slot) { legendEl.style.bottom = ''; slot.appendChild(legendEl); }
+            else if (!on && legendEl.parentNode === slot) document.body.appendChild(legendEl);
+          }
+          if (!data) return;
+          slider.min = String(minPos());
+          el.querySelector('#fc48-start').textContent = minPos() === 0 ? 'Ora' : '+1h';
           if (!on) {
             pause();
-            // Fuori dalla previsione (Adesso, vento, radar) tutto torna alla +1h
-            if (data && idx !== 0) { show(0, true); updateStationPopups(stationMarkers, stations); }
+            // Sul radar la mappa torna all'osservato
+            if (pos !== 0) { setPos(0, true); updateStationPopups(stationMarkers, stations); }
+          } else if (pos < minPos()) {
+            setPos(minPos(), true);
           }
         }
 
-        return { refresh };
+        // Testata: l'ora mostrata sulla mappa quando è una previsione, niente quando è "Ora"
+        function updateValidLabel() {
+          const label = document.getElementById('valid-for-label');
+          if (!label) return;
+          if (pos === 0 || !data) { label.textContent = ''; return; }
+          const ore = formatTime(data.times[idx]);
+          label.textContent = isPWA ? ` · previsione ${ore}` : `Previsione per le ore ${ore}`;
+        }
+
+        // Le 48 ore in un punto (scheda del luogo cercato, js/luogo.js), coerenti con la mappa:
+        // valore della griglia +1h nel punto + IDW della variazione delle stazioni (stessi pesi di
+        // buildWeights, stesso peso terra di shifted); direzione del vento con l'IDW di windGridFor.
+        // Usa sempre `base`, non le griglie dell'ora mostrata in quel momento dalla timeline.
+        function pointSeries(lat, lng) {
+          if (!data) return null;
+          const pts = stations.filter(s => data.series.has(s.id));
+          const g = base.t;
+          const cosLat = g ? Math.cos(((g.lat_min + g.lat_max) / 2) * Math.PI / 180) : 1;
+          let sum = 0;
+          const w = pts.map(s => {
+            const wi = 1 / ((lat - s.lat) ** 2 + ((lng - s.lon) * cosLat) ** 2 + 1e-6);
+            sum += wi;
+            return wi;
+          }).map(x => x / sum);
+          let land = 1;
+          if (data.land && g) {
+            const r = Math.round((g.lat_max - lat) / (g.lat_max - g.lat_min) * (g.ny - 1));
+            const c = Math.round((lng - g.lon_min) / (g.lon_max - g.lon_min) * (g.nx - 1));
+            if (r >= 0 && r < g.ny && c >= 0 && c < g.nx) land = data.land[r * g.nx + c];
+          }
+          const at = grid => (grid?.values ? lookupGrid(lat, lng, grid) : null);
+          const t0 = at(base.t), h0 = at(base.h), w0 = at(base.ws);
+          return data.times.map((time, i) => {
+            const delta = key => pts.reduce((acc, s, j) => {
+              const v = data.series.get(s.id)[key];
+              return acc + ((v[i] != null && v[0] != null) ? w[j] * (v[i] - v[0]) : 0);
+            }, 0);
+            const t  = t0 != null ? t0 + delta('t') * land : null;
+            const rh = h0 != null ? Math.min(100, Math.max(0, h0 + delta('rh') * land)) : null;
+            const ws = w0 != null ? Math.max(0, w0 + delta('ws')) : null;
+            let su = 0, sv = 0, sw = 0;
+            for (const s of pts) {
+              const ser = data.series.get(s.id);
+              if (ser.ws[i] == null || ser.wd[i] == null) continue;
+              const rad = ser.wd[i] * Math.PI / 180;
+              const d2 = (lat - s.lat) ** 2 + (lng - s.lon) ** 2 + 1e-9;
+              su += -ser.ws[i] * Math.sin(rad) / d2; sv += -ser.ws[i] * Math.cos(rad) / d2; sw += 1 / d2;
+            }
+            let wd = null;
+            if (sw > 0) { wd = Math.atan2(-su, -sv) * 180 / Math.PI; if (wd < 0) wd += 360; }
+            return { time, t, rh, ws, wd, a: (t != null && rh != null) ? apparentTemp(t, rh, ws) : null };
+          });
+        }
+
+        return { refresh, pointSeries, whenReady, updateValidLabel };
       }
 
       document.getElementById('btn-wind').addEventListener('click', () => switchLayer('wind'));
       document.getElementById('btn-temp').addEventListener('click', () => switchLayer('temperature'));
       document.getElementById('btn-hum').addEventListener('click', () => switchLayer('humidity'));
       document.getElementById('btn-radar').addEventListener('click', () => switchLayer('radar'));
-      document.getElementById('btn-now').addEventListener('click', () => switchTime('observed'));
-      document.getElementById('btn-plus1').addEventListener('click', () => switchTime('forecast'));
       document.getElementById('btn-treal').addEventListener('click', () => switchTempMode('real'));
       document.getElementById('btn-tapp').addEventListener('click',  () => switchTempMode('apparent'));
       document.getElementById('btn-hreal').addEventListener('click', () => switchHumMode('real'));
@@ -1323,6 +1410,17 @@
       // (percepita, bulbo umido) si ricalcolano con le stesse formule. Senza il file, o con un file vecchio,
       // la timeline non compare e la mappa resta com'è.
       fc48Ctl = setupForecast48(latest, stations);
+
+      // Ricerca di un luogo → scheda a 48 ore (js/luogo.js). Diversa dal click sulla mappa (popup).
+      const tObs = latest.temp_grid_observed;
+      window.MeteoLuogo?.init({
+        map, stations, isPWA,
+        bounds: tObs ? [[tObs.lat_min, tObs.lon_min], [tObs.lat_max, tObs.lon_max]] : null,
+        pointSeries: (lat, lng) => fc48Ctl.pointSeries(lat, lng),
+        whenReady: fc48Ctl.whenReady,
+        nowTemp: (lat, lng) => (tObs?.values ? lookupGrid(lat, lng, tObs) : null),
+        windUnit: () => windUnit,
+      });
 
       if (stations.length > 0) {
         const bounds = stations.map(st => [st.lat, st.lon]);
