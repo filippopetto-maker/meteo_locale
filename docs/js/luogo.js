@@ -11,8 +11,10 @@
 (function () {
   'use strict';
 
-  const COL = 52;           // larghezza di una colonna da 3 ore (token col-3h)
+  const COL3 = 52;          // larghezza di una colonna da 3 ore (token col-3h)
+  const COL1 = 44;          // colonna da 1 ora: più stretta, 48 colonne invece di 16
   const STEP_HOURS = [1, 4, 7, 10, 13, 16, 19, 22];
+  const STEP_KEY = 'metek.luogo.passo';
   const GEO_URL = 'https://geocoding-api.open-meteo.com/v1/search';
   const FC_URL = 'https://api.open-meteo.com/v1/forecast';
   const RECENT_KEY = 'metek.luoghi.recenti';
@@ -22,6 +24,8 @@
   let ringMarker = null;
   let els = {};
   let hits = [], active = 0, searchSeq = 0, debounce = null;
+  let step = 3;             // passo della scheda: 3 o 1 ora (scelta ricordata)
+  try { if (localStorage.getItem(STEP_KEY) === '1') step = 1; } catch {}
 
   // ── Utilità ────────────────────────────────────────────────────────────────
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -128,13 +132,16 @@
   .ml-place b { display: block; font-size: 17px; line-height: 22px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ml-place span { display: block; font-size: 11px; line-height: 14px; color: var(--ml-text-3); }
   .ml-close { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--ml-border); background: transparent; color: var(--ml-text-2); font: inherit; font-size: 18px; cursor: pointer; }
+  .ml-step { flex: 0 0 auto; display: flex; gap: 2px; padding: 2px; border-radius: 999px; border: 1px solid var(--ml-border); align-self: center; }
+  .ml-step button { border: 0; background: transparent; color: var(--ml-text-2); font: inherit; font-size: 12px; font-weight: 600; min-width: 38px; height: 28px; border-radius: 999px; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .ml-step button[aria-pressed="true"] { background: var(--ml-accent); color: #fff; }
   .ml-body { display: flex; overflow: hidden; }
   .ml-gutter { flex: 0 0 40px; border-right: 1px solid var(--ml-border-soft); }
   .ml-gutter div { display: flex; align-items: center; justify-content: flex-end; padding-right: 5px; font-size: 9.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--ml-text-3); }
   .ml-scroll { overflow-x: auto; flex: 1; -webkit-overflow-scrolling: touch; }
   .ml-grid { position: relative; }
   .ml-row { display: flex; }
-  .ml-cell { flex: 0 0 ${COL}px; width: ${COL}px; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; position: relative; }
+  .ml-cell { flex: 0 0 var(--ml-col, ${COL3}px); width: var(--ml-col, ${COL3}px); display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; position: relative; }
   .ml-cell.night { background: var(--ml-night); }
   .ml-cell.dstart { border-left: 1px solid var(--ml-border); }
   .ml-days .ml-seg { box-sizing: border-box; display: flex; align-items: center; padding: 0 10px; height: 32px; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; }
@@ -320,11 +327,13 @@
     if (ringMarker) { ctx.map.removeLayer(ringMarker); ringMarker = null; }
   }
 
-  function headHTML(p, now) {
+  function headHTML(p, now, withStep) {
     const sub = p.station ? 'stazione della rete' : (p.sub || `${p.lat.toFixed(3)}° N, ${p.lon.toFixed(3)}° E`);
     return `<div class="ml-grab"></div><div class="ml-top">` +
       (now != null ? `<div class="ml-now">${Math.round(now)}°<small>adesso</small></div>` : '') +
       `<div class="ml-place"><b>${esc(p.name)}</b><span>${esc(sub)}</span></div>` +
+      (withStep ? `<div class="ml-step" role="group" aria-label="Passo orario">` +
+        [3, 1].map(v => `<button type="button" data-step="${v}" aria-pressed="${v === step}">${v} h</button>`).join('') + `</div>` : '') +
       `<button class="ml-close" type="button" aria-label="Chiudi la scheda">×</button></div>`;
   }
 
@@ -347,14 +356,29 @@
     const nwp = await fetchNWP(p.lat, p.lon);
     if (sheet._token !== token) return;
 
-    const cols = columns(series, nwp);
-    sheet.innerHTML = headHTML(p, now) +
+    sheet.innerHTML = headHTML(p, now, true) +
       `<div class="ml-body"><div class="ml-gutter"></div><div class="ml-scroll"><div class="ml-grid"></div></div></div>` +
-      `<div class="ml-foot">Temperatura, percepita e vento medio: modello M2, stazioni della rete. ` +
-      (nwp ? `Cielo, pioggia (mm nelle 3 ore) e raffiche: ICON-2I via Open-Meteo.` : `Cielo, pioggia e raffiche non disponibili (Open-Meteo non risponde).`) +
-      `</div>`;
+      `<div class="ml-foot"></div>`;
     sheet.querySelector('.ml-close').addEventListener('click', closeSheet);
-    renderGrid(sheet.querySelector('.ml-grid'), sheet.querySelector('.ml-gutter'), cols, !!nwp);
+    const draw = () => {
+      sheet.querySelectorAll('.ml-step button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.step === step)));
+      const grid = sheet.querySelector('.ml-grid'), gutter = sheet.querySelector('.ml-gutter');
+      grid.innerHTML = ''; gutter.innerHTML = '';
+      sheet.querySelector('.ml-scroll').scrollLeft = 0;
+      renderGrid(grid, gutter, columns(series, nwp, step), !!nwp, step === 3 ? COL3 : COL1);
+      sheet.querySelector('.ml-foot').textContent =
+        'Temperatura, percepita e vento medio: modello M2, stazioni della rete. ' +
+        (nwp ? `Cielo, pioggia (mm ${step === 3 ? 'nelle 3 ore' : "nell'ora"}) e raffiche: ICON-2I via Open-Meteo.`
+             : 'Cielo, pioggia e raffiche non disponibili (Open-Meteo non risponde).');
+    };
+    sheet.querySelector('.ml-step').addEventListener('click', e => {
+      const b = e.target.closest('button[data-step]');
+      if (!b || +b.dataset.step === step) return;
+      step = +b.dataset.step;
+      try { localStorage.setItem(STEP_KEY, String(step)); } catch {}
+      draw();
+    });
+    draw();
   }
 
   // Cielo, pioggia e raffiche ora per ora da ICON-2I; se mancano ore, si riprova col modello di default
@@ -380,20 +404,21 @@
     return icon;
   }
 
-  // 16 colonne: le ore 1, 4, 7 … 22 (ora italiana) delle 48 ore. Ogni colonna vale per le 3 ore che apre.
-  function columns(series, nwp) {
+  // Passo 3 h: 16 colonne, le ore 1, 4, 7 … 22 (ora italiana); ogni colonna vale per le 3 ore che apre.
+  // Passo 1 h: tutte le 48 ore, ogni colonna vale per la sua ora.
+  function columns(series, nwp, n = 3) {
     const out = [];
     for (const s of series) {
       const ms = Date.parse(s.time);
       const rp = romeParts(ms);
-      if (!STEP_HOURS.includes(rp.hour)) continue;
+      if (n === 3 && !STEP_HOURS.includes(rp.hour)) continue;
       const c = { ms, hour: rp.hour, day: rp.day, t: s.t, a: s.a, ws: s.ws, wd: s.wd,
                   wc: null, pr: null, gust: null, isDay: rp.hour >= 7 && rp.hour < 17 };
       if (nwp) {
         const h0 = nwp.get(ms);
         if (h0 && h0.day != null) c.isDay = h0.day === 1;
         let pr = 0, prN = 0, gust = null, wc = null;
-        for (let k = 0; k < 3; k++) {
+        for (let k = 0; k < n; k++) {
           const cur = nwp.get(ms + k * 3.6e6);          // cielo e raffica: ore h, h+1, h+2
           const nxt = nwp.get(ms + (k + 1) * 3.6e6);    // pioggia: accumulata nell'ora precedente
           if (cur?.wc != null) wc = wc == null ? cur.wc : Math.max(wc, cur.wc);
@@ -407,8 +432,9 @@
     return out;
   }
 
-  function renderGrid(grid, gutter, cols, hasNWP) {
+  function renderGrid(grid, gutter, cols, hasNWP, COL) {
     const N = cols.length;
+    grid.style.setProperty('--ml-col', COL + 'px');
     grid.style.width = (N * COL) + 'px';
 
     const days = document.createElement('div');
