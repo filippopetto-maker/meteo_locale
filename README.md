@@ -1052,14 +1052,18 @@ meteo_locale/
 ├── README.md
 ├── requirements.txt
 │
-├── .github/
-│   └── workflows/
-│       ├── inference.yml            # previsioni, cron-job.org + schedule: interno di riserva ✅ ATTIVO
-│       ├── ingestion.yml            # osservazioni live, cron-job.org + schedule: interno di riserva ✅ ATTIVO
-│       ├── export.yml               # export griglie mappa, trigger esterno ✅ ATTIVO
-│       ├── export-dashboard.yml     # export dashboard_data.json, trigger esterno 8:00/20:00 ✅ ATTIVO
-│       ├── bias-table.yml           # bias_table IFS − Netatmo, cron-job.org 05:00 UTC ✅ ATTIVO (ombra)
-│       └── shadow-m2.yml            # prova in ombra 1–48 h, cron-job.org 09:15/21:15 UTC ✅ ATTIVO (ombra)
+├── .github/workflows/
+│   ├── produce-m2.yml           # M2 in produzione: +1h in forecasts, 1–48 h in forecasts_48h; cron-job.org ogni ora al minuto 0 ✅ ATTIVO
+│   ├── inference.yml            # modello v1, solo manuale (ritorno indietro)
+│   ├── ingestion.yml            # osservazioni live, cron-job.org + schedule: interno di riserva ✅ ATTIVO
+│   ├── export.yml               # latest.json, wind_grid.json, forecast_48h.json, ogni ora ✅ ATTIVO
+│   ├── export-dashboard.yml     # dashboard_data.json, 8:00/20:00 ✅ ATTIVO
+│   ├── publish.yml              # riutilizzabile: costruisce il sito e lo pubblica su Pages come artifact
+│   ├── publish-site.yml         # ripubblica il sito quando cambia l'HTML/JS in docs/
+│   ├── bias-table.yml           # bias_table, bias_features, bias_features_rh, 03:00 UTC ✅ ATTIVO (ombra)
+│   ├── shadow-m2.yml            # prova in ombra 1–48 h (M2/H1 di riferimento, M2b, H1b), 09:15/21:15 UTC ✅ ATTIVO (ombra)
+│   ├── archivio-corse.yml       # corse vere dei modelli sul Lazio e sull'Italia → release GitHub, ogni 3 h
+│   └── archivio-radar.yml       # radar DPC SRI giornaliero sull'Italia → release GitHub
 │
 ├── db.py                        # Data Access Layer (connessione Supabase) ✅
 ├── qc.py                        # Quality Control 4 livelli ✅
@@ -1067,48 +1071,64 @@ meteo_locale/
 ├── historical.py                # ERA5 + METAR → parquet training ✅
 ├── forecast.py                  # Training LightGBM ✅
 ├── mainMETEO.py                 # Raccolta osservazioni live (METAR + Netatmo) ✅
+├── grid.py                      # Griglia spaziale IDW + ERA5 ✅
 ├── sst.py                       # Sea Surface Temperature (Open-Meteo Marine API), blend costiero asimmetrico 25 km ✅
 │
 ├── model/
-│   ├── correttore.py            # RF correttore residui ✅
-│   ├── inference.py             # Inference operativa ✅
-│   ├── m2.py                    # Feature e previsione di M2 (condivise da esperimenti e ombra) ✅
-│   ├── shadow_m2.py             # Job della prova in ombra → forecasts_shadow ✅
-│   ├── m2/                      # M2 congelato: lgbm_m2_temperature.txt.gz + meta.json ✅
-│   ├── lgbm_temperature.txt     # Modello LightGBM temperatura ✅
-│   ├── lgbm_wind_speed.txt      # Modello LightGBM vento ✅
-│   ├── lgbm_wind_direction.txt  # Modello LightGBM direzione ✅
-│   ├── lgbm_humidity.txt        # Modello LightGBM umidità ✅
-│   ├── rf_correttore_temperature.pkl     # RF correttore temperatura ✅
-│   ├── rf_correttore_wind_direction.pkl  # RF correttore direzione ✅
+│   ├── produce_m2.py            # M2 in produzione → forecasts (+1h), forecasts_48h, forecasts_verifica ✅
+│   ├── m2.py                    # Feature e classi dei modelli M2: M2, M2Humidity, M2HumidityB, M2Wind, M2Wind10 ✅
+│   ├── m2b.py                   # M2b (temperatura, candidato) ✅
+│   ├── shadow_m2.py             # prova in ombra → forecasts_shadow e forecasts_shadow_m2hb ✅
+│   ├── shadow_m2b.py            # prova in ombra di M2b → forecasts_shadow_m2b ✅
+│   ├── m2/  m2b/  m2_hum/  m2hb/  m2_wind/  m2_wind10/   # modelli M2 congelati (.txt.gz + meta.json) ✅
+│   ├── inference.py             # Inference del modello v1 (solo manuale dal 31/10/2026) ✅
+│   ├── correttore.py            # RF correttore residui (v1) ✅
+│   ├── lgbm_temperature.txt  lgbm_wind_speed.txt  lgbm_wind_direction.txt  lgbm_humidity.txt   # modelli LightGBM v1 ✅
+│   ├── rf_correttore_temperature.pkl  rf_correttore_wind_direction.pkl                          # RF correttori v1 ✅
 │   └── feature_importance_*.json        # Gain per feature (tutti i target)
 │
 ├── data/
 │   ├── training.parquet         # Dataset storico (NON nel repo — .gitignore)
-│   └── netatmo_hourly_target.parquet  # Target Netatmo orario 2024→ (NON nel repo)
+│   ├── netatmo_hourly_target.parquet       # Target Netatmo orario 2024→ (NON nel repo)
+│   ├── netatmo_wind_hourly_target.parquet  # Target vento Netatmo orario (NON nel repo)
+│   ├── arsial_bias_table.json   # bias ARSIAL del modello v1
+│   └── sst_cache.json           # cache SST
 │
 ├── output/
 │   └── dashboard.py             # Streamlit dashboard read-only ✅
 │
 ├── scripts/
-│   ├── export_static.py         # export griglie + dashboard (flag --dashboard-only) ✅
-│   ├── update_bias_table.py     # bias_table giornaliera (prova in ombra) ✅
+│   ├── export_static.py         # export griglie, +1h, forecast_48h.json e dashboard (flag --dashboard-only) ✅
+│   ├── export_forecast_48h.py   # forecasts_48h → forecast_48h.json (usato da export_static.py) ✅
+│   ├── update_bias_table.py     # bias_table (temperatura, umidità, vento) ✅
+│   ├── update_bias_features.py  # bias_features (M2b) ✅
+│   ├── update_bias_features_rh.py  # bias_features_rh (H1b) ✅
 │   ├── netatmo_backfill.py      # storico orario del target Netatmo (discover/select/download/build/validate) ✅
-│   ├── train_m2.py              # addestra e congela M2 in model/m2/ ✅
+│   ├── netatmo_wind_backfill.py # storico orario del vento (moduli anemometro Netatmo) ✅
+│   ├── qc_wind_modules.py       # controllo qualità dei moduli anemometro ✅
+│   ├── validate_wind_live.py    # il target vento storico coincide col vento dal vivo? ✅
+│   ├── train_m2.py  train_m2b.py  train_m2_hum.py  train_m2hb.py  train_m2_wind.py  train_m2_wind10.py  # addestrano e congelano i modelli ✅
+│   ├── eval_wind10_shadow.py    # valutazione del vento a 10 m contro i METAR ✅
 │   ├── backtest_ifs_lead.py     # backtest multi-lead su run IFS archiviati ✅
-│   └── experiment_*.py          # esperimenti: bias staz×ora, retraining M1/M2, multi-lead ✅
+│   ├── experiment_*.py          # esperimenti: bias staz×ora, retraining M1/M2, bias freddo e M2b, umidità, vento ✅
+│   ├── archivio_corse.py        # archivio delle corse vere dei modelli ✅
+│   └── archivio_radar.py        # archivio giornaliero del radar DPC ✅
 │
 ├── logs/                        # output di backtest, backfill ed esperimenti, cache Open-Meteo (NON nel repo)
 │
-└── docs/                        # GitHub Pages (sito statico)
+└── docs/                        # GitHub Pages (sito statico, PWA)
     ├── index.html               # Mappa Leaflet full-screen ✅
-    ├── dashboard.html           # Dashboard Chart.js (forecast vs observed, MAE) ✅
+    ├── dashboard.html           # Dashboard Chart.js (previsto vs osservato, MAE, errore per anticipo) ✅
+    ├── manifest.json  sw.js     # PWA e service worker (CACHE_VERSION da incrementare a ogni modifica di HTML/JS) ✅
     ├── js/
-    │   └── app.js               # Logica mappa, popup, legenda ✅
-    └── data/
-        ├── latest.json          # Stazioni + griglie T/H (aggiornato ogni 30 min)
+    │   ├── app.js               # Logica mappa, timeline +1…+48 h, popup, legenda ✅
+    │   ├── luogo.js             # Ricerca di un luogo e scheda 48 h ✅
+    │   └── radar.js             # Layer radar con timeline ✅
+    └── data/                    # generati dall'export e pubblicati come artifact, non committati
+        ├── latest.json          # Stazioni + griglie T/H (+1h, ogni ora)
         ├── wind_grid.json       # Griglia vento U/V per leaflet-velocity
-        └── dashboard_data.json  # Serie storiche 7 gg + MAE (aggiornato 2×/giorno)
+        ├── forecast_48h.json    # Previsioni M2 1–48 h per stazione (timeline della mappa e scheda del luogo)
+        └── dashboard_data.json  # Serie storiche 7 gg, MAE, errore per anticipo (aggiornato 2×/giorno)
 ```
 
 **Nota path:** `correttore.py` e `inference.py` vivono in `model/` con un `sys.path` hack per trovare `forecast.py` e `db.py` nella root. Eseguire sempre dalla root del progetto: `cd ~/Desktop/meteo_locale`.
@@ -1150,25 +1170,54 @@ meteo_locale/
 
 Traccia ogni flag con: check_type, field_name, original_value, reason.
 
-### `forecasts` — previsioni generate
+### `forecasts` — previsioni pubblicate (+1h)
 
-Una riga per `(station_id, valid_for, lead_hours)` (più il vincolo ponte `(station_id, valid_for)`,
-vedi Fase 4a). Colonne: `forecast_at`, `valid_for`, `lead_hours`, `temperature`, `humidity`,
-`wind_speed`, `wind_direction`, `model_version`, `corrected`, `nwp_temperature`, `nwp_humidity`,
-`nwp_run_at` (NWP grezzo a `valid_for`), `temperature_bc` / `bc_bias` (create per l'opzione E,
-oggi vuote).
+Una riga per `(station_id, valid_for, lead_hours)` (più il vincolo ponte `(station_id, valid_for)`, che tiene fuori ogni
+lead > 1: vedi Fase 4a). Contiene solo lead 1, scritto da `model/produce_m2.py` dal 31/10/2026 (prima da
+`inference.py`). Colonne: `forecast_at`, `valid_for`, `lead_hours`, `temperature`, `humidity`, `wind_speed`,
+`wind_direction`, `model_version`, `corrected`, `nwp_temperature`, `nwp_humidity`, `nwp_run_at` (NWP grezzo a
+`valid_for`), `temperature_bc` / `bc_bias` (create per l'opzione E, vuote).
+
+### `forecasts_48h` — ultima emissione 1–48 h
+
+PK `(station_id, valid_for)`. `lead_hours`, `issue_at`, `nwp_run_at`, `temperature`, `humidity`, `wind_speed`,
+`wind_direction`, `temp_source` / `hum_source` / `wind_source` (da dove viene ogni valore: `m2`, `e`, `v1`, `m2h`,
+`m2w10`, `ifs`), `model_tag`, `updated_at`. `produce_m2.py` cancella le righe delle emissioni precedenti e riscrive
+(1.536 righe fisse). Da qui `export_static.py` ricava la +1h, la griglia del vento e `forecast_48h.json`.
+
+### `forecasts_verifica` — archivio per la verifica
+
+PK `(station_id, issue_at, lead_hours)`. Copia delle emissioni delle 09 e 21 UTC di `produce_m2.py` (`valid_for`,
+`temperature`, `humidity`, `wind_speed`, `wind_direction`, le tre fonti, `model_tag`) con l'IFS grezzo accanto
+(`t_ifs`, `h_ifs`, `w_ifs`); tenuta 10 giorni (~7 MB). Alimenta l'errore per anticipo della dashboard.
 
 ### `bias_table` — bias IFS − Netatmo per stazione × ora UTC
 
-PK `(station_id, hour_utc)`. `bias` = media dei valori giornalieri sui 30 giorni precedenti
-(NULL sotto 10 giorni), `station_bias` = ripiego per l'opzione E, `n_samples`, `n_station`,
-`window_days`, `window_end`, `nwp_model`, `computed_at`. Riscritta ogni giorno da
-`scripts/update_bias_table.py`.
+PK `(station_id, hour_utc)`. Temperatura: `bias` = media dei valori giornalieri sui 30 giorni precedenti (NULL sotto 10
+giorni), `station_bias` = ripiego per l'opzione E, `n_samples`, `n_station`. Umidità: `bias_rh`, `station_bias_rh`,
+`n_samples_rh` (punti %). Vento: `bias_ws`, `station_bias_ws`, `n_samples_ws` (scala `log1p`, non km/h). Più
+`window_days`, `window_end`, `nwp_model`, `computed_at`. Riscritta ogni giorno da `scripts/update_bias_table.py`.
 
-### `forecasts_shadow` — prova in ombra
+### `bias_features` e `bias_features_rh` — riassunti del bias per M2b e H1b
 
-PK `(station_id, issue_at, lead_hours)`; `valid_for`, `nwp_run_at`, `t_ifs`, `t_e`, `t_v1`,
-`t_m2`, `bias`, `model_tag`. Scritta da `model/shadow_m2.py`, mai letta dalla mappa.
+PK `(station_id, hour_utc)`. `bias_st_hour` (o `bias_rh_hour`), `bias_h7`, `bias_h90`, `bias_all30`, `bias_d1`, `bias_d3`
+(7 e 90 giorni per ora, media su tutte le ore a 30 giorni, ultimo giorno, ultimi 3 giorni), `window_end`,
+`computed_at`. Riscritte ogni giorno da `update_bias_features.py` e `update_bias_features_rh.py`.
+
+### Prova in ombra: `forecasts_shadow`, `forecasts_shadow_m2b`, `forecasts_shadow_m2hb`
+
+PK `(station_id, issue_at, lead_hours)` in tutte e tre; mai lette dalla mappa.
+- `forecasts_shadow` (scritta da `shadow_m2.py`): `valid_for`, `nwp_run_at`; temperatura `t_ifs`, `t_e`, `t_v1`, `t_m2`,
+  `bias`, `model_tag`; umidità `h_ifs`, `h_e`, `h_v1`, `h_m2`, `bias_rh`, `model_tag_h`; vento `w_ifs`, `w_e`, `w_v1`,
+  `w_m2`, `bias_ws`, `model_tag_w` (le colonne `w_*` non sono più scritte dal 31/10)
+- `forecasts_shadow_m2b` (da `shadow_m2b.py`): `t_ifs`, `t_m2b`, `t_m2c` (con la correzione sul proprio errore),
+  `self_bias`, `model_tag`; funzione SQL `m2b_self_bias(p_end, p_days)` per la correzione
+- `forecasts_shadow_m2hb` (da `shadow_m2.py`): `h_ifs`, `h_m2hb`, `bias_lag`, `model_tag`
+- `forecasts_shadow_wind10`: vento a 10 m contro i METAR (`point_id`, `kind`, `w_*`, `d_*`); vuota dal 31/10
+
+### `netatmo_hourly_history` — storico del target prima delle osservazioni live
+
+PK `(station_id, recorded_at)`: `temperature`, `humidity`, `n_devices`. 14/03/2024 → 07/06/2026, 574.764 righe.
 
 ### `model_metrics` — performance nel tempo
 
@@ -1178,7 +1227,9 @@ Storico MAE/RMSE per ogni target, n_samples, periodo, `trained_at`, `model_versi
 
 - `latest_observations` — ultima rilevazione valida per stazione
 - `forecast_vs_observed` — confronto automatico previsione vs reale con MAE (LATERAL JOIN, tolleranza 3600s)
-- `shadow_vs_observed` — `forecasts_shadow` + osservazione Netatmo (QC < 2) più vicina entro ±15 min, con `err_ifs`, `err_e`, `err_v1`, `err_m2` (`security_invoker`)
+- `shadow_vs_observed` — `forecasts_shadow` + osservazione Netatmo (QC < 2) più vicina entro ±15 min: `t_obs` con `err_ifs`,
+  `err_e`, `err_v1`, `err_m2`; `h_obs` con `err_h_*`; `w_obs` con `err_w_*` (`security_invoker`). M2b e H1b si
+  confrontano con un join su `(station_id, issue_at, lead_hours)`
 
 Tutte le tabelle hanno RLS attiva e nessun accesso `anon`/`authenticated`: il sito statico non legge Supabase, legge i JSON in `docs/data/`.
 
@@ -1273,6 +1324,9 @@ Modulo unico di connessione, importato da tutti gli script. Espone:
 - `insert_forecast(...)` — salva una previsione
 - `insert_model_metrics(...)` — salva le performance del modello
 - `get_netatmo_observations(...)`, `upsert_bias_table(...)`, `get_bias_table()`, `upsert_forecasts_shadow(...)` — prova in ombra
+- `upsert_forecasts_48h(...)`, `get_forecasts_48h()`, `delete_forecasts_48h_issued_before(...)`, `upsert_forecasts_verifica(...)`,
+  `delete_forecasts_verifica_issued_before(...)` — produzione M2
+- `upsert_bias_features(...)`, `get_bias_features()`, `get_m2b_self_bias(...)`, `upsert_forecasts_shadow_m2b(...)` — M2b
 - `health_check()` — verifica connessione
 
 **Principio:** se Supabase cambia, si modifica solo `db.py` — gli altri script restano intatti.
@@ -1351,37 +1405,48 @@ Secondo stadio: impara gli errori sistematici di LightGBM per microzona.
   `nwp_temperature`/`nwp_humidity`. Multi-lead disponibile (`--leads`, `--max-lead`,
   `--json-out`); su DB oltre lead 1 solo con `--allow-multi-lead`
 - Supporta `--dry-run` per test senza scrittura DB
-- Eseguito automaticamente ogni 30 min da GitHub Actions (`--horizon 1`)
+- Dal 31/10/2026 è solo manuale (`inference.yml`): la +1h la scrive `produce_m2.py`; resta come ritorno indietro
 
-### `model/m2.py` e `model/shadow_m2.py` — M2 e prova in ombra ✅
 
-- `m2.py`: `build_m2_frame()` costruisce le feature di M2 (le stesse di produzione + stazione,
-  IFS a `valid_for`, bias staz×ora); la classe `M2` carica `model/m2/` e prevede IFS + residuo.
-  Usato sia dagli script di esperimento sia dal job in ombra: training e produzione condividono
-  lo stesso codice
-- `shadow_m2.py`: un'emissione per run, 31 stazioni × lead 1–48, quattro varianti (`t_ifs`, `t_e`,
-  `t_v1`, `t_m2`) → `forecasts_shadow`. Non scrive su `forecasts`, non chiama Netatmo.
-  `--dry-run`, `--max-lead`, `--json-out`
+### `model/produce_m2.py`, `model/m2.py`, `model/shadow_m2.py`, `model/m2b.py` — M2 ✅
 
-### `scripts/netatmo_backfill.py` — Storico del target Netatmo ✅
+- `m2.py`: `build_m2_frame()` costruisce le feature (quelle di produzione + stazione, IFS a `valid_for`, bias); le classi
+  `M2` (temperatura), `M2Humidity` (H1), `M2HumidityB` (H1b), `M2Wind` (vento "riparato") e `M2Wind10` (vento a 10 m,
+  velocità e direzione) caricano i modelli congelati in `model/m2*/`. Training, ombra e produzione condividono lo stesso
+  codice
+- `produce_m2.py`: M2 in produzione. Una emissione per esecuzione (ogni ora): IFS per le stazioni, temperatura M2, umidità H1,
+  vento a 10 m, con ripiego e fonte registrata per ogni valore; scrive la +1h in `forecasts` (`--write-lead1`), le 48 ore in
+  `forecasts_48h` e le emissioni delle 09 e 21 UTC in `forecasts_verifica`. `--dry-run`, `--max-lead`, `--json-out`
+- `shadow_m2.py`: prova in ombra, un'emissione per run: `t_ifs`, `t_e`, `t_v1`, `t_m2` e le colonne di umidità →
+  `forecasts_shadow`, più H1b → `forecasts_shadow_m2hb`. Non scrive su `forecasts`, non chiama Netatmo
+- `m2b.py` e `shadow_m2b.py`: M2b (senza stagionali, sei riassunti di bias, `bias_lag`) e la sua prova in ombra con la
+  correzione sul proprio errore → `forecasts_shadow_m2b`
 
-Ricostruisce la mediana oraria Netatmo per stazione con gli stessi device della produzione:
-`discover` → `download` (paginato, riprende da dove era) → `select` → `build` → `validate`.
-Limite Netatmo ~500 chiamate/ora (`--pause 7.5`). Un solo processo alla volta: ogni refresh del
-token Netatmo invalida quello precedente.
+### `scripts/netatmo_backfill.py`, `scripts/netatmo_wind_backfill.py` — Storico del target Netatmo ✅
 
-### `scripts/update_bias_table.py`, `scripts/train_m2.py` ✅
+`netatmo_backfill.py` ricostruisce la mediana oraria Netatmo (temperatura, umidità) per stazione con gli stessi device
+della produzione: `discover` → `download` (paginato, riprende da dove era) → `select` → `build` → `validate`.
+`netatmo_wind_backfill.py` fa lo stesso per i moduli anemometro (`discover`, `select`, `download`, `build`), con
+`qc_wind_modules.py` e `validate_wind_live.py` per il controllo qualità. Limite Netatmo ~500 chiamate/ora
+(`--pause 7.5`). Un solo processo alla volta: ogni refresh del token Netatmo invalida quello precedente.
 
-- `update_bias_table.py`: bias IFS − Netatmo per stazione × ora sui 30 giorni precedenti, dalle
-  osservazioni live e dalla Historical Forecast API; `--dry-run`, `--window-end` per ricalcolare
-  una data passata
-- `train_m2.py`: addestra M2 su tutto lo storico con iterazioni fisse e lo congela in `model/m2/`
+### Bias, training e archivi ✅
+
+- `update_bias_table.py`: bias IFS − Netatmo per stazione × ora sui 30 giorni precedenti, dalle osservazioni live e dalla
+  Historical Forecast API; `--dry-run`, `--window-end`. `update_bias_features.py` e `update_bias_features_rh.py`: i
+  riassunti di bias di M2b e H1b
+- `train_m2.py`, `train_m2b.py`, `train_m2_hum.py`, `train_m2hb.py`, `train_m2_wind.py`, `train_m2_wind10.py`: addestrano
+  su tutto lo storico con iterazioni fisse e congelano il modello in `model/m2*/`
+- `archivio_corse.py` e `archivio_radar.py`: archiviano le corse vere dei modelli e il radar DPC giornaliero nelle release
+  GitHub (materiale per il riaddestramento)
 
 ### Script di valutazione ✅
 
-`backtest_ifs_lead.py` (backtest multi-lead su run IFS archiviati, cache in `logs/backtest/`),
-`experiment_bias_hour.py` (varianti A–F del MOS minimo), `experiment_retrain_netatmo.py`
-(M1/M2 a lead 1), `experiment_retrain_multilead.py` (M1/M2 da lead 1 a 48, `--bias-source`).
+`backtest_ifs_lead.py` (backtest multi-lead su run IFS archiviati, cache in `logs/backtest/`), `experiment_bias_hour.py`
+(varianti A–F del MOS minimo), `experiment_retrain_netatmo.py` e `experiment_retrain_multilead.py` (M1/M2 a lead 1 e da 1
+a 48), `experiment_m2_refresh.py`, `experiment_m2_bias.py`, `experiment_m2b_lag.py`, `experiment_m2b_stack.py` (bias freddo
+e M2b), `experiment_m2_humidity*.py` e `experiment_m2hb_lag.py` (umidità), `experiment_m2_wind*.py` (vento),
+`eval_wind10_shadow.py`.
 
 ### `mainMETEO.py` — Raccolta osservazioni live ✅
 
@@ -1418,13 +1483,14 @@ Fetch Sea Surface Temperature da Open-Meteo Marine API (`marine-api.open-meteo.c
 
 Eseguito ogni ora da `export.yml`; il ramo `--dashboard-only` è eseguito separatamente 2×/giorno (8:00, 20:00) da `export-dashboard.yml`. Pipeline principale:
 
-1. Legge stazioni attive, forecast recenti e osservazioni da Supabase
+1. Legge stazioni attive, osservazioni e l'ultima emissione di `forecasts_48h` (una sola lettura: +1h, griglia vento e
+   `forecast_48h.json` sono sempre della stessa emissione; se è vecchia ripiega su `forecasts`)
 2. Fetch ERA5 batch: griglia coarse 17×27 + stazioni attive, 3 variabili (`temperature_2m`, `relativehumidity_2m`, `windspeed_10m`) in un unico request
 3. Calcola correzioni stazione: `T_modello_i − T_ERA5_i`
 4. ERA5 coarse → bilinear → griglia fine 100×100
 5. IDW correzioni 100×100
 6. Griglia finale = ERA5_fine + IDW_correzioni (con `np.clip([0,100])` per umidità)
-7. Scrive `docs/data/latest.json` (stazioni + temp_grid + humidity_grid) e `docs/data/wind_grid.json` (formato nativo leaflet-velocity, componenti U/V)
+7. Scrive `docs/data/latest.json` (stazioni + temp_grid + humidity_grid), `docs/data/wind_grid.json` (formato nativo leaflet-velocity, componenti U/V) e `docs/data/forecast_48h.json` (timeline +1…+48 h)
 
 **Eseguire manualmente:**
 ```bash
@@ -1439,14 +1505,14 @@ python3 scripts/export_static.py
 ```bash
 python3 scripts/export_static.py --dashboard-only
 ```
-Genera solo `docs/data/dashboard_data.json` (serie storiche 7 giorni + MAE temperatura e umidità) senza le griglie ERA5/IDW. Usato dal workflow dedicato `export-dashboard.yml` per aggiornarsi 2×/giorno (8:00, 20:00).
+Genera solo `docs/data/dashboard_data.json` (serie storiche 7 giorni, MAE temperatura e umidità, errore per anticipo 1–48 h di M2 contro IFS grezzo da `forecasts_verifica`) senza le griglie ERA5/IDW. Usato dal workflow dedicato `export-dashboard.yml` per aggiornarsi 2×/giorno (8:00, 20:00).
 
 ### `docs/dashboard.html` — Dashboard Chart.js ✅
 
 Pagina statica accessibile da `filippopetto-maker.github.io/meteo_locale/dashboard.html`. Link "📊 Dashboard →" nell'`#info-panel` di `index.html`.
 
 **Sezioni:**
-- **Switch Temperatura/Umidità** — aggiorna entrambi i chart in un click
+- **Switch Temperatura/Umidità/Vento** — aggiorna i chart in un click; sezione con l'errore per anticipo 1–48 h
 - **Chart Previsto vs Osservato** (Chart.js line, asse X `time` via `chartjs-adapter-date-fns`): serie 7 giorni per la stazione selezionata; blu = previsto, arancio = osservato; filtra automaticamente i punti null (umidità spesso assente nelle osservazioni storiche)
 - **Chart MAE per stazione** (Chart.js bar orizzontale): verde se MAE < 1.0°C (temperatura) o < 5.0% (umidità), rosso altrimenti; stazioni senza coppie → barra trasparente "(n/d)"; questo chart non cambia al cambio stazione
 
