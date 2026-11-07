@@ -4,7 +4,7 @@ Sistema di previsione meteo su scala comunale che cala lo stato meteorologico re
 
 **Stato:** Phase 1, 2a, 2b completate e in produzione. Phase 2c parzialmente completata (bias correction ARSIAL attiva). Phase 3 — **mappa interattiva live su GitHub Pages** (Leaflet + leaflet-velocity, heatmap temperatura/umidità/vento + particelle/frecce). **Restyling estetico dark theme completato (luglio 2026)**: basemap CartoDB Dark Matter, pannello controlli unificato con segmented control e switch stile iOS, popup e legenda ristilizzati mantenendo invariata la logica di calcolo dati. GitHub Actions attivo, inference e ingestion automatica ogni 30 minuti. **32 stazioni attive** su tutto il Lazio (6 Roma metro + 26 espansione Lazio) con copertura Netatmo live e correzione bias ARSIAL data-driven. Mappa con **correzione SST reale sul mare** (Open-Meteo Marine API, blend graduale asimmetrico) e **toggle T / T+1h** (Adesso / +1h). **Dashboard Chart.js live** (`dashboard.html`) con forecast vs observed 7 giorni per stazione, MAE per stazione, errore per anticipo 1–48 h (M2 contro IFS grezzo), switch Temperatura/Umidità/Vento.
 
-**Modello (settembre 2026):** il backtest su tre mesi di run ECMWF archiviati mostra che il modello di produzione peggiora l'IFS grezzo contro il target Netatmo (MAE 2,68 contro 2,13 °C su 1–48 h). Un modello riaddestrato sullo storico Netatmo ricostruito — **M2**: IFS + residuo LightGBM — scende a 0,97 °C nel backtest e a 0,88 °C nella prima fase della prova in ombra (25/09 → 21/10/2026, senza effetti sulla mappa); dal 22/10 la seconda fase prova M2b (corregge il bias freddo), M2 umidità e M2 vento (vedi Fase 4a).
+**Modello (settembre 2026):** il backtest su tre mesi di run ECMWF archiviati mostra che il modello di produzione peggiora l'IFS grezzo contro il target Netatmo (MAE 2,68 contro 2,13 °C su 1–48 h). Un modello riaddestrato sullo storico Netatmo ricostruito — **M2**: IFS + residuo LightGBM — scende a 0,97 °C nel backtest e a 0,88 °C nella prova in ombra (25/09 → 21/10/2026); **dal 31/10/2026 M2 è in produzione** per temperatura, umidità e vento, a +1h e fino a +48h (vedi Fase 4a).
 
 ---
 
@@ -343,7 +343,7 @@ Task concreti sulla mappa/UI, più vicini nel tempo e più piccoli in scope risp
 
 Tre obiettivi strategici di lungo periodo, non indipendenti: l'ordine in cui si affrontano cambia il costo totale. Il principio organizzatore è che il retraining di dicembre 2026 è l'operazione più costosa del progetto e va fatta una volta sola con tutte le novità dentro. Tutto ciò che precede dicembre prepara quel retraining; tutto ciò che segue lo sfrutta.
 
-*Aggiornamento 25/09/2026:* il backtest del 24/09 ha anticipato una parte del lavoro. Un modello riaddestrato sul target Netatmo (M2) è in prova in ombra da settembre; dicembre resta il momento del riaddestramento completo (più dati, autunno incluso, altri target).
+*Aggiornamento 25/09/2026:* il backtest del 24/09 ha anticipato una parte del lavoro. Un modello riaddestrato sul target Netatmo (M2) è in produzione dal 31/10/2026; dicembre resta il momento del riaddestramento completo (più dati, autunno incluso, altri target).
 
 **I tre obiettivi:**
 
@@ -357,7 +357,13 @@ Tre obiettivi strategici di lungo periodo, non indipendenti: l'ordine in cui si 
 
 Corollario operativo immediato: da ora ogni nuovo pezzo di codice nasce già config-driven (niente nuovi valori Roma hardcoded). Così la generalizzazione (Fase 6) diventa una migrazione del codice vecchio, non una riscrittura del nuovo.
 
-### 🟦 Fase 4a — Infrastruttura 48h e modello M2 in ombra (settembre → ottobre 2026)
+### 🟦 Fase 4a — Infrastruttura 48h e M2 in produzione (settembre → novembre 2026)
+
+**Stato al 07/11/2026.** **M2 è in produzione dal 31/10/2026**: temperatura (M2), umidità (H1) e vento a 10 m
+(M2 vento) a +1h e fino a +48h, per 31 stazioni più Sigillo (modello attuale e IFS). La +1h è scritta in
+`forecasts`, le 48 ore in `forecasts_48h`, ogni ora; la mappa ha la timeline +1…+48 h. Il modello
+attuale (v1) è fermo e riattivabile a mano. In ombra restano M2b e H1b, candidati a sostituire M2 e H1
+(vedi *M2 in produzione*). Risultati misurati: *Prova in ombra — risultati*.
 
 **Punto di partenza — verificato sul codice il 22/09/2026.** Le versioni precedenti di
 questa sezione davano per da fare una migrazione già avvenuta. `model/inference.py`
@@ -402,12 +408,11 @@ dichiarato: **battere l'NWP grezzo a ogni lead**, non raggiungere un MAE assolut
    `UNIQUE (station_id, valid_for, lead_hours)`. Colonna esplicita e non `forecast_at`
    nella chiave, perché `lead_hours` è anche la feature di dicembre e il filtro di ogni
    query futura.
-2. **DB = registro di validazione, JSON = prodotto** — principio valido, da applicare con il punto 6 del piano. 32 stazioni × 48 lead = 1.536
-   righe/run; alla cadenza attuale di 30 min sono ~74.000 righe/giorno, ~2,2 M/mese su
-   un free tier da 500 MB. Il prodotto ha bisogno delle 48 ore piene solo nel JSON; il
-   DB solo di ciò che serve a validare. Si persistono i lead {1, 3, 6, 12, 24, 36, 48}
-   su un workflow 48h a cadenza bassa (3-oraria), mentre `inference.yml` resta a T+1h
-   ogni 30 minuti.
+2. **DB = registro di validazione, JSON = prodotto** — ✅ applicato il 31/10/2026. 32 stazioni × 48 lead =
+   1.536 righe/run: scritte ogni ora in `forecasts` sarebbero ~36.000 righe/giorno su un free tier da
+   500 MB. Il prodotto ha bisogno delle 48 ore piene solo nel JSON: stanno in `forecasts_48h` (sovrascritta, 1.536
+   righe fisse) e da lì passano a `forecast_48h.json`; il DB conserva per validare solo il lead 1 in `forecasts`
+   e le emissioni delle 09 e 21 UTC per 10 giorni in `forecasts_verifica`.
 3. **Copertura temporale della fetch** — ✅ applicata il 24/09/2026 (commit `56137d31`). Open-Meteo ancora l'orario a mezzanotte del
    giorno corrente: con `forecast_days=2`, alle 21:00 UTC restano ~27 ore di futuro,
    non 48. Serve `forecast_days=4` con taglio a 48 righe da adesso. `past_days=2` resta
@@ -416,32 +421,27 @@ dichiarato: **battere l'NWP grezzo a ogni lead**, non raggiungere un MAE assolut
    Prima la correzione usava `datetime.now().month`: su una serie di 48h a cavallo di fine mese applica il bias
    del mese sbagliato alle ultime ore.
 
-**Stato del DB (aggiornato al 22/10/2026).** Schema `public` di Supabase dopo la Fase 4a
-(147 MB usati, piano gratuito):
+**Stato del DB (aggiornato al 07/11/2026).** Schema `public` di Supabase dopo la Fase 4a (piano gratuito):
 
-- `forecasts` — dimensione `lead_hours` (migrazione del 23/09, le 76.186 righe esistenti → 1) con
-  `UNIQUE (station_id, valid_for, lead_hours)`; colonne `nwp_temperature`, `nwp_humidity`,
-  `nwp_run_at` (24/09, decisione B). Contiene solo lead 1: il **ponte**
-  `forecasts_station_valid_unique` — `UNIQUE (station_id, valid_for)`, ripristinato il 23/09 — è
-  ancora attivo e fa rifiutare dal DB ogni riga con lead > 1; va rimosso prima di scriverne una
-  (`inference.py` rifiuta comunque, exit 2, senza `--allow-multi-lead`). `temperature_bc` e
-  `bc_bias` restano vuote: l'ombra dell'opzione E vive nel job separato
-- `model_metrics` — allineata al codice di training (23/09): nessuna metrica era mai stata
-  salvata (vedi *Diario degli errori*)
-- **Prova in ombra** (nessuna tabella tocca `forecasts`): `bias_table` (bias IFS − Netatmo per
-  stazione × ora UTC: temperatura, umidità `bias_rh`, vento `bias_ws`), `forecasts_shadow`
-  (colonne `t_*`, `h_*`, `w_*`) con la vista `shadow_vs_observed`, `bias_features` e
-  `forecasts_shadow_m2b` con la funzione `m2b_self_bias` (M2b), `forecasts_shadow_wind10` (vento a
-  10 m contro i METAR)
-- `forecasts_48h` — ultima emissione 1–48 h, una riga per (stazione, `valid_for`) sovrascritta a
-  ogni esecuzione, quindi non cresce: scheletro dati per la mappa, non ancora alimentato da un
-  workflow
-- `forecasts_verifica` — archivio a rotazione delle emissioni delle 09 e 21 UTC (1–48 h, con IFS
-  grezzo), scritto da `produce_m2.py` e tenuto 10 giorni (~7 MB fissi): l'errore per anticipo della
-  dashboard. Finché non copre la finestra di 7 giorni (≈ 11/11/2026) temperatura e umidità vengono
-  da `forecasts_shadow`
-- `netatmo_hourly_history` — storico orario del target Netatmo prima delle osservazioni live
-  (14/03/2024 → 07/06/2026, 574.764 righe)
+- `forecasts` — dimensione `lead_hours` (migrazione del 23/09) con `UNIQUE (station_id, valid_for,
+  lead_hours)`; colonne `nwp_temperature`, `nwp_humidity`, `nwp_run_at` (decisione B). Contiene solo lead 1,
+  scritto da `produce_m2.py` dal 31/10 (prima da `inference.py`). Il **ponte**
+  `forecasts_station_valid_unique` — `UNIQUE (station_id, valid_for)`, ripristinato il 23/09 — è ancora
+  attivo e fa rifiutare dal DB ogni riga con lead > 1: non serve rimuoverlo finché le 48 ore stanno in
+  `forecasts_48h`. `temperature_bc` e `bc_bias` restano vuote
+- `forecasts_48h` — ultima emissione 1–48 h (temperatura, umidità, vento, fonte di ciascun valore), una riga
+  per (stazione, `valid_for`), cancellata e riscritta a ogni esecuzione di `produce_m2.py`: non cresce
+- `forecasts_verifica` — archivio a rotazione delle emissioni delle 09 e 21 UTC (1–48 h, con IFS grezzo),
+  scritto da `produce_m2.py` e tenuto 10 giorni (~7 MB fissi): l'errore per anticipo della dashboard. Finché
+  non copre la finestra di 7 giorni (≈ 11/11/2026) temperatura e umidità vengono da `forecasts_shadow`
+- `model_metrics` — allineata al codice di training (23/09): nessuna metrica era mai stata salvata (vedi
+  *Diario degli errori*)
+- **Prova in ombra** (nessuna tabella tocca `forecasts`): `bias_table` (bias IFS − Netatmo per stazione × ora
+  UTC: temperatura, umidità, vento), `forecasts_shadow` con la vista `shadow_vs_observed` (M2 e H1 come
+  riferimento), `bias_features` e `forecasts_shadow_m2b` con la funzione `m2b_self_bias` (M2b),
+  `bias_features_rh` e `forecasts_shadow_m2hb` (H1b), `forecasts_shadow_wind10` (vuota dal 31/10)
+- `netatmo_hourly_history` — storico orario del target Netatmo prima delle osservazioni live (14/03/2024 →
+  07/06/2026, 574.764 righe)
 
 **Piano operativo Fase 4a:**
 
@@ -450,8 +450,8 @@ dichiarato: **battere l'NWP grezzo a ogni lead**, non raggiungere un MAE assolut
 2. [x] `db.py`: `insert_forecast(lead_hours=1)` con `on_conflict` a tre colonne
    (commit `81f0c832`, 23/09/2026)
    - [ ] resta: versione batch (una chiamata REST per stazione, non 48)
-3. [ ] `DROP CONSTRAINT forecasts_station_valid_unique` (il ponte) — **sospeso**: non serve se
-   `forecasts` resta a lead 1 e le 48 ore stanno in `forecasts_48h`
+3. [ ] `DROP CONSTRAINT forecasts_station_valid_unique` (il ponte) — non serve: `forecasts` resta a lead 1 e
+   le 48 ore stanno in `forecasts_48h`
 4. [x] `model/inference.py` multi-lead (commit `56137d31`, 24/09/2026): `predict_series()` /
    `predict_from_df()` a N righe con riga NWP a V−1h, flag `--horizon` / `--leads` /
    `--max-lead`, `--db-leads`, `--nwp-model`, `--json-out`; `forecast_days=4`; bias ARSIAL sul
@@ -459,20 +459,20 @@ dichiarato: **battere l'NWP grezzo a ogni lead**, non raggiungere un MAE assolut
    centesimo alla versione precedente su 32 stazioni
 5. [x] `scripts/export_static.py`: `.eq("lead_hours", 1)` in `fetch_latest_forecasts()` e
    `fetch_dashboard_series()` — stesso commit del punto 4
-6. [~] `docs/data/forecast_48h.json` — **sospeso (24/09/2026)**: le 48 ore del modello attuale non
-   si pubblicano. Scheletro dati con il modello che esce dalla prova in ombra pronto in locale
-   (22/10/2026, non committato): `model/produce_m2.py` → tabella `forecasts_48h` →
-   `scripts/export_forecast_48h.py`, workflow `produce-m2.yml` solo a richiesta. Resta la
-   pubblicazione in `publish.yml` e la mappa
-7. [ ] Curva MAE per lead in produzione: estendere `forecast_vs_observed` con `lead_hours` e
-   renderla interrogabile per finestre (oggi un `count(*)` sull'intera view va in timeout).
-   Per la prova in ombra la curva c'è già in `shadow_vs_observed`
-9. [x] Prova in ombra, prima fase (M2 temperatura, 25/09 → 21/10): MAE 0,88 °C contro 1,03 di E e
-   2,07 del modello attuale; fallito solo il criterio del bias orario (vedi *Prova in ombra*)
-10. [~] Seconda fase della prova in ombra (dal 22/10): M2b temperatura, M2 umidità, M2 vento
+6. [x] `forecast_48h.json` e `produce-m2.yml` — **in produzione dal 31/10/2026** (commit `6fca00a7` →
+   `deaa6112`): `produce_m2.py` scrive la +1h in `forecasts` al posto di `inference.yml` e le 48 ore in
+   `forecasts_48h`; `export_static.py` legge `forecasts_48h` una volta sola per la +1h, la griglia del vento
+   e `forecast_48h.json`, pubblicato col sito
+7. [x] Curva MAE per lead in produzione: dashboard con errore per anticipo 1–48 h e pulsante Vento
+   (commit `eea9f774`, 01/11/2026), da `forecasts_verifica`; `forecast_vs_observed` non è stata estesa
 8. [x] ~~Verificare su Historical Forecast API variabili e profondità d'archivio~~ —
    risolto il 23/09/2026 con esito diverso dal previsto: vedi *Preparazione al
    retraining*, decisione A
+9. [x] Prova in ombra di M2 (25/09 → 31/10/2026) con M2b, H1, H1b e vento dal 22/10 — risultati in
+   *Prova in ombra — risultati*
+10. [x] Lancio di M2 in produzione (31/10/2026) — vedi *M2 in produzione*
+11. [ ] Decisione su M2b e H1b (in ombra) e fine dell'ombra M2/H1 quando `forecasts_verifica` copre la
+    finestra della dashboard (≈ 11/11)
 
 #### 🎯 Preparazione al retraining
 
@@ -507,9 +507,8 @@ L'ordine conta: la decisione A condiziona R2–R4.
 - **A — Fonte dei dati di training multi-lead. RISOLTA (24/09/2026):** IFS HRES via Open-Meteo;
   Single Runs API per i run archiviati (backtest), Historical Forecast API per la serie cucita a
   lead ≈ 0 (training di M2).
-- **A-bis — Stesso modello NWP in training e in inference.** Parziale: M2 è addestrato su IFS e la
-  prova in ombra lo alimenta con IFS (`models=ecmwf_ifs`); la produzione (`inference.yml`) usa
-  ancora il blend di default di Open-Meteo. Si chiude con il passaggio a M2.
+- **A-bis — Stesso modello NWP in training e in inference. RISOLTA (31/10/2026):** M2 è addestrato su IFS e
+  `produce-m2.yml` lo alimenta con IFS (`models=ecmwf_ifs`).
 - **B — Salvare il valore NWP grezzo in `forecasts`. RISOLTA (24/09/2026):** colonne
   `nwp_temperature` e `nwp_humidity` (commit `56137d31`).
 - **C — Granularità dei lead. RISOLTA:** l'IFS di Open-Meteo è orario, nessuna interpolazione.
@@ -648,49 +647,14 @@ osservazioni live invece che dallo storico, come farà la produzione, non peggio
 della rete Netatmo (sere urbane calde comprese), non la temperatura "vera"; il test 2026 copre
 un'estate e un inizio d'autunno prevalentemente stabili, da qui la prova in ombra.
 
-#### 🌗 Prova in ombra — M2 (25/09 → 21/10/2026) e seconda fase (dal 22/10/2026)
+#### 🌗 Prova in ombra — risultati (25/09 → 06/11/2026)
 
-**Obiettivo.** Verificare sul campo, senza toccare la produzione, che i numeri del backtest reggano.
-Prima fase: M2 temperatura per quasi quattro settimane d'autunno (25/09 → 21/10). Seconda fase, dal 22/10:
-M2b (temperatura, corregge il bias freddo), M2 umidità e M2 vento. Brief di riferimento (locale,
-non committato): `brief_fase4a_m2_shadow.md`.
+M2 è girato in ombra due volte al giorno (09:15 e 21:15 UTC), 31 stazioni × lead 1–48, con lo stesso
+input IFS della produzione e senza toccare la mappa; dal 22/10 anche M2b, M2 umidità (H1, poi H1b) e M2
+vento. Valutazione su `shadow_vs_observed` (emissioni 09Z e 21Z); verità = osservazioni live Netatmo, per il
+vento a 10 m i METAR. MAE in °C salvo diversa indicazione.
 
-**Cosa gira** (UTC, trigger solo da cron-job.org via `workflow_dispatch`):
-
-| Workflow | Quando | Script | Scrive |
-|:--|:--|:--|:--|
-| `bias-table.yml` | ogni giorno 03:00 | `scripts/update_bias_table.py` | `bias_table` — bias IFS − Netatmo per stazione × ora UTC sui 30 giorni precedenti: temperatura, umidità (`bias_rh`), vento (`bias_ws`) |
-| | | `scripts/update_bias_features.py` | `bias_features` — sei riassunti del bias per M2b |
-| `shadow-m2.yml` | ogni giorno 09:15 e 21:15 | `model/shadow_m2.py` | `forecasts_shadow` — 31 stazioni × lead 1–48 per emissione (dal 31/10/2026 solo temperatura e umidità, riferimento per M2b e H1b; `forecasts_shadow_wind10` non più scritta) |
-| | | `model/shadow_m2b.py` | `forecasts_shadow_m2b` (passo con `continue-on-error`: non ferma gli altri) |
-
-Ogni emissione usa lo stesso input IFS (Forecast API, `models=ecmwf_ifs`). Colonne di
-`forecasts_shadow`:
-
-| Colonne | Variante |
-|:--|:--|
-| `t_ifs`, `h_ifs`, `w_ifs` | IFS grezzo a `valid_for` |
-| `t_e`, `h_e`, `w_e` | opzione E: IFS meno il bias mobile (ripiego `station_bias`) |
-| `t_v1`, `h_v1`, `w_v1` | modello attuale; per umidità e vento è l'IFS così com'è, come in produzione |
-| `t_m2` | M2 temperatura congelato (`m2-20260922`) |
-| `h_m2` | M2 umidità H1 (`m2h-20261021`) |
-| `w_m2` | M2 vento (`m2w-20261021`) |
-
-**Garanzie.** Nessuna modifica a `inference.yml`, `model/inference.py`, `forecasts`,
-`export_static.py`, `docs/`; i job ombra non chiamano Netatmo (un refresh del token invaliderebbe
-quello dell'ingestion). Tabelle con RLS attiva, nessun accesso `anon`/`authenticated`. Volume:
-circa 3.000 righe/giorno per M2 e altrettante per M2b.
-
-**Verifiche prima dell'avvio (25/09):** `bias_table` ricalcolata al 20/07 coincide con quella
-dell'esperimento (743 celle, |Δ| max 0,0005 °C); `t_v1` e `t_ifs` a lead 1 identici a
-`inference.py --horizon 1 --nwp-model ecmwf_ifs --dry-run` (31 stazioni, Δ max 0,000); `t_m2`
-ricalcolato a mano su 3 stazioni (Δ ≤ 0,004); righe di `forecasts` invariate.
-
-##### Risultati, prima fase: M2 temperatura (28/09 → 21/10/2026)
-
-62.918 coppie previsione-osservazione, 31 stazioni, 24 giorni, emissioni 09Z e 21Z (escluse quelle
-di prova del 25/09 e del 28/09 alle 07Z; manca la 21Z del 04/10). Verità = osservazioni live
-Netatmo. MAE in °C:
+##### Temperatura — M2 (28/09 → 21/10, 24 giorni, 62.918 coppie)
 
 | Lead (h) | IFS grezzo | E | Modello attuale | **M2** |
 |:--|:--|:--|:--|:--|
@@ -701,151 +665,132 @@ Netatmo. MAE in °C:
 | 37–48 | 2.02 | 1.06 | 2.10 | **0.91** |
 | **1–48** | 1.98 | 1.03 | 2.07 | **0.88** |
 
-- Sulle stesse ore la previsione a +1h della mappa (`forecasts` lead 1) fa 1.85 °C contro 0.86 di M2.
-- Per tipo di tempo (la pioggia è quella stimata da Open-Meteo su cinque punti del Lazio, non
-  osservata):
-
-| Giorni | n. | IFS | E | Modello attuale | **M2** |
-|:--|:--|:--|:--|:--|:--|
-| Calmi | 14 | 1.94 | 0.79 | 2.17 | **0.74** |
-| Perturbati: 6–10/10 e 20–21/10 (fino a 48 mm in un punto) | 7 | 1.79 | 1.36 | 1.66 | **1.04** |
-| Freschi e ventosi, asciutti: 13–15/10 | 3 | 2.60 | 1.24 | 2.63 | **1.15** |
-
-- M2 migliore di E in 26 stazioni su 31 (E in 4: Bracciano, Anagni, Saxa Rubra, Ceccano; una pari).
-  Mai peggiore dell'IFS grezzo; il margine più basso è Fondi (−0,06 °C).
-
-**Criteri fissati prima della prova:**
-
-| Criterio | Risultato | Esito |
-|:--|:--|:--|
-| M2 su 1–48 h ≤ 1,15 °C e sotto E di almeno 0,05 | 0,88, 0,15 sotto E | ✅ |
-| Nessuna stazione con M2 peggiore dell'IFS grezzo di oltre 0,3 | M2 sotto l'IFS in tutte e 31 | ✅ |
-| Nei giorni perturbati M2 non peggiore di E | meglio di E in 7 giorni su 7 | ✅ |
-| Bias medio per ora UTC entro ±0,5 °C | da −0,03 (00 UTC) a −0,64 (19 UTC); oltre −0,5 alle 12, 13, 16, 19, 20 | ❌ |
-
-**Punti deboli.** (1) Errore sistematico freddo: −0,35 °C in media, contro −0,05 di E; cresce con il
-raffreddamento di ottobre (da −0,17 nella prima settimana a −0,69 nella terza) e fa perdere M2 contro E
-nei giorni di transizione (5/10, 16–17/10). (2) **Fondi**: dal 9/10 M2 sbaglia di −2/−3 °C, MAE 1,59
-contro 0,86 sulle altre 30 stazioni. Il problema è nel target: uno dei tre sensori manca a intermittenza dai
-dati pubblici, la differenza tra i sensori scende da ~5 °C a 1–3 °C e la mediana dal vivo risulta
-+0,65 °C rispetto allo storico ricostruito.
+- Sulle stesse ore la +1h della mappa di allora faceva 1.85 °C contro 0.86 di M2.
+- Per tipo di tempo (pioggia stimata da Open-Meteo su cinque punti del Lazio, non osservata): giorni
+  calmi (14) IFS 1.94, E 0.79, M2 **0.74**; perturbati (7, 6–10/10 e 20–21/10) IFS 1.79, E 1.36, M2
+  **1.04**; freschi e ventosi asciutti (3, 13–15/10) IFS 2.60, E 1.24, M2 **1.15**. M2 batte E in tutti e 7 i
+  giorni perturbati e in 26 stazioni su 31; mai peggiore dell'IFS.
+- Criteri fissati prima della prova: MAE ≤ 1,15 e almeno 0,05 sotto E ✅ (0,88, 0,15 sotto); nessuna stazione
+  oltre 0,3 sopra l'IFS ✅; giorni perturbati non peggio di E ✅; bias orario entro ±0,5 ❌ (da −0,03 a
+  −0,64, oltre −0,5 alle 12, 13, 16, 19 e 20 UTC).
+- Punti deboli: errore sistematico freddo di −0,35 °C (E −0,05), cresciuto con il raffreddamento di ottobre;
+  **Fondi** dal 9/10 sbaglia di −2/−3 °C (MAE 1,59 contro 0,86 sulle altre 30): uno dei tre sensori manca a
+  intermittenza dai dati pubblici e la mediana dal vivo risulta +0,65 °C sopra lo storico ricostruito.
 
 ##### Il bias freddo e M2b
 
-Risolto con una serie di test fuori campione (`scripts/experiment_m2_refresh.py`,
-`experiment_m2_bias.py`, `experiment_m2b_lag.py`, `experiment_m2b_stack.py`; tutti sulle righe di
-training di M2, IFS a lead ≈ 0, target = storico orario Netatmo):
+Test fuori campione sulle righe di training di M2 (IFS a lead ≈ 0, target = storico orario Netatmo;
+`experiment_m2_refresh.py`, `experiment_m2_bias.py`, `experiment_m2b_lag.py`, `experiment_m2b_stack.py`).
 
-1. **Quello che non serve.** Riaddestrare con i dati di settembre, pesare i dati recenti o far
-   partire il residuo da E (invece che dall'IFS) lasciano il bias a −0,26/−0,33 °C (01–21/10,
-   15.593 righe: M2 fino al 21/09 0,696 / −0,26; fino al 30/09 0,693 / −0,29; con pesi 0,701 / −0,33;
-   residuo su E 0,697 / −0,28; E 0,903 / +0,14).
-2. **Causa.** L'errore di E in ottobre è negativo ogni anno (−0,20 nel 2024, −0,34 nel 2025, −0,14
-   nel 2026): con solo due autunni in training, `doy_sin`, `doy_cos` e `month` fanno imparare a M2
-   "in autunno E è troppo caldo" e nel 2026 corregge troppo. In più, su un modello fermo da mesi
-   resta un offset di circa −0,3 °C che le feature di bias a 30 giorni non seguono.
-3. **Rimedi** (due finestre: W1 ottobre 2026 con training fino al 21/09; W2 luglio–settembre 2026
-   con training fino a ottobre 2025), bias dei dati fino al giorno prima, MAE / bias in °C:
+- **Non serve:** riaddestrare con i dati di settembre (0,693 / bias −0,29 contro 0,696 / −0,26 di M2 fino al
+  21/09, ottobre 01–21, 15.593 righe), pesare i dati recenti (0,701 / −0,33), far partire il residuo da E
+  (0,697 / −0,28).
+- **Causa:** l'errore di E in ottobre è negativo ogni anno (−0,20 nel 2024, −0,34 nel 2025, −0,14 nel 2026): con
+  due soli autunni, `doy_sin`, `doy_cos` e `month` fanno imparare a M2 "in autunno E è troppo caldo". Su un
+  modello fermo da mesi resta in più un offset di circa −0,3 °C.
+- **Rimedi** (W1 ottobre 2026, training fino al 21/09; W2 luglio–settembre 2026, training fino a ottobre
+  2025), MAE / bias:
 
 | Variante | W1 ottobre | W2 estate |
 |:--|:--|:--|
 | E | 0.903 / +0.14 | 0.880 / −0.05 |
-| M2 attuale | 0.696 / −0.26 | 0.743 / −0.31 |
+| M2 | 0.696 / −0.26 | 0.743 / −0.31 |
 | senza feature stagionali | 0.686 / −0.02 | 0.749 / −0.28 |
 | più riassunti di bias (7 e 90 giorni per ora, media 30 giorni, ieri, ultimi 3 giorni) | 0.634 / −0.16 | 0.688 / −0.24 |
 | entrambi | 0.625 / −0.03 | 0.682 / −0.21 |
 | entrambi + correzione sul proprio errore | 0.620 / +0.01 | 0.624 / +0.00 |
 
-4. **Ritardo reale.** In produzione la tabella dei bias è calcolata alle 03:00 con i dati fino a ieri:
-   ha ritardo 1 giorno per i `valid_for` di oggi, 2 per domani, 3 per dopodomani, e passare da 1
-   a 3 giorni costa 0,03–0,08 °C (ottobre 0,625 → 0,682). La correzione sul proprio errore a peso
-   pieno aiuta molto in estate ma peggiora ottobre al ritardo 3 (0,682 → 0,693): a metà peso è il compromesso.
-5. **M2b** (`scripts/train_m2b.py`, `model/m2b.py`, tag `m2b-20261021`, 4,2 MB): M2 senza le
-   feature stagionali, con i sei riassunti di bias di `bias_features` e `bias_lag` (1–3); addestrato
-   sulle stesse righe impilate con ritardo 1, 2 e 3 (1,97 milioni di righe), 2012 iterazioni, su tutti i
-   dati fino al 21/10. Correzione sull'errore proprio (colonna `t_m2c`): previsione meno λ = 0,5 volte
-   l'errore medio di M2b per stazione × ora UTC sui 30 giorni precedenti (minimo 7 giorni), calcolato
-   dalle emissioni dello stesso M2b (funzione SQL `m2b_self_bias`); fino a 7 giorni di storia `t_m2c` =
-   `t_m2b`. Con `bias_lag` e λ = 0,5: ottobre 0,624 / 0,654 / 0,665 (ritardo 1 / 2 / 3), estate
-   0,651 / 0,669 / 0,680; errore sistematico tra 0,00 e +0,01 a ottobre, −0,13/−0,14 in estate con
-   il modello vecchio.
+- **Ritardo di produzione.** La tabella dei bias ha 1–3 giorni di ritardo sui `valid_for` (calcolata alle 03:00
+  con i dati fino a ieri) e costa 0,03–0,08 °C (ottobre 0,625 → 0,682): **M2b** (`m2b-20261021`, 4,2 MB) è
+  addestrato su righe impilate con ritardo 1, 2 e 3 e riceve `bias_lag` come feature. La correzione sul proprio
+  errore (colonna `t_m2c`) vale a metà peso (λ = 0,5: ottobre 0,624 / 0,654 / 0,665 ai ritardi 1 / 2 / 3, estate
+  0,651 / 0,669 / 0,680) e parte dopo 7 giorni di storia.
+- **Dal vivo (22/10 → 06/11, emissioni 09Z e 21Z):**
 
-##### M2 umidità (H1)
-
-`scripts/train_m2_hum.py`, `model/m2_hum/` (0,6 MB), tag `m2h-20261021`: IFS RH a `valid_for` più
-residuo LightGBM diretto, limitato a [0, 100]; feature di produzione + `station_cat` + `nwp_valid` +
-`nwp_rh_valid` + `bias_rh_hour` (bias RH IFS − Netatmo per stazione × ora UTC, 30 giorni precedenti,
-minimo 10); 656.615 righe, 279 iterazioni (early stopping), Sigillo esclusa. Test 22/09 → 21/10
-(22.289 righe, `scripts/experiment_m2_humidity.py`), errore in punti percentuali:
-
-| Variante | MAE | Bias | MAE con RH > 90% | Notte (0–5 UTC) | Giorno (9–17 UTC) |
+| | IFS | E | M2 | M2b | M2b + correzione |
 |:--|:--|:--|:--|:--|:--|
-| IFS grezzo (come la mappa oggi) | 8.42 | +1.30 | 4.08 | 8.80 | 8.71 |
-| E | 5.73 | +0.91 | 4.80 | 5.87 | 5.63 |
-| **H1 residuo diretto** | **3.81** | +1.09 | 4.08 | 3.57 | 4.05 |
-| H2 residuo sul punto di rugiada | 3.91 | +1.21 | 3.96 | 3.48 | 4.15 |
+| MAE, tutte le righe (35.084) | 1.885 | 1.009 | 0.862 | 0.822 | 0.806 |
+| bias | −1.55 | −0.16 | −0.11 | −0.18 | −0.09 |
+| MAE con correzione attiva (21.555, da ~29/10) | 1.784 | 1.057 | 0.911 | 0.851 | 0.826 |
+| MAE lead 1–12 / 13–24 / 25–48 | 1.78 / 1.82 / 1.97 | 1.00 / 1.01 / 1.01 | 0.85 / 0.86 / 0.87 | 0.80 / 0.82 / 0.84 | 0.79 / 0.80 / 0.82 |
 
-Scelto H1: non peggiore di H2 e indipendente dal modello della temperatura. Vicino alla saturazione
-non c'è guadagno rispetto all'IFS. Temperatura percepita e bulbo umido restano con le loro formule
-meccaniche: con T ed RH di M2 l'errore medio scende da 2,24 a 0,80 °C (percepita) e da 1,47 a 0,57 °C
-(bulbo umido), merito soprattutto della T. In ombra dal 22/10 (commit `385948a8`).
+  Nel periodo il bias di M2 è sceso a −0,11 °C; M2b non lo riduce ulteriormente ma migliora il MAE di 0,04 °C
+  (0,06 con la correzione).
+
+##### Umidità — H1 e H1b
+
+Test offline 22/09 → 21/10 (22.289 righe), punti percentuali di umidità relativa: IFS 8.42 (bias +1.30), E 5.73,
+**H1** (residuo diretto) **3.81**, H2 (residuo sul punto di rugiada) 3.91; con umidità > 90% nessun guadagno
+sull'IFS (4.08 contro 4.08). Con T ed RH di M2 l'errore di bulbo umido scende da 1.47 a 0.57 °C e quello di
+temperatura percepita da 2.24 a 0.80 °C (merito soprattutto della T). **H1b** (come M2b: senza stagionali, sei
+riassunti di bias, ritardo 1–3 giorni; `m2hb-20261021`): offline a ritardo di produzione 3.81 contro 4.02 di H1.
+
+Dal vivo (25/10 → 06/11, 35.023 righe):
+
+| | IFS | E | H1 | H1b |
+|:--|:--|:--|:--|:--|
+| MAE | 8.70 | 6.10 | 4.42 | **4.23** |
+| bias | +4.11 | +1.85 | +1.68 | +1.36 |
+| MAE con RH osservata > 90% | 4.79 | — | 4.24 | **3.78** |
 
 ##### Vento
 
-- **Dati.** I moduli anemometro Netatmo (id `06:00:00:…`) sono separati dal termometro: 171 moduli
-  attorno alle 31 stazioni (`scripts/netatmo_wind_backfill.py`, storico orario dal 14/03/2024:
-  velocità, direzione, raffica). Selezione: fino a 8 moduli entro 5 km per stazione, minimo 3 entro
-  15 km dove sono pochi, 96 moduli (Cassino e Sigillo non ne hanno nemmeno a 15 km). Download del
-  22/10: 1.552 chiamate, nessun errore. Controllo qualità (`scripts/qc_wind_modules.py`): 77 collegamenti
-  modulo-stazione su 106 validi, 24 scartati perché non seguono l'IFS (correlazione < 0,15). Target:
-  614.775 ore su 30 stazioni.
-- **Il vento Netatmo non è il vento a 10 m.** Gli anemometri sono riparati e urbani e leggono circa 0,4 volte
-  l'IFS (media 4 km/h contro 7–15 dei METAR). Il vento che la mappa mostra dal vivo è la mediana dei
-  moduli entro 5 km che `getpublicdata` restituisce in quel momento, e coincide con il target storico
-  solo in 12 stazioni (`scripts/validate_wind_live.py`: ≥ 1000 ore, correlazione ≥ 0,55, |bias| ≤ 2,2
-  km/h): Ostia Lido, Pratica di Mare, Selva Nera, Bracciano, Ardea, Ceccano, Anagni, Fondi, Rieti,
-  Gaeta, Rocca Sinibalda, Tarquinia. Gli altri 75 moduli non sono stati scaricati.
-- **M2 vento "riparato"** (`scripts/train_m2_wind.py`, `model/m2_wind/`, `m2w-20261021`, 192 iterazioni):
-  residuo su `log1p` della velocità IFS, direzione non modellata (resta l'IFS). Test 01/09 → 21/10
-  (36.674 ore, target Netatmo): MAE 4,52 km/h per l'IFS (bias +3,14), 2,23 per E, **1,31 per M2**
-  (correlazione 0,29 → 0,79). In ombra dal 22/10 (commit `c053eac7`, colonne `w_*`, `bias_ws` in scala
-  log); il confronto vale solo sulle 12 stazioni coerenti.
-- **Vento a 10 m e direzione, verità METAR** (commit `b05567ab`, `679c8873`). Sul target Netatmo la direzione
-  ha 42,7° di errore (IFS 69°), ma 32 moduli su 71 hanno uno scarto fisso di orientamento oltre 30°
-  nelle ore di vento forte: non è una verità affidabile. L'alternativa sono i METAR di otto aeroporti
-  (LIRF, LIRA, LIRU, LIRE, LIRL, LIRG, LIRV, LIRH) dall'archivio Iowa Mesonet, vento orario dal
-  14/03/2024. Test 01/05 → 22/10 (17.774 ore): velocità 3,80 → 2,68 km/h, direzione 36,4° → 29,2°.
-  Lasciando fuori un aeroporto per volta (senza `station_cat` né bias, come sarebbe su un punto senza
-  METAR) la velocità va da 3,80 a 3,19 km/h e la direzione non migliora (36,4° → 36,5°): il guadagno
-  viene dai siti già visti e non si trasferisce alle 31 stazioni. In ombra dal 22/10
-  (`model/m2_wind10/`, `m2w10-20261022`, `forecasts_shadow_wind10`), valutata solo sugli otto
-  aeroporti con `scripts/eval_wind10_shadow.py`.
-- **Decisione del 22/10:** la mappa mostra per ora il vento standard a 10 m (verità METAR). Il vento
-  "riparato" potrà diventare una sezione a parte. **Da fare in futuro:** una verità per sito per la
-  direzione (ARPA Lazio, Centro Funzionale Regionale), poi un M2 della direzione sulle stazioni.
+- **Moduli Netatmo.** Gli anemometri sono moduli separati dal termometro (id `06:00:00:…`): 171 trovati
+  attorno alle stazioni, storico orario dal 14/03/2024; scaricati 96 (fino a 8 entro 5 km, minimo 3 entro
+  15 km; Cassino e Sigillo senza moduli a 15 km), 614.775 ore su 30 stazioni dopo il controllo qualità (77
+  collegamenti modulo-stazione su 106 validi). Leggono circa 0,4 volte l'IFS (anemometri riparati e urbani,
+  media 4 km/h contro 7–15 dei METAR) e il target storico coincide col vento dal vivo solo in 12 stazioni
+  (Ostia Lido, Pratica di Mare, Selva Nera, Bracciano, Ardea, Ceccano, Anagni, Fondi, Rieti, Gaeta, Rocca
+  Sinibalda, Tarquinia).
+- **M2 vento "riparato"** (target Netatmo, residuo su `log1p` della velocità, direzione non modellata):
+  offline 01/09 → 21/10 MAE 4.52 km/h per l'IFS, 2.23 per E, **1.31** per M2 (correlazione 0.29 → 0.79). In ombra
+  22 → 31/10 sulle 12 stazioni coerenti (10.183 coppie): IFS 4.00, E 2.04, **M2 1.43** km/h; bias +2.41 → −0.39;
+  correlazione 0.48 → 0.85.
+- **M2 vento a 10 m, verità METAR** (otto aeroporti: LIRF, LIRA, LIRU, LIRE, LIRL, LIRG, LIRV, LIRH, dal
+  14/03/2024; è il vento che va in produzione). Offline 01/05 → 22/10 (17.774 ore): velocità 3.80 → **2.68** km/h,
+  direzione 36.4° → 29.2° (entro 45°: 74% → 81%). Su aeroporti mai visti (uno per volta fuori dal training, come
+  sulle stazioni) la velocità va a 3.19 km/h e la direzione non migliora (36.4° → 36.5°): il guadagno sulla
+  direzione viene dai siti già visti. In ombra 22 → 24/10 sugli otto aeroporti: velocità 3.41 → 2.79 km/h,
+  direzione 48.2° → 40.5°.
+- **Direzione sul target Netatmo:** 42.7° contro 69° dell'IFS, ma 32 moduli su 71 hanno uno scarto fisso di
+  orientamento oltre 30° nelle ore di vento forte: non è una verità affidabile.
+- Altre fonti per il vento storico: ARPA Lazio (9 postazioni, anemometro ultrasonico, CSV annuali 2013–2024 su
+  dati.lazio.it) e Centro Funzionale Regionale (23 stazioni con vento, storico da chiedere via mail).
 
-##### Seconda fase della prova in ombra (dal 22/10/2026)
+#### 🚀 M2 in produzione — dal 31/10/2026
 
-Gira ogni giorno: M2 (`t_m2`), M2b (`t_m2b`, `t_m2c`), M2 umidità (`h_m2`), M2 vento (`w_m2`) e vento a
-10 m sui METAR. Si valuta con SQL su `shadow_vs_observed` e su `forecasts_shadow_m2b` (join su
-stazione, `issue_at`, lead), solo emissioni 09Z e 21Z.
+**Cosa gira** (commit `6fca00a7` → `deaa6112`, lancio del 31/10 verso le 12:15):
 
-- **Almeno una settimana (fino al 29/10)**, con una seconda lettura il 5/11: la correzione sul proprio
-  errore di M2b si attiva dopo 7 giorni di emissioni.
-- **Criteri proposti, da confermare con Filippo:** M2b con bias medio per ora UTC entro ±0,5 °C a tutte le
-  ore, MAE su 1–48 h non peggiore di M2 e nessuna stazione peggiore dell'IFS di oltre 0,3 °C;
-  umidità con MAE sotto E e sotto l'IFS e bias entro ±3 punti; vento sulle 12 stazioni coerenti contro
-  Netatmo e sugli otto aeroporti contro i METAR.
-- **Fondi** si valuta a parte (target instabile).
+- `produce-m2.yml` ogni ora al minuto 0 (cron-job.org con `write_lead1`, prima dell'export delle :05; schedule
+  GitHub di riserva al minuto 20): per ogni stazione scarica l'IFS e calcola temperatura M2, umidità H1 e
+  vento a 10 m (velocità e direzione), con ripiego sull'IFS dove un modello manca (Sigillo: modello attuale
+  per la temperatura, IFS per il resto). La +1h va in `forecasts`, le 48 ore in `forecasts_48h`, le emissioni
+  delle 09 e 21 UTC anche in `forecasts_verifica`.
+- `inference.yml` è solo manuale. **Ritorno indietro:** riattivare il suo job su cron-job.org e fermare quello
+  di `produce-m2.yml`.
+- Mappa: timeline +1…+48 h per temperatura, percepita, umidità, bulbo umido e vento (PWA meteo-v25);
+  dashboard con errore per anticipo 1–48 h (M2 contro IFS grezzo) e pulsante Vento.
+- Ombra residua: `forecasts_shadow` (M2 e H1 come riferimento), `forecasts_shadow_m2b`, `forecasts_shadow_m2hb`.
+  Il vento è uscito dall'ombra il 31/10.
 
-**Se la prova passa:** la temperatura (M2b o M2) e l'umidità passano in produzione dallo scheletro dati
-già pronto in locale, non committato — `model/produce_m2.py` scrive `forecasts_48h`,
-`scripts/export_forecast_48h.py` produce `forecast_48h.json`, workflow `produce-m2.yml` solo a
-richiesta — in tre passi: `produce_m2` come scrittore del lead 1 in `forecasts` al posto di
-`inference.yml`; pubblicazione di `forecast_48h.json` nel flusso `publish.yml`; mappa con slider orario
-e valori per scadenza (il layout non si tocca finché non si decide). `forecasts` resta a lead 1 e il
-ponte non va rimosso; le 48 ore stanno in `forecasts_48h`. Il vento resta l'IFS a 10 m.
-**Rollback:** disattivare i job su cron-job.org; nient'altro dipende dall'ombra.
+**Verifica in produzione** (01/11 → 07/11, `forecasts_verifica` contro le osservazioni live Netatmo, 13.737 coppie
+a 31 stazioni):
+
+| Lead (h) | T: IFS grezzo | T: M2 | RH: IFS grezzo | RH: H1 |
+|:--|:--|:--|:--|:--|
+| 1–12 | 1.50 | **0.89** | 7.67 | **4.17** |
+| 13–24 | 1.57 | **0.94** | 7.63 | **4.23** |
+| 25–36 | 1.81 | **0.90** | 7.61 | **4.13** |
+| 37–48 | 1.86 | **0.92** | 8.19 | **4.39** |
+| **1–48** | 1.67 | **0.91** (bias +0.05) | 7.76 | **4.22** (bias +0.70) |
+
+Il vento a 10 m non si verifica contro Netatmo (misura un'altra cosa, vedi *Vento*): attesa 3.19 km/h contro 3.80
+dell'IFS sulle stazioni, direzione come l'IFS.
+
+**Aperto.** Promozione di M2b e H1b al posto di M2 e H1 (in ombra, meglio di 0,04 °C e 0,19 punti); fine
+dell'ombra M2/H1 quando `forecasts_verifica` copre la finestra della dashboard (≈ 11/11); vento sul rilievo (IFS
+su griglia + M2) con il rifacimento grafico della mappa; una verità per sito per la direzione; riaddestramento di
+dicembre (Fase 5).
 
 ### 🧪 Esperimento — TimesFM-3 (zero-shot) vs MOS attuale — Roma Sud, T+1h e T+24h
 
@@ -882,10 +827,10 @@ rigenerano dal codice.
 
 Assorbe il task Chart.js già pianificato in Fase 3 ed estende la dashboard con il meteogramma orario 48h per stazione. Zero infrastruttura nuova: `export_static.py` produce `forecast_48h.json`, la pagina GitHub Pages lo rende con Chart.js. Coerente col vincolo costo-zero.
 
-**Stato:** la dashboard Chart.js di base è già stata completata a giugno 2026 (`dashboard_data.json`, `dashboard.html`, auto-update via `export-dashboard.yml` — vedi Fase 3 in *Stato attuale*). Resta da fare solo il meteogramma 48h: dipende dalla Fase 4a e dal modello che esce dalla *Prova in ombra M2* (le 48 ore del modello attuale non si pubblicano).
+**Stato:** la dashboard Chart.js di base è già stata completata a giugno 2026 (`dashboard_data.json`, `dashboard.html`, auto-update via `export-dashboard.yml` — vedi Fase 3 in *Stato attuale*). `forecast_48h.json` di M2 è pubblicato dal 31/10/2026 (Fase 4a) e la PWA lo mostra nella timeline +1…+48 h e nella scheda 48 h del luogo (commit `2d1d5d8c`, 06/11); resta il meteogramma 48h nella dashboard Chart.js.
 
 1. [x] `dashboard_data.json` (forecast_vs_observed, MAE per stazione, ultime osservazioni) — completato in Fase 3
-2. [ ] `forecast_48h.json` per stazione (meteogramma) — dipende dalla Fase 4a (punto 6) e dalla seconda fase della prova in ombra (dal 22/10/2026)
+2. [~] `forecast_48h.json` per stazione — pubblicato dal 31/10/2026; manca il meteogramma 48h in `dashboard.html`
 3. [x] `dashboard.html` con Chart.js: tabelle, "Previsto vs Osservato" — completato in Fase 3; resta da aggiungere il meteogramma 48h
 4. [x] Auto-update via workflow dedicato (`export-dashboard.yml`) — completato in Fase 3
 
@@ -895,7 +840,7 @@ Un unico retraining che incorpora simultaneamente tutto ciò che è maturato. No
 
 Qui c'è solo l'**esecuzione**. Tutto il lavoro preparatorio sta in **Fase 4a → Preparazione
 al retraining**. Punto di partenza cambiato a settembre: la ricetta esiste già (M2, target
-Netatmo storico, input IFS) ed è in prova in ombra; dicembre la estende invece di inventarla.
+Netatmo storico, input IFS) ed è in produzione dal 31/10/2026; dicembre la estende invece di inventarla.
 
 1. [ ] Estendere lo storico target fino a novembre (`scripts/netatmo_backfill.py download
    --selected`, rieseguire `select` sulle osservazioni più recenti) e riaddestrare M2 con
@@ -1115,7 +1060,7 @@ python3 db.py   # verifica connessione
 
 **Riferimento GitHub:** `https://github.com/filippopetto-maker/meteo_locale`
 
-**Stato corrente (settembre 2026):** Fase 1, 2a, 2b, 3 in produzione (Fase 3 include carta del vento e dashboard Chart.js). Fase 2c parziale (bias correction ARSIAL attiva, Protezione Civile Lazio ancora da integrare). **Fase 4a in corso:** inference multi-lead pronta ma non pubblicata, prima fase della prova in ombra di M2 chiusa il 21/10/2026 (MAE 0,88 °C), seconda fase dal 22/10 con M2b, M2 umidità e M2 vento. Radar RainViewer in corso (vedi *Sviluppo a lungo termine*). Roadmap strategica di lungo periodo (48h, retraining dicembre, generalizzazione, convettività) → [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47). GitHub Actions attivi. Trigger primario per tutti i workflow: cron-job.org (`workflow_dispatch`), l'unico che non ha mai saltato un run. I due workflow a 30 minuti hanno in più uno `schedule:` interno GitHub come rete di sicurezza (inaffidabile da solo su repo a bassa attività, ma innocuo come doppione):
+**Stato corrente (settembre 2026):** Fase 1, 2a, 2b, 3 in produzione (Fase 3 include carta del vento e dashboard Chart.js). Fase 2c parziale (bias correction ARSIAL attiva, Protezione Civile Lazio ancora da integrare). **Fase 4a:** M2 (temperatura, umidità, vento a 10 m) in produzione a +1h e fino a +48h dal 31/10/2026; in ombra M2b e H1b come candidati. Radar RainViewer in corso (vedi *Sviluppo a lungo termine*). Roadmap strategica di lungo periodo (48h, retraining dicembre, generalizzazione, convettività) → [Roadmap estesa — Fasi 4–7](#-roadmap-estesa--fasi-47). GitHub Actions attivi. Trigger primario per tutti i workflow: cron-job.org (`workflow_dispatch`), l'unico che non ha mai saltato un run. I due workflow a 30 minuti hanno in più uno `schedule:` interno GitHub come rete di sicurezza (inaffidabile da solo su repo a bassa attività, ma innocuo come doppione):
 - `produce-m2.yml` — previsioni M2 (temperatura, umidità H1, vento a 10 m) 1–48 h in `forecasts_48h` e +1h in `forecasts`, ogni ora al minuto 0, prima dell'export delle :05 (cron-job.org + `schedule:` interno di riserva al minuto 20), dal 31/10/2026
 - `inference.yml` — modello attuale v1, solo manuale dal 31/10/2026 (ritorno indietro)
 - `ingestion.yml` — osservazioni METAR + Netatmo, ogni 30 min (cron-job.org + `schedule:` interno di riserva)
@@ -1126,7 +1071,7 @@ python3 db.py   # verifica connessione
 
 **Mappa live:** `https://filippopetto-maker.github.io/meteo_locale/`
 
-**Prossime scadenze:** valutazione della seconda fase della prova in ombra il **29/10/2026** (dopo 7 giorni di storia per la correzione di M2b) e il 5/11 (vedi Fase 4a); **dicembre 2026** — retraining completo (Fase 5).
+**Prossime scadenze:** decisione su M2b e H1b e fine dell'ombra M2/H1 (≈ **11/11/2026**, vedi Fase 4a); **dicembre 2026** — retraining completo (Fase 5).
 
 **Completato (giugno 2026):**
 - Correzione SST sul mare: `sst.py` + blend graduale asimmetrico in `grid.py` + `export_static.py`; `LATIUM_COAST` estesa da Anzio→Gaeta a sud e fino a (42.85, 10.85) a nord
@@ -1139,9 +1084,9 @@ python3 db.py   # verifica connessione
 
 **Dashboard live:** `https://filippopetto-maker.github.io/meteo_locale/dashboard.html`
 
-**Prossimo task immediato:** seguire la seconda fase della *Prova in ombra* (Fase 4a) — valutazioni SQL
-su `shadow_vs_observed` e `forecasts_shadow_m2b` il 29/10 e il 5/11, poi decisione sul passaggio in
-produzione. In sospeso fino ad allora: Fase 4a punto 6 (48 ore sulla mappa).
+**Prossimo task immediato:** decidere M2b e H1b (confronto SQL tra `forecasts_shadow`, `forecasts_shadow_m2b` e
+`forecasts_shadow_m2hb`) e, quando `forecasts_verifica` copre la finestra della dashboard (≈ 11/11), fermare
+l'ombra M2/H1 (Fase 4a, punto 11).
 
 **Miglioramenti futuri mappa:**
 - Più stazioni: settore ovest (Bracciano, Ostia Nord) e nord completamente scoperti dall'IDW — ogni nuova stazione migliora il gradiente senza modifiche al codice
@@ -1152,7 +1097,7 @@ produzione. In sospeso fino ad allora: Fase 4a punto 6 (48 ore sulla mappa).
 
 ## 🎯 Risultati del modello
 
-Due modelli: quello **di produzione** (v1, addestrato a giugno 2026 su ERA5 → METAR, sulla mappa) e **M2** (IFS + residuo LightGBM su target Netatmo, in prova in ombra dal 25/09/2026; M2b, M2 umidità e M2 vento dal 22/10). Le metriche di validazione di v1 qui sotto sono contro METAR; contro il target Netatmo che la mappa mostra, v1 fa peggio dell'IFS grezzo (vedi sotto e Fase 4a).
+Due modelli: **M2** (IFS + residuo LightGBM su target Netatmo, in produzione dal 31/10/2026 con umidità e vento) e il modello **v1** (addestrato a giugno 2026 su ERA5 → METAR, fermo e riattivabile a mano). Le metriche di validazione di v1 qui sotto sono contro METAR; contro il target Netatmo che la mappa mostra, v1 fa peggio dell'IFS grezzo (vedi sotto e Fase 4a).
 
 ### Modello di produzione (v1) — dataset di training
 
