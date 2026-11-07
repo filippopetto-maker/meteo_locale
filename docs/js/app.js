@@ -661,6 +661,16 @@
         `<label class="pill"><input type="radio" name="wind-unit" value="kts"><span>nodi</span></label>` +
         `</div>`;
 
+      // Logo Metek (tre onde + sole): lo stesso nel lockup della PWA e nel pannello del sito
+      const BRAND_MARK_SVG =
+        `<svg class="brand-mark" viewBox="0 0 180 180" xmlns="http://www.w3.org/2000/svg">` +
+        `<g fill="none" stroke-linecap="round">` +
+        `<path d="M-4 46c34 0 46 22 84 22s52-22 104-22" stroke="#4b5192" stroke-width="10"></path>` +
+        `<path d="M-4 82c34 0 46 22 84 22s52-22 104-22" stroke="#9184d9" stroke-width="11"></path>` +
+        `<path d="M-4 118c34 0 46 22 84 22s52-22 104-22" stroke="#c6bff0" stroke-width="10"></path>` +
+        `</g><circle cx="126" cy="96" r="9" fill="#f4a93f"></circle>` +
+        `</svg>`;
+
       if (isPWA) {
         const railIconSvg = inner =>
           `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">${inner}</svg>`;
@@ -675,13 +685,7 @@
         const brand = L.DomUtil.create('div');
         brand.id = 'brand-lockup';
         brand.innerHTML =
-          `<svg class="brand-mark" viewBox="0 0 180 180" xmlns="http://www.w3.org/2000/svg">` +
-          `<g fill="none" stroke-linecap="round">` +
-          `<path d="M-4 46c34 0 46 22 84 22s52-22 104-22" stroke="#4b5192" stroke-width="10"></path>` +
-          `<path d="M-4 82c34 0 46 22 84 22s52-22 104-22" stroke="#9184d9" stroke-width="11"></path>` +
-          `<path d="M-4 118c34 0 46 22 84 22s52-22 104-22" stroke="#c6bff0" stroke-width="10"></path>` +
-          `</g><circle cx="126" cy="96" r="9" fill="#f4a93f"></circle>` +
-          `</svg>` +
+          BRAND_MARK_SVG +
           `<div class="brand-text">` +
           `<div class="brand-word">Metek</div>` +
           `<div id="info-mos">` +
@@ -751,7 +755,7 @@
         infoPanel.id = 'control-panel';
         infoPanel.innerHTML =
           `<div class="panel-head">` +
-          `<div class="info-title">🌦️ Meteo Locale — Roma</div>` +
+          `<div class="info-title">${BRAND_MARK_SVG}<span class="brand-word">Metek</span></div>` +
           `<div id="info-mos">` +
           `<div class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</div>` +
           `<div class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</div>` +
@@ -1441,6 +1445,7 @@
         whenReady: fc48Ctl.whenReady,
         nowTemp: (lat, lng) => (tObs?.values ? lookupGrid(lat, lng, tObs) : null),
         windUnit: () => windUnit,
+        localityName: getLocalityName,
       });
 
       if (stations.length > 0) {
@@ -1449,6 +1454,10 @@
       }
 
       if (isPWA) window.hideSplash?.();
+
+      // Scheda 48 h sulla posizione del dispositivo, senza bisogno di cercare (js/luogo.js).
+      // Dopo il fitBounds, così il volo verso il punto non viene annullato.
+      window.MeteoLuogo?.locateOnStart();
 
       if (windGrid) {
         windLayer = renderWind(map, windGrid);

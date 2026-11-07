@@ -10,7 +10,10 @@
 //     Contro le raffiche METAR del Lazio (nov 2024 – ott 2026) coglie l'86% degli eventi ≥40 km/h e il
 //     73% di quelli ≥60, contro 75% e 67% di ICON-2I da solo (scripts/experiment_m2_gust.py);
 //   - ricerca dei nomi: geocoding Open-Meteo (GeoNames), limitata al riquadro della mappa, più le stazioni.
-// app.js chiama MeteoLuogo.init(...) quando mappa e dati sono pronti.
+// Terzo ingresso: la posizione del dispositivo. All'apertura (sito e PWA) la scheda si apre da sola sul
+// punto in cui si trova l'utente, se ha dato il permesso e se è dentro la mappa; nella ricerca c'è anche
+// la voce "La tua posizione". Le coordinate restano nel browser (arrotondate a ~100 m prima di ogni uso).
+// app.js chiama MeteoLuogo.init(...) quando mappa e dati sono pronti, poi MeteoLuogo.locateOnStart().
 (function () {
   'use strict';
 
@@ -21,9 +24,11 @@
   const GEO_URL = 'https://geocoding-api.open-meteo.com/v1/search';
   const FC_URL = 'https://api.open-meteo.com/v1/forecast';
   const RECENT_KEY = 'metek.luoghi.recenti';
+  const GEO_OPTS = { enableHighAccuracy: false, timeout: 10000, maximumAge: 10 * 60 * 1000 };
   const WIND_STOPS = ['#003399', '#0099ff', '#00cc66', '#ffdd00', '#ff6600', '#cc0000']; // WIND_PALETTE, 0–50 km/h
 
-  let ctx = null;           // {map, stations, isPWA, bounds, pointSeries, whenReady, nowTemp, windUnit}
+  let ctx = null;           // {map, stations, isPWA, bounds, pointSeries, whenReady, nowTemp, windUnit, localityName}
+  let userActed = false;    // l'utente ha già cercato o toccato la mappa: la posizione automatica non si impone
   let ringMarker = null;
   let els = {};
   let hits = [], active = 0, searchSeq = 0, debounce = null;
@@ -114,6 +119,12 @@
   .ml-opt[aria-selected="true"] { background: var(--ml-accent-fill); }
   .ml-pin { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--ml-accent); flex: 0 0 auto; }
   .ml-pin.st { background: var(--ml-accent); }
+  .ml-pin.gps { border-color: var(--ml-rain); background: var(--ml-rain); box-shadow: 0 0 0 3px rgba(94,176,245,.25); }
+  .ml-toast { position: fixed; z-index: 1200; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 12px); transform: translate(-50%, -8px);
+    max-width: calc(100vw - 32px); padding: 8px 14px; border-radius: 999px; background: var(--ml-glass); border: 1px solid var(--ml-border);
+    box-shadow: var(--ml-shadow); font-size: 13px; line-height: 18px; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; }
+  .ml-toast.on { opacity: 1; transform: translate(-50%, 0); }
+  .is-pwa .ml-toast { top: calc(env(safe-area-inset-top, 0px) + 100px); }
   .ml-n { font-size: 14px; line-height: 20px; }
   .ml-s { font-size: 11px; line-height: 14px; color: var(--ml-text-2); }
   .ml-msg { padding: 10px 12px; font-size: 12px; color: var(--ml-text-3); }
@@ -209,10 +220,25 @@
     });
     els.list.addEventListener('click', e => { const o = e.target.closest('.ml-opt'); if (o) pick(hits[+o.dataset.i]); });
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheet.classList.contains('open') && !box.classList.contains('open')) closeSheet(); });
+    ctx.map.on('click', () => { userActed = true; });
+
+    const toast = document.createElement('div');
+    toast.className = 'ml ml-toast';
+    toast.setAttribute('role', 'status');
+    document.body.appendChild(toast);
+    els.toast = toast;
+  }
+  let toastTimer = null;
+  function showToast(msg) {
+    els.toast.textContent = msg;
+    els.toast.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => els.toast.classList.remove('on'), 4500);
   }
 
   // ── Ricerca ────────────────────────────────────────────────────────────────
   function openSearch() {
+    userActed = true;
     els.box.classList.add('open');
     els.input.value = '';
     els.input.focus();
@@ -233,10 +259,15 @@
   }
   function renderRecent() {
     const rec = readRecent().filter(r => inBounds(r.lat, r.lon));
-    hits = rec;
+    const gps = geoSupported() ? [{ name: 'La tua posizione', sub: 'usa la posizione del dispositivo', gps: true }] : [];
+    hits = [...gps, ...rec];
     active = 0;
-    if (!rec.length) { showList('<div class="ml-msg">Scrivi il nome di un comune, una frazione o una stazione del Lazio.</div>'); return; }
-    showList('<div class="ml-head-row">Recenti</div>' + rec.map(optHTML).join(''));
+    const gpsHTML = gps.length ? optHTML(gps[0], 0) : '';
+    if (!rec.length) {
+      showList(gpsHTML + '<div class="ml-msg">Scrivi il nome di un comune, una frazione o una stazione del Lazio.</div>');
+      return;
+    }
+    showList(gpsHTML + '<div class="ml-head-row">Recenti</div>' + rec.map((r, i) => optHTML(r, i + gps.length)).join(''));
   }
   function scheduleSearch() {
     clearTimeout(debounce);
@@ -285,7 +316,7 @@
   }
   function optHTML(p, i) {
     return `<div class="ml-opt" role="option" data-i="${i}" aria-selected="${i === active}">` +
-      `<span class="ml-pin${p.station ? ' st' : ''}"></span><div><div class="ml-n">${esc(p.name)}</div>` +
+      `<span class="ml-pin${p.station ? ' st' : p.gps ? ' gps' : ''}"></span><div><div class="ml-n">${esc(p.name)}</div>` +
       (p.sub ? `<div class="ml-s">${esc(p.sub)}</div>` : '') + `</div></div>`;
   }
   function showList(html) {
@@ -300,8 +331,14 @@
   // ── Scelta del luogo ───────────────────────────────────────────────────────
   function pick(p) {
     if (!p) return;
-    saveRecent({ name: p.name, sub: p.sub, lat: p.lat, lon: p.lon, elev: p.elev, station: p.station });
     closeSearch();
+    if (p.gps) { locate(false); return; }
+    saveRecent({ name: p.name, sub: p.sub, lat: p.lat, lon: p.lon, elev: p.elev, station: p.station });
+    focusPlace(p);
+  }
+
+  // Centra la mappa sul luogo, mette l'anello e apre la scheda (ricerca, recenti e posizione).
+  function focusPlace(p) {
     const map = ctx.map;
     map.closePopup();
     if (ringMarker) map.removeLayer(ringMarker);
@@ -323,6 +360,55 @@
     openSheet(p);
   }
 
+  // ── Posizione del dispositivo ──────────────────────────────────────────────
+  // Serve un contesto sicuro (GitHub Pages è https). Precisione "di rete" (Wi-Fi/celle): basta per una
+  // griglia da ~1 km ed è molto più rapida del GPS; una posizione di meno di 10 minuti fa va bene.
+  const geoSupported = () => 'geolocation' in navigator && window.isSecureContext;
+  const getPosition = () => new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, GEO_OPTS));
+  const GEO_ERR = {
+    1: 'Permesso di posizione negato: puoi riattivarlo dalle impostazioni del browser.',
+    2: 'Posizione non disponibile in questo momento.',
+    3: 'La posizione non è arrivata in tempo. Riprova.',
+  };
+
+  // auto = true all'apertura: nessun messaggio se manca il permesso o se l'utente ha già fatto altro.
+  async function locate(auto) {
+    if (!geoSupported()) { if (!auto) showToast('Questo browser non fornisce la posizione.'); return; }
+    if (auto) {
+      // Se il permesso è già stato negato non si chiede di nuovo (Safari vecchi non hanno l'API: si prova).
+      try {
+        const st = await navigator.permissions?.query({ name: 'geolocation' });
+        if (st && st.state === 'denied') return;
+      } catch { /* API assente */ }
+    }
+    let pos;
+    try { pos = await getPosition(); }
+    catch (e) { if (!auto) showToast(GEO_ERR[e.code] || GEO_ERR[2]); return; }
+    if (auto && userActed) return;  // nel frattempo l'utente ha cercato o toccato la mappa
+
+    // ~100 m: più che sufficiente per la griglia, e le coordinate esatte non escono dal browser
+    const lat = Math.round(pos.coords.latitude * 1000) / 1000;
+    const lon = Math.round(pos.coords.longitude * 1000) / 1000;
+    if (!inBounds(lat, lon)) { showToast('Sei fuori dall\'area coperta dalla mappa (Lazio).'); return; }
+
+    const acc = pos.coords.accuracy;
+    const accTxt = acc && acc < 5000 ? ` · ±${acc < 1000 ? Math.round(acc / 10) * 10 + ' m' : fmt1(acc / 1000) + ' km'}` : '';
+    const p = { name: 'La tua posizione', sub: 'dal dispositivo' + accTxt, lat, lon, here: true };
+    focusPlace(p);
+    // Il nome arriva dopo (reverse geocoding già usato dal popup): si aggiorna l'intestazione al volo.
+    if (ctx.localityName) {
+      ctx.localityName(lat, lon).then(n => {
+        if (!n || /°N/.test(n)) return;  // il ripiego sulle coordinate non è un nome
+        p.name = n;
+        p.sub = 'la tua posizione' + accTxt;
+        if (els.sheet._place !== p) return;
+        const b = els.sheet.querySelector('.ml-place b'), sp = els.sheet.querySelector('.ml-place span');
+        if (b) b.textContent = n;
+        if (sp) sp.textContent = p.sub;
+      }).catch(() => {});
+    }
+  }
+
   // ── Scheda 48 h ────────────────────────────────────────────────────────────
   function closeSheet() {
     els.sheet.classList.remove('open');
@@ -342,6 +428,7 @@
 
   async function openSheet(p) {
     const sheet = els.sheet;
+    sheet._place = p;
     const now = ctx.nowTemp(p.lat, p.lon);
     sheet.innerHTML = headHTML(p, now) + '<div class="ml-state">Calcolo le previsioni…</div>';
     sheet.querySelector('.ml-close').addEventListener('click', closeSheet);
@@ -510,6 +597,10 @@
       if (ctx) return;
       ctx = options;
       build();
+    },
+    // Chiamata da app.js dopo il fitBounds iniziale: apre la scheda sulla posizione, se possibile.
+    locateOnStart() {
+      if (ctx) locate(true);
     },
   };
 })();
