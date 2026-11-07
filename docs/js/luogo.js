@@ -371,8 +371,7 @@
       renderGrid(grid, gutter, columns(series, nwp, step), !!nwp, step === 3 ? COL3 : COL1);
       sheet.querySelector('.ml-foot').textContent =
         'Temperatura, percepita e vento medio: modello M2, stazioni della rete. ' +
-        (nwp ? `Cielo e pioggia (mm ${step === 3 ? 'nelle 3 ore' : "nell'ora"}): ICON-2I via Open-Meteo. ` +
-               'Raffiche: la più forte tra ICON-2I e IFS, mai sotto il vento medio.'
+        (nwp ? `Cielo e pioggia (mm ${step === 3 ? 'nelle 3 ore' : "nell'ora"}): ICON-2I via Open-Meteo.`
              : 'Cielo, pioggia e raffiche non disponibili (Open-Meteo non risponde).');
     };
     sheet.querySelector('.ml-step').addEventListener('click', e => {
