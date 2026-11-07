@@ -67,6 +67,18 @@
     .panel-head { display: flex; flex-direction: column; }
     .info-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
     .info-title { display: flex; align-items: center; gap: 8px; }
+    /* Testata del sito: logo (ricarica) · lente · impostazioni */
+    .head-row { display: flex; align-items: center; gap: 6px; }
+    button.info-title { flex: 1; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+    .head-btn { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06); color: var(--text-secondary); cursor: pointer; transition: background .15s, color .15s; }
+    .head-btn:hover { background: rgba(255, 255, 255, 0.12); color: var(--text-primary); }
+    .head-btn.active { background: var(--accent); color: #fff; }
+    #panel-settings { display: flex; flex-direction: column; gap: 8px; }
+    #panel-settings[hidden] { display: none; }
+    /* L'ora della previsione la dice già la barra in basso */
+    #control-panel #valid-for-label { display: none; }
+    .prefs-label { font-size: 11px; color: var(--text-muted); margin-bottom: -4px; }
     .info-title .brand-mark { width: 26px; height: 26px; flex: 0 0 auto; }
     .info-title .brand-word { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
     .info-update { font-size: 11px; color: var(--text-secondary); }
@@ -114,6 +126,13 @@
       color: var(--text-secondary);
     }
     .ctrl-row:hover { color: var(--text-primary); }
+    .ctrl-row.is-disabled { opacity: .4; cursor: default; }
+    /* Valori lungo le linee di livello (stile isobare) */
+    .contour-label { pointer-events: none; }
+    .contour-label span { display: inline-block; transform: translate(-50%, -50%); padding: 0 4px; border-radius: 4px;
+      background: rgba(14, 17, 25, 0.78); font: 600 10px/14px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .ctrl-row.is-disabled:hover { color: var(--text-secondary); }
     .ctrl-row input[type="checkbox"] {
       position: absolute;
       opacity: 0;
@@ -236,10 +255,21 @@
       font-size: 12px;
       line-height: 1.6;
     }
-    .meteo-popup .leaflet-popup-content > b:first-child {
+    .meteo-popup .leaflet-popup-content > b:first-child,
+    .meteo-popup .pp-name {
       font-size: 13px;
       font-weight: 600;
     }
+    .pp-name { display: block; padding-right: 14px; }
+    .pp-min .pp-line { margin-top: 2px; }
+    .pp-k { color: var(--text-secondary); }
+    .pp-min .pp-v { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+    /* Il nome nel popup apre la scheda 48 h */
+    .pp-link { border: 0; background: none; padding: 0 14px 0 0; color: inherit; font: inherit; font-size: 13px; font-weight: 600;
+      cursor: pointer; text-align: left; display: flex; align-items: baseline; gap: 4px; }
+    .pp-link:hover { color: var(--accent); }
+    .pp-link .pp-chev { color: var(--accent); font-size: 16px; line-height: 1; }
+    .pp-wname { color: var(--text-muted); font-style: italic; }
     .meteo-popup .leaflet-popup-tip {
       background: var(--bg-panel);
       border: 0.5px solid var(--border-panel);
@@ -615,6 +645,7 @@
       align-self: flex-end;
     }
     .is-pwa #prefs-popover .pill span { padding: 5px 11px; border-radius: 6px; font-size: 11px; }
+    .is-pwa #prefs-popover .prefs-label { align-self: flex-end; margin: 4px 0 0; }
     .is-pwa #prefs-popover .panel-divider { background: var(--border-soft); margin: 7px 0; }
     .is-pwa #prefs-popover .dashboard-link {
       padding-top: 2px; color: var(--text-2); font-size: 12.5px;

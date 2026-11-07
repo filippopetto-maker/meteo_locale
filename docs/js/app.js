@@ -80,7 +80,137 @@
     ];
   }
 
-  function renderGridLayer(gridData, vMin, vMax, palette, alpha = 127) {
+  // ── Linee di livello (impostazione "Linee di livello") ─────────────────────
+  // Marching squares sulla griglia: per ogni livello, i segmenti dove il campo attraversa il valore.
+  // Le linee sono vettoriali (canvas di Leaflet), quindi restano nitide a ogni zoom; sotto resta
+  // un velo leggero della mappa colorata per leggere dove fa più caldo o più freddo.
+  let contourMode = (() => { try { return localStorage.getItem('metek.mappa.linee') === '1'; } catch { return false; } })();
+  let contourRenderer = null;
+
+  // Passo "tondo" per avere circa `target` linee nell'intervallo (vento: dipende dalle 48 h)
+  function niceStep(span, target) {
+    const raw = span / target;
+    const p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const m = raw / p;
+    return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p;
+  }
+
+  function contourSegments(grid, levels) {
+    const { nx, ny, lat_min, lat_max, lon_min, lon_max, values } = grid;
+    const dLat = (lat_max - lat_min) / (ny - 1), dLon = (lon_max - lon_min) / (nx - 1);
+    const out = levels.map(() => []);
+    const L0 = levels[0], step = levels.length > 1 ? levels[1] - levels[0] : 1;
+    // La prima e l'ultima riga/colonna della griglia sono copie di bordo (valori non fisici):
+    // si saltano, altrimenti compare una linea lungo il contorno della mappa
+    for (let r = 1; r < ny - 2; r++) {
+      const la0 = lat_max - r * dLat, la1 = la0 - dLat;
+      for (let c = 1; c < nx - 2; c++) {
+        const tl = values[r * nx + c], tr = values[r * nx + c + 1];
+        const bl = values[(r + 1) * nx + c], br = values[(r + 1) * nx + c + 1];
+        if (tl == null || tr == null || bl == null || br == null) continue;
+        const lo = Math.min(tl, tr, bl, br), hi = Math.max(tl, tr, bl, br);
+        let k0 = Math.max(0, Math.ceil((lo - L0) / step)), k1 = Math.min(levels.length - 1, Math.floor((hi - L0) / step));
+        if (k1 < k0) continue;
+        const lo0 = lon_min + c * dLon, lo1 = lo0 + dLon;
+        for (let k = k0; k <= k1; k++) {
+          const v = levels[k];
+          const idx = (tl > v ? 8 : 0) | (tr > v ? 4 : 0) | (br > v ? 2 : 0) | (bl > v ? 1 : 0);
+          if (idx === 0 || idx === 15) continue;
+          // punti sui quattro lati (interpolazione lineare)
+          const top    = () => [la0, lo0 + dLon * (v - tl) / (tr - tl)];
+          const right  = () => [la0 - dLat * (v - tr) / (br - tr), lo1];
+          const bottom = () => [la1, lo0 + dLon * (v - bl) / (br - bl)];
+          const left   = () => [la0 - dLat * (v - tl) / (bl - tl), lo0];
+          const seg = out[k];
+          switch (idx) {
+            case 1: case 14: seg.push([left(), bottom()]); break;
+            case 2: case 13: seg.push([bottom(), right()]); break;
+            case 3: case 12: seg.push([left(), right()]); break;
+            case 4: case 11: seg.push([top(), right()]); break;
+            case 6: case 9:  seg.push([top(), bottom()]); break;
+            case 7: case 8:  seg.push([left(), top()]); break;
+            case 5: case 10: {  // sella: decide la media dei quattro angoli
+              const mid = (tl + tr + bl + br) / 4 > v;
+              if ((idx === 5) === mid) { seg.push([left(), top()]); seg.push([bottom(), right()]); }
+              else { seg.push([left(), bottom()]); seg.push([top(), right()]); }
+              break;
+            }
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // Etichette dei valori lungo le linee marcate, come le isobare: rimesse a ogni zoom/spostamento,
+  // al massimo una ogni ~240 px sulla stessa linea e mai addosso a un'altra etichetta.
+  const ContourLabels = L.Layer.extend({
+    initialize(cands) { this._c = cands; this._g = L.layerGroup(); },
+    onAdd(map) {
+      this._m = map;
+      this._g.addTo(map);
+      map.on('zoomend moveend', this._place, this);
+      this._place();
+    },
+    onRemove(map) {
+      map.off('zoomend moveend', this._place, this);
+      map.removeLayer(this._g);
+      this._m = null;
+    },
+    _place() {
+      const map = this._m;
+      if (!map) return;
+      this._g.clearLayers();
+      const size = map.getSize(), kept = [], perLevel = new Map();
+      for (const c of this._c) {
+        const p = map.latLngToContainerPoint([c.lat, c.lng]);
+        if (p.x < 24 || p.y < 24 || p.x > size.x - 24 || p.y > size.y - 24) continue;
+        const same = perLevel.get(c.v) || [];
+        if (same.some(q => q.distanceTo(p) < 240) || kept.some(q => q.distanceTo(p) < 48)) continue;
+        same.push(p); perLevel.set(c.v, same); kept.push(p);
+        this._g.addLayer(L.marker([c.lat, c.lng], {
+          interactive: false, keyboard: false,
+          icon: L.divIcon({ className: 'contour-label', iconSize: null, html: `<span style="color:${c.color}">${c.text}</span>` }),
+        }));
+        if (kept.length >= 80) break;
+      }
+    },
+  });
+
+  function renderContours(gridData, vMin, vMax, palette, step, major, fmt) {
+    if (!contourRenderer) contourRenderer = L.canvas({ padding: 0.3 });
+    const vals = gridData.values.filter(v => v != null);
+    const gMin = Math.min(...vals), gMax = Math.max(...vals);
+    const levels = [];
+    for (let v = Math.ceil(gMin / step) * step; v <= gMax + 1e-9; v += step) levels.push(+v.toFixed(6));
+    if (!levels.length) return null;
+    const segs = contourSegments(gridData, levels);
+    const lines = [], cands = [];
+    levels.forEach((v, k) => {
+      if (!segs[k].length) return;
+      const [r, g, b] = valueToColor(v, vMin, vMax, palette);
+      // schiarite verso il bianco: sul fondo scuro i colori della scala da soli si perdono
+      const mix = x => Math.round(x + (255 - x) * 0.35);
+      const isMajor = Math.abs(v / major - Math.round(v / major)) < 1e-6;
+      const color = `rgb(${mix(r)},${mix(g)},${mix(b)})`;
+      lines.push(L.polyline(segs[k], {
+        renderer: contourRenderer, interactive: false, smoothFactor: 0,
+        color, weight: isMajor ? 2 : 1, opacity: isMajor ? 1 : 0.85,
+      }));
+      if (isMajor && fmt) {
+        const text = fmt(v);
+        segs[k].forEach((sg, i) => {
+          if (i % 4) return;  // candidati sparsi: la scelta finale la fa ContourLabels
+          cands.push({ lat: (sg[0][0] + sg[1][0]) / 2, lng: (sg[0][1] + sg[1][1]) / 2, v, color, text });
+        });
+      }
+    });
+    return L.layerGroup([renderGridLayer(gridData, vMin, vMax, palette, 55, null), ...lines,
+                         ...(cands.length ? [new ContourLabels(cands)] : [])]);
+  }
+
+  function renderGridLayer(gridData, vMin, vMax, palette, alpha = 127, contour) {
+    if (contourMode && contour) return renderContours(gridData, vMin, vMax, palette, contour.step, contour.major, contour.fmt);
     const { nx, ny, lat_min, lat_max, lon_min, lon_max, values } = gridData;
     const canvas = document.createElement('canvas');
     canvas.width = nx; canvas.height = ny;
@@ -137,15 +267,19 @@
     return tempC + 0.33 * e - 0.70 * v - 4.0;
   }
 
+  // Linee ogni 0,5 °C (marcate ed etichettate ogni 2,5 °C); umidità ogni 5% (marcate ogni 10%)
+  const CONTOUR_T = { step: 0.5, major: 2.5, fmt: v => (Number.isInteger(v) ? v : v.toFixed(1)) + '°' };
+  const CONTOUR_H = { step: 5, major: 10, fmt: v => Math.round(v) + '%' };
+
   function renderTemperature(latest, time) {
     if (tempMode === 'apparent') {
       const ag = time === 'forecast' ? apparentGridFc : apparentGridObs;
       if (!ag) return null;
-      return renderGridLayer(ag, globalAMin, globalAMax, TEMP_PALETTE, 127);
+      return renderGridLayer(ag, globalAMin, globalAMax, TEMP_PALETTE, 127, CONTOUR_T);
     }
     const tg = time === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
     if (!tg || !tg.values || tg.values.length === 0) return null;
-    return renderGridLayer(tg, globalTMin, globalTMax, TEMP_PALETTE, 127);
+    return renderGridLayer(tg, globalTMin, globalTMax, TEMP_PALETTE, 127, CONTOUR_T);
   }
 
   function renderHumidity(latest, time) {
@@ -153,17 +287,20 @@
       const wg = time === 'forecast' ? wetBulbGridFc : wetBulbGridObs;
       if (!wg) return null;
       // Palette temperatura: il bulbo umido è una temperatura, non una percentuale
-      return renderGridLayer(wg, globalWMin, globalWMax, TEMP_PALETTE, 149);
+      return renderGridLayer(wg, globalWMin, globalWMax, TEMP_PALETTE, 149, CONTOUR_T);
     }
     const hg = time === 'forecast' ? latest.humidity_grid_forecast : latest.humidity_grid_observed;
     if (!hg || !hg.values || hg.values.length === 0) return null;
-    return renderGridLayer(hg, globalHMin, globalHMax, HUM_PALETTE, 149);
+    return renderGridLayer(hg, globalHMin, globalHMax, HUM_PALETTE, 149, CONTOUR_H);
   }
 
   function renderWindSpeed(latest) {
     const wg = latest.wind_speed_grid;
     if (!wg || !wg.values || wg.values.length === 0) return null;
-    return renderGridLayer(wg, wg.ws_min, wg.ws_max, WIND_PALETTE, 149);
+    // Vento: passo scelto sull'intervallo delle 48 h (ws_min/ws_max), circa 16 linee
+    const wStep = niceStep(Math.max(5, wg.ws_max - wg.ws_min), 16);
+    const wFmt = v => (windUnit === 'kts' ? (v * 0.539957).toFixed(1) : (Number.isInteger(v) ? v : v.toFixed(1)));
+    return renderGridLayer(wg, wg.ws_min, wg.ws_max, WIND_PALETTE, 149, { step: wStep, major: wStep * 5, fmt: wFmt });
   }
 
   let windUnit = 'kmh'; // 'kmh' | 'kts'
@@ -180,6 +317,8 @@
   let activeTime = 'observed';  // 'observed' | 'forecast'
   let tempMode = 'real';  // 'real' | 'apparent'  — solo tab Temperatura
   let humMode  = 'real';  // 'real' | 'wetbulb'   — solo tab Umidità
+  const POPUP_STYLE_KEY = 'metek.popup.stile';
+  let popupStyle = (() => { try { return localStorage.getItem(POPUP_STYLE_KEY) === 'min' ? 'min' : 'full'; } catch { return 'full'; } })();
 
   // Range temperatura unificato tra le due griglie (Adesso e +1h)
   let globalTMin = 0;
@@ -240,11 +379,11 @@
     return markers;
   }
 
-  function renderWind(map, windGrid) {
+  function renderWind(map, windGrid, show = true) {
     if (!windGrid || !windGrid[0] || !windGrid[0].data || windGrid[0].data.length === 0) {
       return null;
     }
-    return L.velocityLayer({
+    const layer = L.velocityLayer({
       displayValues: false,
       displayOptions: {
         velocityType:   'Wind',
@@ -259,7 +398,11 @@
       particleAge:   64,
       lineWidth:     2,
       opacity:       0.9,
-    }).addTo(map);
+    });
+    // Con le linee di livello attive le particelle non si aggiungono nemmeno (aggiungerle e
+    // toglierle subito lascia timer di leaflet-velocity che scrivono errori in console)
+    if (show) layer.addTo(map);
+    return layer;
   }
 
   const _localityCache = {};
@@ -646,6 +789,11 @@
       // byte-per-byte, riusato sia nel pannello legacy sia nel popover PWA: stessi id, quindi
       // switchLayer()/i listener di wind-check/arrow-check/unità restano invariati sotto.
       const prefsRowsHtml =
+        `<label class="ctrl-row" id="contour-toggle">` +
+        `<input type="checkbox" id="contour-check">` +
+        `<span class="switch"></span>` +
+        `<span>Linee di livello</span>` +
+        `</label>` +
         `<label class="ctrl-row" id="wind-toggle">` +
         `<input type="checkbox" id="wind-check" checked>` +
         `<span class="switch"></span>` +
@@ -659,7 +807,16 @@
         `<div class="pill-group" id="wind-unit-group">` +
         `<label class="pill"><input type="radio" name="wind-unit" value="kmh" checked><span>km/h</span></label>` +
         `<label class="pill"><input type="radio" name="wind-unit" value="kts"><span>nodi</span></label>` +
+        `</div>` +
+        `<div class="prefs-label">Popup sulla mappa</div>` +
+        `<div class="pill-group" id="popup-style-group">` +
+        `<label class="pill"><input type="radio" name="popup-style" value="full"><span>Completo</span></label>` +
+        `<label class="pill"><input type="radio" name="popup-style" value="min"><span>Minimale</span></label>` +
         `</div>`;
+
+      const ICON_SLIDERS_SM =
+        `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">` +
+        `<path d="M4 7h9M17 7h3M4 17h3M11 17h9"></path><circle cx="15" cy="7" r="2.3"></circle><circle cx="9" cy="17" r="2.3"></circle></svg>`;
 
       // Logo Metek (tre onde + sole): lo stesso nel lockup della PWA e nel pannello del sito
       const BRAND_MARK_SVG =
@@ -699,10 +856,13 @@
 
         // ─── Gesto diagnostico nascosto: 5 tap rapidi sul logo → runDiagBadge() ───
         // Permanente: innocuo perché richiede un'azione esplicita dell'utente.
-        let tapCount = 0, tapTimer = null;
+        // Un tocco solo ricarica l'app (dopo una breve attesa, per distinguerlo dai 5 tocchi).
+        let tapCount = 0, tapTimer = null, reloadTimer = null;
         brand.addEventListener('click', () => {
           tapCount++;
           clearTimeout(tapTimer);
+          clearTimeout(reloadTimer);
+          if (tapCount === 1) reloadTimer = setTimeout(() => location.reload(), 400);
           tapTimer = setTimeout(() => { tapCount = 0; }, 2000);
           if (tapCount >= 5) {
             tapCount = 0;
@@ -755,7 +915,12 @@
         infoPanel.id = 'control-panel';
         infoPanel.innerHTML =
           `<div class="panel-head">` +
-          `<div class="info-title">${BRAND_MARK_SVG}<span class="brand-word">Metek</span></div>` +
+          `<div class="head-row">` +
+          `<button class="info-title" id="brand-reload" type="button" title="Ricarica">${BRAND_MARK_SVG}<span class="brand-word">Metek</span></button>` +
+          `<button class="head-btn" id="head-search" type="button" aria-label="Cerca un luogo" title="Cerca un luogo">` +
+          `<svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m12.2 12.2 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` +
+          `<button class="head-btn" id="head-prefs" type="button" aria-label="Impostazioni" aria-expanded="false" aria-controls="panel-settings" title="Impostazioni">${ICON_SLIDERS_SM}</button>` +
+          `</div>` +
           `<div id="info-mos">` +
           `<div class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</div>` +
           `<div class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</div>` +
@@ -776,13 +941,36 @@
           `<button id="btn-hreal" class="active">Reale</button>` +
           `<button id="btn-hwb">Bulbo umido</button>` +
           `</div>` +
+          `<div id="panel-settings" hidden>` +
+          `<div class="panel-divider"></div>` +
           prefsRowsHtml +
+          `</div>` +
           `<div class="panel-divider"></div>` +
           `<a class="dashboard-link" href="dashboard.html">` +
           `<span>📊 Dashboard</span><span class="chevron">›</span>` +
           `</a>`;
         document.body.appendChild(infoPanel);
+
+        // Logo e scritta ricaricano la pagina (come Cmd+R); lente → ricerca; ingranaggio → impostazioni
+        document.getElementById('brand-reload').addEventListener('click', () => location.reload());
+        document.getElementById('head-search').addEventListener('click', () => window.MeteoLuogo?.openSearch());
+        const headPrefs = document.getElementById('head-prefs');
+        headPrefs.addEventListener('click', () => {
+          const box = document.getElementById('panel-settings');
+          box.hidden = !box.hidden;
+          headPrefs.classList.toggle('active', !box.hidden);
+          headPrefs.setAttribute('aria-expanded', String(!box.hidden));
+        });
       }
+
+      // Stile del popup sulla mappa: completo (tutti i valori) o minimale (solo il dato del layer)
+      document.querySelectorAll('input[name="popup-style"]').forEach(r => {
+        r.checked = r.value === popupStyle;
+        r.addEventListener('change', e => {
+          popupStyle = e.target.value;
+          try { localStorage.setItem(POPUP_STYLE_KEY, popupStyle); } catch { /* storage bloccato */ }
+        });
+      });
 
       // Legenda — bottom-right (aggiornata da updateLegend)
       const legend = L.DomUtil.create('div', 'temp-legend');
@@ -960,6 +1148,9 @@
           }
         }
 
+        const contourToggle = document.getElementById('contour-toggle');
+        if (contourToggle) contourToggle.style.display = layer === 'radar' ? 'none' : '';
+
         if (layer === 'radar') {
           if (windToggle)    windToggle.style.display    = 'none';
           if (arrowToggle)   arrowToggle.style.display   = 'none';
@@ -980,7 +1171,7 @@
           // Frecce off di default → reset checkbox e mostra particelle
           if (arrowCheck) arrowCheck.checked = false;
           clearArrowLayer(map);
-          if (windLayer) windLayer.addTo(map);
+          if (windLayer && !contourMode) windLayer.addTo(map);
         } else {
           if (windToggle)  windToggle.style.display  = '';
           if (arrowToggle) arrowToggle.style.display = 'none';
@@ -988,7 +1179,7 @@
           showStations(map, stationMarkers);
           // Particelle: rispetta stato di #wind-check
           if (windLayer) {
-            if (windCheck && windCheck.checked) windLayer.addTo(map);
+            if (windCheck && windCheck.checked && !contourMode) windLayer.addTo(map);
             else map.removeLayer(windLayer);
           }
           if (layer === 'temperature') {
@@ -1460,7 +1651,7 @@
       window.MeteoLuogo?.locateOnStart();
 
       if (windGrid) {
-        windLayer = renderWind(map, windGrid);
+        windLayer = renderWind(map, windGrid, !contourMode);
       }
 
       map.on('zoomend', () => {
@@ -1476,6 +1667,9 @@
           prefsOpen = false;
           renderPrefsVisibility();
         }
+
+        // Popup minimale sul Radar: non c'è un dato del punto da mostrare, niente popup
+        if (popupStyle === 'min' && activeLayer === 'radar') return;
 
         const lat = e.latlng.lat;
         const lng = e.latlng.lng;
@@ -1516,7 +1710,37 @@
         const cardinal = degreesToCardinal(dir);
         const wName    = windName(dir);
 
+        const c1 = v => (v !== null && v !== undefined ? v.toFixed(1) + '°C' : 'n/d');
+        // Il solo dato che si sta guardando (stile minimale)
+        function mainLine() {
+          if (activeLayer === 'temperature') {
+            return tempMode === 'apparent'
+              ? `<span class="pp-k">Percepita</span> <b class="pp-v">${c1(tApp)}</b>`
+              : `<span class="pp-k">Temperatura</span> <b class="pp-v">${c1(temp)}</b>`;
+          }
+          if (activeLayer === 'humidity') {
+            return humMode === 'wetbulb'
+              ? `<span class="pp-k">Bulbo umido</span> <b class="pp-v">${c1(tWb)}</b>`
+              : `<span class="pp-k">Umidità</span> <b class="pp-v">${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>`;
+          }
+          if (activeLayer === 'wind') {
+            return `<span class="pp-k">Vento</span> <b class="pp-v">${formatWind(speed)}</b> <span class="pp-k">${cardinal}</span>` +
+              (wName ? `<br><small class="pp-wname">${wName}</small>` : '');
+          }
+          return '';
+        }
+        // Il nome del luogo è cliccabile e apre la scheda 48 h sul punto (js/luogo.js)
+        function titleHTML(localita) {
+          const attrs = `data-p48 data-lat="${lat}" data-lng="${lng}" data-name="${String(localita).replace(/"/g, '&quot;')}"`;
+          return `<button class="pp-name pp-link" type="button" ${attrs} title="Previsioni 48 ore">${localita}<span class="pp-chev">›</span></button>`;
+        }
+
         function buildContent(localita) {
+          if (popupStyle === 'min') {
+            const line = mainLine();
+            return `<div class="pp pp-min">` + titleHTML(localita) +
+              (line ? `<div class="pp-line">${line}</div>` : '') + `</div>`;
+          }
           const tStr = temp !== null ? temp.toFixed(1) + '°C' : 'n/d';
           let tempLine = `🌡️ <b>${tStr}</b>`;
           if (activeLayer === 'temperature' && tApp !== null) {
@@ -1525,11 +1749,12 @@
             tempLine += ` · 💦 <b>${tWb.toFixed(1)}°C</b>`;
           }
           return (
-            `<b>${localita}</b><br>` +
+            `<div class="pp">` + titleHTML(localita) +
             tempLine + `<br>` +
             `💨 <b>${formatWind(speed)}</b> — ${cardinal}<br>` +
             `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` +
-            `💧 Umidità: <b>${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>`
+            `💧 Umidità: <b>${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>` +
+            `</div>`
           );
         }
 
@@ -1540,6 +1765,13 @@
           .setContent(buildContent('📍 ...'))
           .openOn(map);
         popup.on('remove', () => { popupClosed = true; });
+        // Dal popup alla scheda 48 h sul punto toccato
+        popup.getElement()?.addEventListener('click', ev => {
+          const b = ev.target.closest('[data-p48]');
+          if (!b) return;
+          const name = b.dataset.name && !b.dataset.name.startsWith('📍') ? b.dataset.name : 'Punto sulla mappa';
+          window.MeteoLuogo?.open({ name, sub: 'punto sulla mappa', lat: +b.dataset.lat, lon: +b.dataset.lng });
+        });
 
         const localita = await getLocalityName(lat, lng);
         if (!popupClosed) popup.setContent(buildContent(localita));
@@ -1558,7 +1790,41 @@
           windUnit = e.target.value;
           updateStationPopups(stationMarkers, stations);
           updateWindLegend();
+          // Le etichette delle linee del vento sono nell'unità scelta
+          if (contourMode && activeLayer === 'wind') {
+            if (heatOverlay) map.removeLayer(heatOverlay);
+            heatOverlay = renderWindSpeed(latest);
+            if (heatOverlay) heatOverlay.addTo(map);
+          }
         });
+      });
+
+      // Linee di livello: con le linee le particelle del vento si spengono (sarebbe troppo confuso)
+      const contourCheck = document.getElementById('contour-check');
+      function syncContourUI() {
+        contourCheck.checked = contourMode;
+        const wc = document.getElementById('wind-check');
+        if (wc) wc.disabled = contourMode;
+        document.getElementById('wind-toggle')?.classList.toggle('is-disabled', contourMode);
+      }
+      syncContourUI();
+      contourCheck.addEventListener('change', e => {
+        contourMode = e.target.checked;
+        try { localStorage.setItem('metek.mappa.linee', contourMode ? '1' : '0'); } catch { /* storage bloccato */ }
+        syncContourUI();
+        if (windLayer) {
+          const wc = document.getElementById('wind-check');
+          const arrows = document.getElementById('arrow-check')?.checked;
+          const want = !contourMode && (activeLayer === 'wind' ? !arrows : (activeLayer !== 'radar' && wc?.checked));
+          if (want) windLayer.addTo(map); else map.removeLayer(windLayer);
+        }
+        if (activeLayer !== 'radar') {
+          if (activeLayer === 'wind') {
+            if (heatOverlay) map.removeLayer(heatOverlay);
+            heatOverlay = renderWindSpeed(latest);
+            if (heatOverlay) heatOverlay.addTo(map);
+          } else switchLayer(activeLayer);
+        }
       });
 
       document.getElementById('wind-check').addEventListener('change', e => {
@@ -1577,7 +1843,7 @@
           clearArrowLayer(map);
           showStations(map, stationMarkers);
           const windCheck = document.getElementById('wind-check');
-          if (windLayer && windCheck && windCheck.checked) windLayer.addTo(map);
+          if (windLayer && windCheck && windCheck.checked && !contourMode) windLayer.addTo(map);
         }
       });
 

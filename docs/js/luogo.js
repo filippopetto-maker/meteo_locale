@@ -45,6 +45,10 @@
       .formatToParts(new Date(ms)).forEach(x => { p[x.type] = x.value; });
     return { hour: parseInt(p.hour, 10), day: p.weekday.charAt(0).toUpperCase() + p.weekday.slice(1) + ' ' + p.day };
   };
+  function removeRecent(p) {
+    if (!p) return;
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(readRecent().filter(r => r.name !== p.name))); } catch { /* storage pieno o bloccato */ }
+  }
   function readRecent() { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } }
   function saveRecent(p) {
     try {
@@ -98,8 +102,10 @@
   .ml-search { position: fixed; z-index: 1100; left: 14px; bottom: calc(104px + env(safe-area-inset-bottom, 0px)); } /* sopra la barra Ora/+48 h */
   .is-pwa .ml-search { bottom: auto; top: calc(env(safe-area-inset-top, 0px) + 51px); }
   .ml-search.open { right: 14px; }
-  html:not(.is-pwa) .ml-search { display: flex; flex-direction: column-reverse; }
-  html:not(.is-pwa) .ml-list { margin: 0 0 8px; }
+  /* Sito: niente lente in basso, la ricerca si apre in alto dalla lente accanto a "Metek" (app.js) */
+  html:not(.is-pwa) .ml-search { top: calc(10px + env(safe-area-inset-top, 0px)); bottom: auto; left: 10px; display: flex; flex-direction: column; }
+  html:not(.is-pwa) .ml-search:not(.open) { display: none; }
+  html:not(.is-pwa) .ml-search.open { right: 10px; }
   @media (min-width: 700px) { html:not(.is-pwa) .ml-search.open { right: auto; width: 380px; } }
   html:not(.is-pwa) body.ml-sheet-open .ml-search:not(.open) { display: none; }
   .ml-field { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 6px 0 12px; background: var(--ml-glass);
@@ -117,6 +123,10 @@
   .ml-list[hidden] { display: none; }
   .ml-opt { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; cursor: pointer; }
   .ml-opt[aria-selected="true"] { background: var(--ml-accent-fill); }
+  .ml-opt > div { flex: 1; min-width: 0; }
+  .ml-del { flex: 0 0 auto; width: 28px; height: 28px; border: 0; border-radius: 999px; background: transparent; color: var(--ml-text-3);
+    font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+  .ml-del:hover { background: rgba(255,255,255,.08); color: var(--ml-text); }
   .ml-pin { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--ml-accent); flex: 0 0 auto; }
   .ml-pin.st { background: var(--ml-accent); }
   .ml-pin.gps { border-color: var(--ml-rain); background: var(--ml-rain); box-shadow: 0 0 0 3px rgba(94,176,245,.25); }
@@ -218,7 +228,11 @@
       const o = e.target.closest('.ml-opt');
       if (o && +o.dataset.i !== active) { active = +o.dataset.i; paintActive(); }
     });
-    els.list.addEventListener('click', e => { const o = e.target.closest('.ml-opt'); if (o) pick(hits[+o.dataset.i]); });
+    els.list.addEventListener('click', e => {
+      const del = e.target.closest('.ml-del');
+      if (del) { e.stopPropagation(); removeRecent(hits[+del.dataset.i]); renderRecent(); els.input.focus(); return; }
+      const o = e.target.closest('.ml-opt'); if (o) pick(hits[+o.dataset.i]);
+    });
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheet.classList.contains('open') && !box.classList.contains('open')) closeSheet(); });
     ctx.map.on('click', () => { userActed = true; });
 
@@ -258,7 +272,7 @@
     else if (e.key === 'Enter') { e.preventDefault(); if (hits[active]) pick(hits[active]); }
   }
   function renderRecent() {
-    const rec = readRecent().filter(r => inBounds(r.lat, r.lon));
+    const rec = readRecent().filter(r => inBounds(r.lat, r.lon)).map(r => ({ ...r, recent: true }));
     const gps = geoSupported() ? [{ name: 'La tua posizione', sub: 'usa la posizione del dispositivo', gps: true }] : [];
     hits = [...gps, ...rec];
     active = 0;
@@ -317,7 +331,9 @@
   function optHTML(p, i) {
     return `<div class="ml-opt" role="option" data-i="${i}" aria-selected="${i === active}">` +
       `<span class="ml-pin${p.station ? ' st' : p.gps ? ' gps' : ''}"></span><div><div class="ml-n">${esc(p.name)}</div>` +
-      (p.sub ? `<div class="ml-s">${esc(p.sub)}</div>` : '') + `</div></div>`;
+      (p.sub ? `<div class="ml-s">${esc(p.sub)}</div>` : '') + `</div>` +
+      (p.recent ? `<button class="ml-del" type="button" data-i="${i}" aria-label="Togli ${esc(p.name)} dai recenti">×</button>` : '') +
+      `</div>`;
   }
   function showList(html) {
     els.list.innerHTML = html;
@@ -601,6 +617,14 @@
     // Chiamata da app.js dopo il fitBounds iniziale: apre la scheda sulla posizione, se possibile.
     locateOnStart() {
       if (ctx) locate(true);
+    },
+    // Sito: la lente accanto a "Metek" apre la ricerca
+    openSearch() {
+      if (ctx) openSearch();
+    },
+    // Popup della mappa: scheda 48 h sul punto toccato (non finisce nei recenti)
+    open(p) {
+      if (ctx && p) { userActed = true; focusPlace(p); }
     },
   };
 })();
