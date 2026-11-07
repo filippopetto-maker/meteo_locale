@@ -5,7 +5,10 @@
 // Fonti nella scheda:
 //   - temperatura, percepita, umidità, vento medio e direzione: M2 (data/forecast_48h.json), con la
 //     stessa interpolazione della timeline della mappa (pointSeries in app.js);
-//   - cielo (icona), pioggia e raffiche: ICON-2I via Open-Meteo, perché M2 non li prevede;
+//   - cielo (icona) e pioggia: ICON-2I via Open-Meteo, perché M2 non li prevede;
+//   - raffiche: il massimo tra ICON-2I e IFS (Open-Meteo), mai sotto il vento medio M2 della stessa ora.
+//     Contro le raffiche METAR del Lazio (nov 2024 – ott 2026) coglie l'86% degli eventi ≥40 km/h e il
+//     73% di quelli ≥60, contro 75% e 67% di ICON-2I da solo (scripts/experiment_m2_gust.py);
 //   - ricerca dei nomi: geocoding Open-Meteo (GeoNames), limitata al riquadro della mappa, più le stazioni.
 // app.js chiama MeteoLuogo.init(...) quando mappa e dati sono pronti.
 (function () {
@@ -368,7 +371,8 @@
       renderGrid(grid, gutter, columns(series, nwp, step), !!nwp, step === 3 ? COL3 : COL1);
       sheet.querySelector('.ml-foot').textContent =
         'Temperatura, percepita e vento medio: modello M2, stazioni della rete. ' +
-        (nwp ? `Cielo, pioggia (mm ${step === 3 ? 'nelle 3 ore' : "nell'ora"}) e raffiche: ICON-2I via Open-Meteo.`
+        (nwp ? `Cielo e pioggia (mm ${step === 3 ? 'nelle 3 ore' : "nell'ora"}): ICON-2I via Open-Meteo. ` +
+               'Raffiche: la più forte tra ICON-2I e IFS, mai sotto il vento medio.'
              : 'Cielo, pioggia e raffiche non disponibili (Open-Meteo non risponde).');
     };
     sheet.querySelector('.ml-step').addEventListener('click', e => {
@@ -381,7 +385,8 @@
     draw();
   }
 
-  // Cielo, pioggia e raffiche ora per ora da ICON-2I; se mancano ore, si riprova col modello di default
+  // Cielo, pioggia e raffiche ora per ora da ICON-2I; se mancano ore, si riprova col modello di default.
+  // Le raffiche IFS arrivano da una seconda richiesta e la raffica dell'ora è la più forte delle due.
   async function fetchNWP(lat, lon) {
     const q = `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&hourly=precipitation,weather_code,wind_gusts_10m,is_day&timezone=UTC&forecast_days=3`;
     const get = async (model) => {
@@ -397,17 +402,32 @@
         return m;
       } catch { return null; }
     };
-    const icon = await get('italia_meteo_arpae_icon_2i');
+    const ifsGusts = async () => {
+      try {
+        const res = await fetch(`${FC_URL}?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}` +
+          '&hourly=wind_gusts_10m&models=ecmwf_ifs025&timezone=UTC&forecast_days=3');
+        if (!res.ok) return null;
+        const h = (await res.json()).hourly;
+        return h?.time ? new Map(h.time.map((t, i) => [Date.parse(t + 'Z'), h.wind_gusts_10m[i]])) : null;
+      } catch { return null; }
+    };
+    const [icon, ifs] = await Promise.all([get('italia_meteo_arpae_icon_2i'), ifsGusts()]);
+    let out = icon;
     const fill = await (icon && [...icon.values()].filter(v => v.wc == null).length < 6 ? null : get(null));
-    if (!icon) return fill;
-    if (fill) for (const [k, v] of icon) if (v.wc == null && fill.has(k)) icon.set(k, fill.get(k));
-    return icon;
+    if (!icon) out = fill;
+    else if (fill) for (const [k, v] of icon) if (v.wc == null && fill.has(k)) icon.set(k, fill.get(k));
+    if (out && ifs) for (const [k, v] of out) {
+      const g = ifs.get(k);
+      if (g != null) v.gust = v.gust == null ? g : Math.max(v.gust, g);
+    }
+    return out;
   }
 
   // Passo 3 h: 16 colonne, le ore 1, 4, 7 … 22 (ora italiana); ogni colonna vale per le 3 ore che apre.
   // Passo 1 h: tutte le 48 ore, ogni colonna vale per la sua ora.
   function columns(series, nwp, n = 3) {
     const out = [];
+    const wsAt = new Map(series.map(s => [Date.parse(s.time), s.ws]));  // vento medio M2 ora per ora
     for (const s of series) {
       const ms = Date.parse(s.time);
       const rp = romeParts(ms);
@@ -422,7 +442,10 @@
           const cur = nwp.get(ms + k * 3.6e6);          // cielo e raffica: ore h, h+1, h+2
           const nxt = nwp.get(ms + (k + 1) * 3.6e6);    // pioggia: accumulata nell'ora precedente
           if (cur?.wc != null) wc = wc == null ? cur.wc : Math.max(wc, cur.wc);
-          if (cur?.gust != null) gust = gust == null ? cur.gust : Math.max(gust, cur.gust);
+          if (cur?.gust != null) {
+            const g = Math.max(cur.gust, wsAt.get(ms + k * 3.6e6) ?? 0);  // la raffica non è mai sotto la media
+            gust = gust == null ? g : Math.max(gust, g);
+          }
           if (nxt?.pr != null) { pr += nxt.pr; prN++; }
         }
         c.wc = wc; c.gust = gust; c.pr = prN ? pr : null;
