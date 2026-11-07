@@ -292,14 +292,20 @@ L'umidità osservata era già salvata in `observations` (Netatmo la fornisce sem
 - `docs/js/app.js`: `#time-toggle` esistente esteso al layer Umidità (nessun controllo duplicato — stesso pattern già in uso per Temperatura)
 - **Scala colore umidità passata da fissa (0-100%) a dinamica unificata** tra le due griglie, stesso meccanismo di `globalTMin/globalTMax`. Corregge anche un bug preesistente: la legenda dichiarava `h_min/h_max` dinamici mentre la heatmap renderizzava su 0-100 fisso — valori e colori non corrispondevano
 
-**2. Temperatura percepita (Humidex + Wind Chill) — tab Temperatura**
+**2. Temperatura percepita — tab Temperatura** (Humidex + Wind Chill fino a novembre 2026, poi Steadman)
 
 Switch `Reale / Percepita`. Calcolo interamente client-side: nessuna nuova chiamata backend, deriva da `temp_grid_*` + `humidity_grid_*` + `wind_speed_grid` già presenti in `latest.json`.
 
-Formula a tre rami, non solo Humidex puro — verificato che l'Humidex da solo degenera sotto ~15°C (restituisce valori *inferiori* alla temperatura reale, effetto spurio della formula, non fisiologico):
-- T ≥ 20°C → Humidex (Environment Canada)
-- T ≤ 10°C e vento > 4,8 km/h → Wind Chill (NWS/EC 2001)
-- 10-20°C, o vento insufficiente → temperatura reale
+~~Formula a tre rami: Humidex sopra 20 °C, Wind Chill sotto 10 °C con vento > 4,8 km/h, temperatura reale in mezzo.~~ **Sostituita a novembre 2026 da Steadman (BoM), vedi sotto.**
+
+**Revisione novembre 2026 — Steadman al posto dei tre rami.** `apparentTemp()` usa ora una sola formula, la temperatura apparente di Steadman nella versione all'ombra del Bureau of Meteorology australiano: `AT = T + 0,33·e − 0,70·v − 4,0` (e pressione di vapore in hPa, v vento a 10 m in m/s). Senza vento si mostra la temperatura reale.
+
+Motivi, misurati contro l'UTCI (indice di riferimento WMO, calcolato con `pythermalcomfort`) sulla distribuzione reale di T e RH di `netatmo_hourly_history` (574 mila ore, 2024–26), vento a classi fisse 3/8/15/25 km/h:
+- lo schema a tre rami aveva scalini fino a 3,7 °C a 20 °C (e 2,2 °C a 10 °C), visibili come bordo lungo l'isoterma in mappa e come salti nella scheda 48 h;
+- tra 10 e 20 °C (49% delle ore) ignorava il vento, tra 20 e 25 °C l'Humidex aggiungeva 4–5 °C che all'ombra non esistono;
+- errore medio contro l'UTCI: tre rami 4,0 °C, temperatura reale 4,3, **Steadman 2,6**; salto massimo per 0,1 °C: 0,19 °C.
+
+Valutate e scartate: rampe di raccordo sulle stesse soglie (errore 6,0 all'ombra, uguale ai tre rami), ibrido Steadman/Humidex per temperatura (2,8) e per altezza del sole calcolata astronomicamente (2,7): l'Humidex esagera anche al sole. Steadman più un termine di radiazione ricavato dall'altezza del sole scende a 2,5, ma senza nuvolosità sbaglia in uno dei due sensi; da riprendere quando arriva la radiazione o la nuvolosità (`shortwave_radiation` è già in `ERA5_VARIABLES` e viene scaricata da `model/inference.py`, ma non salvata). Effetto visibile: d'estate la percepita scende parecchio (33 °C e RH 58%: da 43,6 a 37,6), d'autunno si stacca dalla reale anche tra 10 e 20 °C.
 
 **3. Bulbo umido (Stull 2011) — tab Umidità**
 
@@ -313,7 +319,7 @@ RH clampata a [5, 99] (dominio di validità della formula) prima del calcolo, si
 - Popup click mappa: valore derivato mostrato **sempre** accanto alla temperatura reale nella tab pertinente (percepita in Temperatura, bulbo umido in Umidità), letto con `lookupGrid` sulla griglia derivata — mai ricalcolato al volo, per restare coerente al pixel con la heatmap. Vento e Radar invariati, nessun derivato
 
 **Limiti noti, non bloccanti:**
-- Wind Chill usa `wind_speed_grid`, disponibile solo in versione forecast — per "Adesso" è un'approssimazione. Interviene solo sotto i 10°C: nullo in estate, da monitorare al primo autunno freddo
+- La percepita usa `wind_speed_grid`, disponibile solo in versione forecast — per "Adesso" è un'approssimazione. Con Steadman (novembre 2026) il vento conta tutto l'anno: la qualità del vento in mappa pesa più di prima
 - Stull assume pressione al livello del mare — errore di qualche decimo di grado alle quote del Lazio (stazioni `alta_quota`, già in cold-start)
 
 **Verificato prima del deploy:** su dati reali del 7 settembre (55.000 celle), Humidex 28,8-43,1°C contro T 22,9-29,7°C (sale con l'afa, atteso), bulbo umido 19,5-27,4°C (sta sotto, atteso) — le due grandezze si muovono in direzioni opposte, a conferma che tenerle in sezioni separate era la scelta corretta.

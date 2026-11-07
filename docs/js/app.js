@@ -121,23 +121,20 @@
          - 4.686035;
   }
 
-  // Temperatura apparente: Humidex al caldo, Wind Chill al freddo, T reale in mezzo.
-  // - T >= 20°C  → Humidex (Environment Canada)
-  // - T <= 10°C e vento > 4.8 km/h → Wind Chill (NWS/EC 2001)
-  // - altrimenti → temperatura reale (nessuna delle due formule è valida)
-  // L'Humidex da solo degenera al freddo (0.5555·(e−10) negativo sotto ~10 hPa di
-  // pressione di vapore): non è un effetto fisiologico, per questo i tre rami.
+  // Temperatura apparente: Steadman (1994), versione all'ombra del Bureau of Meteorology
+  // australiano. Una sola formula per tutto l'anno, continua, con umidità e vento insieme:
+  //   AT = T + 0.33·e − 0.70·v − 4.0     (e = pressione di vapore in hPa, v = vento a 10 m in m/s)
+  // Sostituisce lo schema a tre rami Humidex/Wind Chill/T reale (scalini fino a 3,7 °C a 20 °C,
+  // vento ignorato tra 10 e 20 °C). Contro l'UTCI (rif. WMO), sulla distribuzione reale
+  // Netatmo 2024–26, l'errore medio scende da 4,0 a 2,6 °C (prova del 7/11/2026).
+  // Senza vento (griglia o serie assente) si mostra la T reale: niente valore inventato.
   function apparentTemp(tempC, rhPct, windKmh) {
-    if (tempC >= 20) {
-      const es = 6.112 * Math.exp(17.62 * tempC / (243.12 + tempC));
-      const e  = es * Math.min(100, Math.max(0, rhPct)) / 100;
-      return tempC + 0.5555 * (e - 10);
-    }
-    if (tempC <= 10 && windKmh != null && windKmh > 4.8) {
-      const v = Math.pow(windKmh, 0.16);
-      return 13.12 + 0.6215 * tempC - 11.37 * v + 0.3965 * tempC * v;
-    }
-    return tempC;
+    if (tempC == null || rhPct == null) return tempC;
+    if (windKmh == null || !isFinite(windKmh)) return tempC;
+    const rh = Math.min(100, Math.max(0, rhPct));
+    const e  = 6.112 * Math.exp(17.62 * tempC / (243.12 + tempC)) * rh / 100;
+    const v  = Math.max(0, windKmh) / 3.6;
+    return tempC + 0.33 * e - 0.70 * v - 4.0;
   }
 
   function renderTemperature(latest, time) {
