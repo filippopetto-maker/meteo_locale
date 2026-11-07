@@ -1114,6 +1114,15 @@
             for (const v of ser.t)  if (v != null) { globalTMin = Math.min(globalTMin, v); globalTMax = Math.max(globalTMax, v); }
             for (const v of ser.rh) if (v != null) { globalHMin = Math.min(globalHMin, v); globalHMax = Math.max(globalHMax, v); }
             for (const v of ser.ws) if (v != null) { wsMin = Math.min(wsMin, v); wsMax = Math.max(wsMax, v); }
+            // Percepita e bulbo umido: stessa logica, ora per ora sulle stazioni
+            ser.t.forEach((tv, k) => {
+              const hv = ser.rh[k];
+              if (tv == null || hv == null) return;
+              const av = apparentTemp(tv, hv, ser.ws[k]);
+              if (av != null && isFinite(av)) { globalAMin = Math.min(globalAMin, av); globalAMax = Math.max(globalAMax, av); }
+              const wv = wetBulbStull(tv, hv);
+              if (isFinite(wv)) { globalWMin = Math.min(globalWMin, wv); globalWMax = Math.max(globalWMax, wv); }
+            });
           }
           if (base.ws) {
             wsRange = { min: Math.round(wsMin), max: Math.round(wsMax) };
@@ -1129,6 +1138,11 @@
           playBtn.addEventListener('click', () => (timer ? pause() : play()));
           setPos(0, true);
           refresh();
+          // La mappa all'apertura è stata disegnata prima che arrivasse forecast_48h, con la scala
+          // di sole Ora e +1h: la si ridisegna con quella delle 48 ore, la stessa che si vede
+          // scorrendo (prima i colori cambiavano dopo aver mosso la barra avanti e indietro)
+          if (activeLayer === 'temperature' || activeLayer === 'humidity') switchTime(activeTime);
+          else if (activeLayer === 'wind') setPos(pos);
         }
 
         // Il vento non ha un "Ora" osservato su griglia: lì la barra parte dalla +1h
