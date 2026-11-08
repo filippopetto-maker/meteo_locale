@@ -27,6 +27,9 @@
   const GEO_OPTS = { enableHighAccuracy: false, timeout: 10000, maximumAge: 10 * 60 * 1000 };
   const WIND_STOPS = ['#003399', '#0099ff', '#00cc66', '#ffdd00', '#ff6600', '#cc0000']; // WIND_PALETTE, 0–50 km/h
 
+  // Da PC (pannello classico, niente .is-pwa) la scheda non si trascina: si apre intera e si chiude con ×.
+  // Col touchpad il trascinamento era scomodo. Telefono e app installata usano le tre posizioni.
+  const DESK = !document.documentElement.classList.contains('is-pwa');
   let ctx = null;           // {map, stations, isPWA, bounds, pointSeries, whenReady, nowTemp, windUnit, localityName}
   let userActed = false;    // l'utente ha già cercato o toccato la mappa: la posizione automatica non si impone
   let ringMarker = null;
@@ -159,6 +162,7 @@
   .ml-grab::after { content: ""; position: absolute; left: 50%; top: 9px; width: 40px; height: 5px; margin-left: -20px; border-radius: 999px; background: rgba(255,255,255,.22); }
   .ml-hero { padding: 0 18px 4px; touch-action: none; cursor: grab; flex: 0 0 auto; user-select: none; -webkit-user-select: none; }
   .ml-hero-row { display: flex; align-items: center; gap: 14px; }
+  html:not(.is-pwa) .ml-hero { cursor: auto; touch-action: auto; user-select: text; -webkit-user-select: text; padding-top: 14px; }
   .ml-big { font-size: 56px; line-height: 1; font-weight: 300; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .ml-hero .ml-place b { font-size: 20px; line-height: 24px; font-weight: 700; }
   .ml-hero .ml-place span { font-size: 12.5px; line-height: 17px; color: var(--ml-text-2); }
@@ -279,7 +283,7 @@
     });
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheet.classList.contains('open') && !box.classList.contains('open')) closeSheet(); });
     // Toccare la mappa con la scheda alzata la riporta in basso
-    ctx.map.on('click', () => { userActed = true; if (sheetState === 'half') setState('peek'); });
+    ctx.map.on('click', () => { userActed = true; if (!DESK && sheetState === 'half') setState('peek'); });
     bindDrag();
 
     const toast = document.createElement('div');
@@ -528,6 +532,7 @@
 
   // Trascinamento: dalla maniglia e dal blocco in alto. Un tocco senza movimento alterna basso/alto.
   function bindDrag() {
+    if (DESK) return;
     const sheet = els.sheet;
     let y0 = null, base = 0, last = 0, lastT = 0, vel = 0, moved = false;
     sheet.addEventListener('pointerdown', e => {
@@ -622,12 +627,13 @@
 
   function heroHTML(p, now) {
     const sub = p.st ? 'stazione della rete' : (p.sub || `${p.lat.toFixed(3)}° N, ${p.lon.toFixed(3)}° E`);
-    return `<button type="button" class="ml-grab" aria-label="Mostra le previsioni"></button>` +
+    return (DESK ? '' : `<button type="button" class="ml-grab" aria-label="Mostra le previsioni"></button>`) +
       `<div class="ml-hero">` +
       `<div class="ml-hero-row">` +
       `<div class="ml-big">${now != null ? Math.round(now) + '°' : '–'}</div>` +
       `<div class="ml-place"><b>${esc(p.name)}</b><span>${esc(sub)}</span></div>` +
       `<div class="ml-sky"></div>` +
+      (DESK ? `<button class="ml-close" type="button" aria-label="Chiudi la scheda">×</button>` : '') +
       `</div>` +
       `<p class="ml-say">${p.st ? 'Misurata adesso dalla stazione.' : 'Calcolo le previsioni…'}</p>` +
       chipsHTML(p) +
@@ -639,6 +645,7 @@
     sheet._place = p;
     const now = p.st ? (p.st.observation?.temperature ?? ctx.nowTemp(p.lat, p.lon)) : ctx.nowTemp(p.lat, p.lon);
     sheet.innerHTML = heroHTML(p, now) + '<div class="ml-more"><div class="ml-state">Calcolo le previsioni…</div></div>';
+    sheet.querySelector('.ml-close')?.addEventListener('click', closeSheet);
     sheet.querySelector('.ml-chip-btn')?.addEventListener('click', e => {
       const s = ctx.stations.find(x => String(x.id) === e.currentTarget.dataset.st);
       if (s) MeteoLuogo.openStation(s);
