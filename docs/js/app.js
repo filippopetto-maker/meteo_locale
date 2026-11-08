@@ -341,6 +341,7 @@
   };
 
   function updateStationPopups(markers, stations) {
+    if (V2) { updateStationPins(markers, stations); return; }
     stations.forEach((st, i) => {
       const fc = st.forecast;
       const ob = st.observation;
@@ -363,7 +364,62 @@
     });
   }
 
+  // ── v2: le stazioni sono pillole col valore del layer attivo; il tocco apre la
+  // scheda della stazione (js/luogo.js) invece del popup ──
+  const V2 = document.documentElement.classList.contains('is-pwa');
+  function pinValue(st) {
+    const obsNow = activeTime === 'observed';
+    // Valori dell'ora mostrata: misura per "Ora", previsione M2 per +1…+48 h
+    const t  = obsNow ? (st.observation?.temperature ?? st.forecast?.temperature) : st.forecast?.temperature;
+    const rh = obsNow ? (st.observation?.humidity ?? st.forecast?.humidity) : st.forecast?.humidity;
+    const ws = st.forecast?.wind_speed ?? null;
+    if (activeLayer === 'temperature') {
+      // Percepita: stessa formula della mappa (Steadman), con il vento previsto della stazione
+      const v = tempMode === 'apparent' ? (t != null && rh != null ? apparentTemp(t, rh, ws) : null) : t;
+      return v != null && isFinite(v) ? { txt: Math.round(v) + '°', v, kind: 't' } : null;
+    }
+    if (activeLayer === 'humidity') {
+      if (humMode === 'wetbulb') {
+        const v = t != null && rh != null ? wetBulbStull(t, rh) : null;
+        return v != null && isFinite(v) ? { txt: Math.round(v) + '°', v, kind: 'wb' } : null;
+      }
+      return rh != null ? { txt: Math.round(rh) + '%', v: rh, kind: 'h' } : null;
+    }
+    if (activeLayer === 'wind') {
+      const v = st.forecast?.wind_speed;
+      return v != null ? { txt: String(Math.round(windUnit === 'kts' ? v * 0.539957 : v)), v, kind: 'w', dir: st.forecast?.wind_direction } : null;
+    }
+    return null;
+  }
+  function pinHTML(st) {
+    const p = pinValue(st);
+    if (!p) return '<div class="st-pin st-dot"></div>';
+    const arrow = p.kind === 'w' && p.dir != null
+      ? `<svg width="10" height="10" viewBox="0 0 16 16" style="transform:rotate(${Math.round(p.dir + 180)}deg)" aria-hidden="true"><path d="M8 1 13 13 8 10 3 13z" fill="currentColor"/></svg>` : '';
+    return `<div class="st-pin">${arrow}${p.txt}</div>`;
+  }
+  function updateStationPins(markers, stations) {
+    if (!V2) return;
+    stations.forEach((st, i) => {
+      const m = markers[i];
+      if (!m) return;
+      // L'icona va aggiornata anche nelle opzioni: se le stazioni vengono tolte e rimesse (impostazioni),
+      // Leaflet ricrea l'elemento da lì e prima ricompariva il valore dell'apertura
+      m.options.icon = pinIcon(st);
+      const el = m.getElement();
+      if (el) el.innerHTML = pinHTML(st);
+    });
+  }
+  const pinIcon = st => L.divIcon({ className: 'st-pin-wrap', html: pinHTML(st), iconSize: null });
+
   function renderStations(map, stations) {
+    if (V2) {
+      return stations.map(st => {
+        const m = L.marker([st.lat, st.lon], { icon: pinIcon(st), keyboard: false, riseOnHover: true, bubblingMouseEvents: false }).addTo(map);
+        m.on('click', ev => { L.DomEvent.stop(ev); map.closePopup(); window.MeteoLuogo?.openStation(st); });
+        return m;
+      });
+    }
     const markers = stations.map(st => {
       const marker = L.circleMarker([st.lat, st.lon], {
         radius:      8,
@@ -554,8 +610,12 @@
     markers.forEach(m => map.removeLayer(m));
   }
   function showStations(map, markers) {
+    if (!stationsVisible) return;   // spente dalle impostazioni
     markers.forEach(m => m.addTo(map));
   }
+  // Stazioni sulla mappa: si possono togliere dalle impostazioni (scelta ricordata)
+  const STATIONS_KEY = 'metek.mappa.stazioni';
+  let stationsVisible = (() => { try { return localStorage.getItem(STATIONS_KEY) !== '0'; } catch { return true; } })();
 
   // Round 6 — causa isolata: Leaflet non ha un ResizeObserver interno sul suo container,
   // ascolta SOLO l'evento nativo 'resize' di window (leaflet-src.js, _updateMapPanes:
@@ -789,6 +849,11 @@
       // byte-per-byte, riusato sia nel pannello legacy sia nel popover PWA: stessi id, quindi
       // switchLayer()/i listener di wind-check/arrow-check/unità restano invariati sotto.
       const prefsRowsHtml =
+        `<label class="ctrl-row" id="stations-toggle">` +
+        `<input type="checkbox" id="stations-check"${stationsVisible ? ' checked' : ''}>` +
+        `<span class="switch"></span>` +
+        `<span>Stazioni sulla mappa</span>` +
+        `</label>` +
         `<label class="ctrl-row" id="contour-toggle">` +
         `<input type="checkbox" id="contour-check">` +
         `<span class="switch"></span>` +
@@ -841,8 +906,9 @@
         // switchLayer()/switchTime()/RadarLayer.onUpdate restano invariati ───
         const brand = L.DomUtil.create('div');
         brand.id = 'brand-lockup';
+        // v2: barra in alto (A1) con logo, ora dei dati, lente e menu impostazioni
         brand.innerHTML =
-          BRAND_MARK_SVG +
+          `<div class="brand-id">` + BRAND_MARK_SVG +
           `<div class="brand-text">` +
           `<div class="brand-word">Metek</div>` +
           `<div id="info-mos">` +
@@ -851,14 +917,19 @@
           `</div>` +
           `</div>` +
           `<div id="info-radar" style="display:none"></div>` +
-          `</div>`;
+          `</div></div>` +
+          `<span class="top-time">${formatTime(latest.generated_at)}</span>` +
+          `<button class="top-btn" id="top-search" type="button" aria-label="Cerca un luogo">` +
+          `<svg width="19" height="19" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m12.2 12.2 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` +
+          `<button class="top-btn" id="prefs-btn" type="button" aria-label="Impostazioni">${ICON_SLIDERS}</button>`;
         document.body.appendChild(brand);
+        brand.querySelector('#top-search').addEventListener('click', () => window.MeteoLuogo?.openSearch());
 
         // ─── Gesto diagnostico nascosto: 5 tap rapidi sul logo → runDiagBadge() ───
         // Permanente: innocuo perché richiede un'azione esplicita dell'utente.
         // Un tocco solo ricarica l'app (dopo una breve attesa, per distinguerlo dai 5 tocchi).
         let tapCount = 0, tapTimer = null, reloadTimer = null;
-        brand.addEventListener('click', () => {
+        brand.querySelector('.brand-id').addEventListener('click', () => {
           tapCount++;
           clearTimeout(tapTimer);
           clearTimeout(reloadTimer);
@@ -893,10 +964,27 @@
           `<button class="rail-item" id="btn-wind">${ICON_WIND}<span>Vento</span></button>` +
           `<button class="rail-item active" id="btn-temp">${ICON_TEMP}<span>Temp.</span></button>` +
           `<button class="rail-item" id="btn-hum">${ICON_DROP}<span>Umidità</span></button>` +
-          `<button class="rail-item" id="btn-radar">${ICON_RADAR}<span>Radar</span></button>` +
-          `<div id="rail-divider"></div>` +
-          `<button id="prefs-btn" title="Regolazioni">${ICON_SLIDERS}</button>`;
-        document.body.appendChild(rail);
+          `<button class="rail-item" id="btn-radar">${ICON_RADAR}<span>Radar</span></button>`;
+        // v2 (B1): barra del tempo, scala colori e livelli in un'unica card in basso
+        const dock = L.DomUtil.create('div');
+        dock.id = 'dock';
+        document.body.appendChild(dock);
+        // Reale/Percepita e Reale/Bulbo umido: pillola sopra la card, a destra
+        const modes = L.DomUtil.create('div');
+        modes.id = 'dock-modes';
+        dock.appendChild(modes);
+        modes.appendChild(tempModeToggle);
+        modes.appendChild(humModeToggle);
+        dock.appendChild(rail);
+        // Le barre del tempo (+48 h e radar) nascono più tardi: appena compaiono entrano nella card
+        new MutationObserver(() => {
+          ['fc48-timeline', 'radar-timeline'].forEach(id => {
+            const t = document.getElementById(id);
+            if (t && t.parentNode !== dock) dock.insertBefore(t, rail);
+          });
+        }).observe(document.body, { childList: true });
+        L.DomEvent.disableClickPropagation(dock);
+        L.DomEvent.disableScrollPropagation(dock);
 
         // ─── Popover preferenze — chiuso di default ───
         const popover = L.DomUtil.create('div');
@@ -1050,6 +1138,8 @@
         const pop = document.getElementById('prefs-popover');
         pop?.classList.toggle('hidden', !prefsOpen);
         document.getElementById('prefs-btn')?.classList.toggle('active', prefsOpen);
+        // v2: il popover scende dal menu nella barra in alto
+        if (V2) return;
         // Con la barra Ora/+48 h o radar aperta il popover si apre sopra di essa, non dietro
         if (pop && prefsOpen) {
           const bar = [...document.querySelectorAll('#fc48-timeline, #radar-timeline')]
@@ -1140,7 +1230,8 @@
           // altro layer restano visibili.
           const prefsBtnEl = document.getElementById('prefs-btn');
           const railDividerEl = document.getElementById('rail-divider');
-          if (prefsBtnEl)    prefsBtnEl.style.display    = layer === 'radar' ? 'none' : '';
+          // v2: il menu sta nella barra in alto e resta sempre (contiene anche la Dashboard)
+          if (prefsBtnEl && !V2) prefsBtnEl.style.display = layer === 'radar' ? 'none' : '';
           if (railDividerEl) railDividerEl.style.display = layer === 'radar' ? 'none' : '';
           if (layer === 'radar' && prefsOpen) {
             prefsOpen = false;
@@ -1160,6 +1251,10 @@
           if (windLayer) map.removeLayer(windLayer);
           updateLegend('radar', null, null, 'mm/h', ['debole', 'moderata', 'intensa']);
           if (window.RadarLayer) window.RadarLayer.activate();
+          // activate() crea e mostra subito la barra radar (prima di qualunque attesa di rete): la scala
+          // colori entra nella card adesso, non mezzo secondo dopo. Prima restava un attimo fuori, sopra
+          // la card, e si vedeva "saltare" (iPhone, 8/11)
+          updateRadarLegendOffset();
         } else if (layer === 'wind') {
           if (windToggle)  windToggle.style.display  = 'none';
           if (arrowToggle) arrowToggle.style.display = '';
@@ -1195,6 +1290,7 @@
 
         if (heatOverlay) heatOverlay.addTo(map);
         setNoDataOverlay(!heatOverlay && layer !== 'radar');
+        updateStationPins(stationMarkers, latest.stations || []);
       }
 
       // L'ora mostrata si sceglie solo dalla barra (setupForecast48 → setPos): "Ora" = osservato,
@@ -1617,6 +1713,15 @@
 
       const stations = latest.stations || [];
       stationMarkers = renderStations(map, stations);
+      if (!stationsVisible) hideStations(map, stationMarkers);
+      document.getElementById('stations-check').addEventListener('change', e => {
+        stationsVisible = e.target.checked;
+        try { localStorage.setItem(STATIONS_KEY, stationsVisible ? '1' : '0'); } catch { /* storage bloccato */ }
+        // Sul vento con le frecce le stazioni restano nascoste comunque
+        const arrows = activeLayer === 'wind' && document.getElementById('arrow-check')?.checked;
+        if (stationsVisible && !arrows) showStations(map, stationMarkers);
+        else hideStations(map, stationMarkers);
+      });
       switchLayer('temperature');
 
       // ── Scorrimento orario +1…+48 h (data/forecast_48h.json, previsioni M2) ─────────────────
@@ -1653,6 +1758,8 @@
       if (windGrid) {
         windLayer = renderWind(map, windGrid, !contourMode);
       }
+      // Elenco dei fotogrammi radar in anticipo, a mappa già pronta
+      setTimeout(() => window.RadarLayer?.prefetch?.(), 2500);
 
       map.on('zoomend', () => {
         if (activeLayer === 'wind') {

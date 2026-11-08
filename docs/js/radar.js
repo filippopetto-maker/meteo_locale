@@ -108,7 +108,16 @@
     return `${host}${path}/${TILE_SIZE}/{z}/{x}/{y}/${COLOR_SCHEME}/${TILE_OPTIONS}.png`;
   }
 
+  // Elenco dei fotogrammi: scaricato in anticipo all'avvio (prefetch) e tenuto 5 minuti, così il
+  // passaggio al Radar non aspetta la rete (~0,8 s di mappa vuota, 8/11)
+  const META_TTL_MS = 5 * 60 * 1000;
+  let metaAt = 0, metaPromise = null;
   async function fetchRadarFrames() {
+    if (metaPromise) return metaPromise;
+    metaPromise = fetchRadarFramesNow().finally(() => { metaPromise = null; });
+    return metaPromise;
+  }
+  async function fetchRadarFramesNow() {
     try {
       const res = await fetch(META_URL);
       if (!res.ok) throw new Error(`weather-maps.json: HTTP ${res.status}`);
@@ -124,6 +133,7 @@
         ...nowcast.map(f => ({ time: f.time, path: f.path, kind: 'nowcast', url: buildUrl(host, f.path) })),
       ];
       if (newFrames.length === 0) throw new Error('nessun frame radar disponibile');
+      metaAt = Date.now();
 
       const wasEmpty = frames.length === 0;
       const previousTime = (!wasEmpty && currentIndex >= 0 && frames[currentIndex])
@@ -319,7 +329,9 @@
     if (!elTimeline) buildDom();
     elTimeline.style.display = 'flex';
 
-    const ok = await fetchRadarFrames();
+    const fresh = frames.length > 0 && Date.now() - metaAt < META_TTL_MS;
+    const ok = fresh ? true : await fetchRadarFrames();
+    if (!active) return;   // nel frattempo si è tornati a un altro livello
     if (!ok) {
       showUnavailable(true);
       if (updateCallback) updateCallback(null);
@@ -349,6 +361,8 @@
     activate,
     deactivate,
     isActive: () => active,
+    // Elenco dei fotogrammi in anticipo, senza disegnare niente
+    prefetch: () => { if (!frames.length) fetchRadarFrames(); },
     onUpdate: (cb) => { updateCallback = cb; },
   };
 })();

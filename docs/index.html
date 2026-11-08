@@ -439,6 +439,7 @@
       height: 100%; width: 0; background: #9184d9;
       animation: splash-bar 1.7s ease-in-out forwards;
     }
+    .is-pwa:not(.is-standalone) #splash { display: none; }  /* sito da browser: niente splash */
     .is-pwa #splash.done { opacity: 0; pointer-events: none; transition: opacity .32s ease; }
     @keyframes splash-draw { to { stroke-dashoffset: 0; } }
     @keyframes splash-word { to { opacity: 1; transform: none; } }
@@ -722,15 +723,71 @@
     .is-pwa :is(#fc48-timeline, #radar-timeline) .legend-tick:last-child { order: 2; }
     /* Radar: tre tick (debole, moderata, intensa) — nella riga restano solo gli estremi */
     .is-pwa :is(#fc48-timeline, #radar-timeline) .legend-tick:not(:first-child):not(:last-child) { display: none; }
+
+    /* ════════ v2 (8 nov 2026): barra in alto A1, scheda a tre posizioni, card comandi B1 ════════ */
+    .is-pwa #brand-lockup {
+      left: 10px; right: 10px; top: calc(env(safe-area-inset-top, 0px) + 8px); max-width: none;
+      height: 52px; padding: 0 4px 0 12px; gap: 4px; border-radius: 18px; text-shadow: none;
+      background: var(--glass); border: .5px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+    }
+    .is-pwa #brand-lockup .brand-id { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
+    .is-pwa #brand-lockup .brand-mark { width: 28px; height: 28px; filter: none; }
+    .is-pwa #brand-lockup .brand-word { font-size: 18px; font-weight: 700; }
+    .is-pwa #brand-lockup .top-time { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; margin-right: 2px; }
+    .is-pwa .top-btn { width: 44px; height: 44px; flex: 0 0 auto; border: 0; border-radius: 14px; background: transparent;
+      color: var(--text); display: grid; place-items: center; cursor: pointer; }
+    .is-pwa .top-btn svg { width: 20px; height: 20px; }
+    .is-pwa .top-btn:active, .is-pwa .top-btn.active { background: var(--accent-fill); color: var(--accent-100); }
+    .is-pwa #prefs-popover { top: calc(env(safe-area-inset-top, 0px) + 68px); bottom: auto !important; right: 10px; }
+    .is-pwa #prefs-popover::after { display: none; }
+
+    .is-pwa #dock {
+      position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); z-index: 1000;
+      display: flex; flex-direction: column; gap: 10px; padding: 12px;
+      border-radius: 22px; background: var(--glass); border: .5px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      transition: transform .3s cubic-bezier(.2, .8, .2, 1), opacity .2s;
+    }
+    @media (min-width: 700px) { .is-pwa #dock { left: 50%; right: auto; width: 560px; margin-left: -280px; } }
+    body.ml-sheet-open #dock { transform: translateY(calc(100% + 40px)); opacity: 0; pointer-events: none; }
+    .is-pwa #dock .radar-timeline {
+      position: static; left: auto; right: auto; bottom: auto; transform: none; width: auto; padding: 0;
+      background: none; border: 0; border-radius: 0; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    .is-pwa #dock #layer-rail {
+      position: static; transform: none; left: auto; bottom: auto; padding: 3px; gap: 3px; border-radius: 14px;
+      background: rgba(0, 0, 0, .28); border: 0; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    .is-pwa #dock .rail-item { flex: 1; width: auto; height: 50px; border-radius: 11px; }
+    .is-pwa #dock .rail-item.active { background: var(--accent); color: var(--accent-on); }
+    .is-pwa #dock .rail-item span { font-size: 10.5px; }
+    .is-pwa #dock-modes { position: absolute; right: 0; bottom: calc(100% + 10px); display: flex; }
+    .is-pwa #dock-modes :is(#tempmode-toggle, #hummode-toggle) { position: static; top: auto; right: auto; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+
+    /* Stazioni: pillola col valore del layer attivo */
+    .st-pin-wrap { background: none; border: 0; }
+    .st-pin { transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 2px; padding: 2px 6px;
+      border-radius: 999px; background: rgba(14, 17, 25, .86); border: 1px solid rgba(255, 255, 255, .4); color: #fff;
+      font: 700 11px/14px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; white-space: nowrap;
+      font-variant-numeric: tabular-nums; box-shadow: 0 1px 4px rgba(0, 0, 0, .6); cursor: pointer; }
+    .st-pin.st-dot { width: 12px; height: 12px; padding: 0; background: #9ca3af; border: 2px solid #fff; }
   </style>
   <script>
     // Redesign "Metek" (splash, brand lockup, rail, popover) attivo SOLO in PWA standalone
     // installata da Home Screen — mai per visite browser normali (desktop, Safari non
     // installato, iPad non installato). Eseguito qui, prima che <body> venga parsato, per
     // evitare qualunque flash in entrambe le direzioni.
-    document.documentElement.classList.toggle('is-pwa',
-      window.matchMedia('(display-mode: standalone)').matches ||
-      window.navigator.standalone === true);
+    // Dall'8 nov 2026 (v2) il design Metek vale per l'app installata E per il sito aperto da telefono
+    // (schermo touch col lato corto sotto 600 px: telefoni in verticale e orizzontale, non tablet).
+    // Da computer resta il pannello classico. .is-standalone segna solo l'app installata (splash).
+    var standalone = window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+    var phone = window.matchMedia('(pointer: coarse)').matches &&
+      Math.min(screen.width, screen.height) < 600;
+    document.documentElement.classList.toggle('is-pwa', standalone || phone);
+    document.documentElement.classList.toggle('is-standalone', standalone);
   </script>
 </head>
 <body>
@@ -752,7 +809,7 @@
     // Espone window.hideSplash(), chiamata da app.js a fine caricamento dati (successo o
     // errore). Durata minima 1.7s per non "sfarfallare". No-op immediato fuori da .is-pwa.
     (function () {
-      if (!document.documentElement.classList.contains('is-pwa')) {
+      if (!document.documentElement.classList.contains('is-standalone')) {
         window.hideSplash = function () {};
         return;
       }
