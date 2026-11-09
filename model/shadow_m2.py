@@ -1,0 +1,242 @@
+"""
+shadow_m2.py — Prova in ombra 1–48 h: IFS grezzo, opzione E, modello attuale, M2
+
+Un'emissione per esecuzione (issue_at = ora UTC corrente troncata all'ora),
+stesso input ECMWF IFS (Forecast API, past_days=2, forecast_days=4) per le
+quattro varianti, scritte in forecasts_shadow. Non tocca forecasts né la mappa.
+
+  t_ifs  IFS a valid_for                     (inference.predict_from_df, nwp_temperature)
+  t_v1   modello attuale LGBM + RF + ARSIAL  (inference.predict_from_df, temperature)
+  t_e    t_ifs − bias (ripiego station_bias) da bias_table
+  t_m2   M2 congelato in model/m2/           (model/m2.py)
+
+Umidità (stesso input IFS, aggiunta il 22/10/2026), colonne h_*:
+  h_ifs  RH dell'IFS a valid_for              (la produzione pubblica questo valore: h_v1 = h_ifs)
+  h_e    h_ifs − bias_rh (ripiego station_bias_rh) da bias_table
+  h_m2   M2 umidità H1 in model/m2_hum/       (model/m2.py, M2Humidity)
+
+Dal lancio di M2 (31/10/2026) l'ombra resta solo come riferimento per i candidati M2b e H1b: le
+colonne t_m2 e h_m2 sono il confronto sulle stesse emissioni (la produzione sovrascrive forecasts_48h).
+Il vento (colonne w_* e tabella forecasts_shadow_wind10, M2 Wind10 ora in produzione) non si scrive più.
+
+Umidità H1b (aggiunta il 25/10/2026), tabella forecasts_shadow_m2hb: M2 umidità con finestre di bias, senza
+stagionali e con il ritardo di produzione (model/m2hb/, bias_features_rh aggiornata alle 03:00 UTC da
+scripts/update_bias_features_rh.py). Confronto con h_m2 (H1) di forecasts_shadow sulle stesse chiavi.
+Stesso schema di M2b (temperatura); blocco isolato, un errore non ferma il resto dell'emissione.
+
+Trigger: cron-job.org alle 09:15 e 21:15 UTC (.github/workflows/shadow-m2.yml).
+
+Utilizzo:
+    python3 model/shadow_m2.py --dry-run
+    python3 model/shadow_m2.py
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import json
+import logging
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pandas as pd
+import requests
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+for p in (_PROJECT_ROOT, _PROJECT_ROOT / "model"):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+
+import db  # noqa: E402
+import inference as inf  # noqa: E402
+from m2 import M2, M2Humidity, M2HumidityB  # noqa: E402
+
+logger = logging.getLogger("shadow_m2")
+
+NWP_MODEL = "ecmwf_ifs"
+IFS_META_URL = "https://api.open-meteo.com/data/ecmwf_ifs025/static/meta.json"
+MAX_RUN_AGE_H = 15
+
+
+def ifs_run_time() -> datetime | None:
+    try:
+        ts = requests.get(IFS_META_URL, timeout=20).json()["last_run_initialisation_time"]
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        logger.warning(f"meta.json IFS non disponibile ({exc}): nwp_run_at resta NULL")
+        return None
+
+
+def load_bias() -> dict[tuple[int, int], tuple[float | None, ...]]:
+    """(stazione, ora UTC) → (bias, station_bias, bias_rh, station_bias_rh, bias_ws, station_bias_ws), una sola query."""
+    return {(r["station_id"], r["hour_utc"]): (r["bias"], r["station_bias"], r.get("bias_rh"), r.get("station_bias_rh"),
+                                               r.get("bias_ws"), r.get("station_bias_ws"))
+            for r in db.get_bias_table()}
+
+
+def _r(x) -> float | None:
+    return None if x is None or pd.isna(x) else round(float(x), 2)
+
+
+def prefetch(points: list[dict]) -> dict:
+    """IFS per tutti i punti con chiamate multi-località; {} se fallisce (si ripiega sulle chiamate singole)."""
+    try:
+        frames = inf.fetch_forecast_many([(p["lat"], p["lon"]) for p in points], past_days=2, forecast_days=4,
+                                         model=NWP_MODEL)
+        return {p["id"]: f for p, f in zip(points, frames)}
+    except Exception as exc:
+        logger.warning(f"fetch multi-località fallito ({exc}): chiamate singole")
+        return {}
+
+
+def m2hb_block(stations: list[dict], dfs: dict[int, pd.DataFrame], leads: list[int], issue_at: datetime,
+               run_at: datetime | None) -> list[dict]:
+    """Righe di forecasts_shadow_m2hb. Mai solleva: su errore ritorna ciò che ha."""
+    rows: list[dict] = []
+    try:
+        model = M2HumidityB()
+        feats = db.get_client().table("bias_features_rh").select("*").execute().data
+        if not feats:
+            logger.error("m2hb: bias_features_rh vuota (eseguire scripts/update_bias_features_rh.py)")
+            return rows
+        window_end = pd.Timestamp(max(r["window_end"] for r in feats))
+        age = (pd.Timestamp(issue_at) - window_end).days
+        if age > 2:
+            logger.warning(f"m2hb: bias_features_rh vecchia di {age} giorni (window_end {window_end:%Y-%m-%d})")
+        table = {(r["station_id"], r["hour_utc"]): {k: r.get(k) for k in model.BIAS_FEATURES} for r in feats}
+        valid = [pd.Timestamp(issue_at) + timedelta(hours=int(L)) for L in leads]
+        for st in stations:
+            df = dfs.get(st["id"])
+            if df is None:
+                continue
+            by_hour = {h: table.get((st["id"], h), {}) for h in range(24)}
+            out = model.predict(df, st, valid, by_hour, window_end)
+            nwp = df.drop_duplicates("recorded_at", keep="last").set_index("recorded_at").humidity
+            for L, vf in zip(leads, valid):
+                pred = out.get(vf)
+                rows.append({"station_id": st["id"], "issue_at": issue_at.isoformat(), "lead_hours": int(L),
+                             "valid_for": vf.isoformat(), "nwp_run_at": run_at.isoformat() if run_at else None,
+                             "h_ifs": _r(nwp.get(vf.tz_localize(None))), "h_m2hb": None if pred is None else _r(pred[0]),
+                             "bias_lag": None if pred is None else int(pred[1]), "model_tag": model.tag})
+        d = pd.DataFrame(rows)
+        if len(d):
+            logger.info(f"m2hb: {len(d)} righe, h_m2hb mancanti {d.h_m2hb.isna().sum()}, window_end {window_end:%Y-%m-%d}, modello {model.tag}")
+    except Exception as exc:
+        logger.error(f"m2hb: blocco saltato ({exc})")
+    return rows
+
+
+def run(leads: list[int], dry_run: bool, json_out: str | None) -> None:
+    m2 = M2()
+    m2h = M2Humidity()
+    issue_at = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    run_at = ifs_run_time()
+    if run_at is not None and issue_at - run_at > timedelta(hours=MAX_RUN_AGE_H):
+        logger.warning(f"Run IFS vecchio: {run_at:%Y-%m-%d %HZ} ({(issue_at - run_at).total_seconds() / 3600:.0f} h)")
+    excluded = set(m2.meta["excluded_stations"])
+    stations = sorted((s for s in db.get_active_stations() if s["id"] not in excluded), key=lambda s: s["id"])
+    bias = load_bias()
+    logger.info(f"Emissione {issue_at:%Y-%m-%d %H:%M}Z, run IFS {run_at:%Y-%m-%d %HZ} " if run_at else
+                f"Emissione {issue_at:%Y-%m-%d %H:%M}Z ")
+    logger.info(f"{len(stations)} stazioni, lead {leads[0]}–{leads[-1]}, modelli {m2.tag} + {m2h.tag}, "
+                f"bias_table {len(bias)} celle")
+
+    rows, no_bias, failed = [], [], []
+    dfs: dict[int, pd.DataFrame] = {}
+    pre = prefetch(stations)
+    for st in stations:
+        sid = st["id"]
+        try:
+            df = pre.get(sid)
+            if df is None:
+                df = inf.fetch_forecast(st["lat"], st["lon"], past_days=2, forecast_days=4, model=NWP_MODEL)
+        except Exception as exc:  # una stazione in errore non deve fermare le altre
+            logger.error(f"st.{sid}: fetch IFS fallito ({exc})")
+            failed.append(sid)
+            continue
+        dfs[sid] = df
+        base = inf.predict_from_df(df.copy(), st, leads, now_utc=issue_at)
+        hours = {h: bias.get((sid, h), (None,) * 6) for h in range(24)}
+        if all(v[0] is None for v in hours.values()):
+            no_bias.append(sid)
+        valid = [pd.Timestamp(p["valid_for"]) for p in base]
+        t_m2 = m2.predict(df, st, valid, {h: v[0] for h, v in hours.items()})
+        h_m2 = m2h.predict(df, st, valid, {h: v[2] for h, v in hours.items()})
+        for p in base:
+            vf = pd.Timestamp(p["valid_for"])
+            b, sb, brh, sbrh, _, _ = hours[vf.hour]
+            corr = b if b is not None else sb
+            corr_h = brh if brh is not None else sbrh
+            t_ifs = p.get("nwp_temperature")
+            h_ifs = p.get("nwp_humidity")
+            rows.append({
+                "station_id": sid, "issue_at": issue_at.isoformat(), "lead_hours": int(p["lead_hours"]),
+                "valid_for": vf.isoformat(), "nwp_run_at": run_at.isoformat() if run_at else None,
+                "t_ifs": _r(t_ifs), "t_v1": _r(p.get("temperature")),
+                "t_e": _r(t_ifs - corr) if t_ifs is not None and corr is not None else None,
+                "t_m2": _r(t_m2.get(vf)), "bias": None if b is None else round(float(b), 3),
+                "model_tag": m2.tag,
+                "h_ifs": _r(h_ifs), "h_v1": _r(p.get("humidity")),
+                "h_e": _r(min(max(h_ifs - corr_h, 0.0), 100.0)) if h_ifs is not None and corr_h is not None else None,
+                "h_m2": _r(h_m2.get(vf)), "bias_rh": None if brh is None else round(float(brh), 3),
+                "model_tag_h": m2h.tag,
+            })
+
+    df_out = pd.DataFrame(rows)
+    if df_out.empty:
+        logger.error("Nessuna riga prodotta")
+        sys.exit(1)
+    # Su GitHub Actions i log del repo pubblico li vede chiunque: le tabelle diagnostiche solo in locale.
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        vf = pd.to_datetime(df_out.valid_for, utc=True)
+        diff = (df_out.t_m2 - df_out.t_ifs).groupby(vf.dt.hour).mean().round(1)
+        print("\nt_m2 − t_ifs medio per ora UTC (atteso: segno opposto del bias, positivo la sera):")
+        print(" ".join(f"{h:02d}:{v:+.1f}" for h, v in diff.items()))
+        diff_h = (df_out.h_m2 - df_out.h_ifs).groupby(vf.dt.hour).mean().round(1)
+        print("\nh_m2 − h_ifs medio per ora UTC (atteso: segno opposto del bias RH, negativo la notte):")
+        print(" ".join(f"{h:02d}:{v:+.1f}" for h, v in diff_h.items()))
+        if dry_run:
+            sample = df_out[df_out.lead_hours.isin([1, 24, 48])].pivot_table(
+                index="station_id", columns="lead_hours", values=["t_ifs", "t_e", "t_v1", "t_m2", "h_ifs", "h_e", "h_m2"])
+            print("\n" + sample.round(1).to_string())
+    missing_m2 = df_out.t_m2.isna().sum()
+    logger.info(f"Righe {len(df_out)} | t_m2 mancanti {missing_m2} | h_m2 mancanti {df_out.h_m2.isna().sum()} | stazioni senza bias {no_bias or '-'} | "
+                f"stazioni fallite {failed or '-'}")
+
+    if json_out:
+        Path(json_out).write_text(json.dumps(rows, indent=1))
+    m2hb_rows = m2hb_block(stations, dfs, leads, issue_at, run_at)
+    if dry_run:
+        logger.info("--dry-run: nessuna scrittura")
+        return
+    n = db.upsert_forecasts_shadow(rows)
+    logger.info(f"forecasts_shadow: {n} righe scritte")
+    if m2hb_rows:
+        try:
+            for i in range(0, len(m2hb_rows), 500):
+                db.get_client().table("forecasts_shadow_m2hb").upsert(
+                    m2hb_rows[i:i + 500], on_conflict="station_id,issue_at,lead_hours").execute()
+            logger.info(f"forecasts_shadow_m2hb: {len(m2hb_rows)} righe scritte")
+        except Exception as exc:  # H1b non deve far fallire l'emissione principale
+            logger.error(f"forecasts_shadow_m2hb: scrittura fallita ({exc})")
+    if failed:
+        sys.exit(1)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Prova in ombra 1–48 h (IFS, E, modello attuale, M2; temperatura e umidità)")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--max-lead", type=int, default=48)
+    ap.add_argument("--json-out", default=None)
+    args = ap.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
+    for noisy in ("httpx", "inference", "features"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    run(list(range(1, args.max_lead + 1)), args.dry_run, args.json_out)
+
+
+if __name__ == "__main__":
+    main()

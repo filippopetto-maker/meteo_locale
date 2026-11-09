@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meteo Locale — Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body style="background:#1a1a2e; color:white; font-family:sans-serif; margin:0; padding:20px;">
+
+  <!-- Header -->
+  <div style="display:flex; align-items:center; gap:16px; margin-bottom:20px; flex-wrap:wrap;">
+    <a href="index.html" style="color:#74c0fc; text-decoration:none; font-size:14px;">← Mappa</a>
+    <h1 style="font-size:20px; margin:0;">🌦️ Meteo Locale — Dashboard</h1>
+    <span id="generated-at" style="opacity:0.6; font-size:13px;"></span>
+  </div>
+
+  <!-- Errore dati non disponibili -->
+  <div id="error-msg" style="display:none; background:rgba(255,255,255,0.07); border-radius:8px; padding:24px; text-align:center; font-size:14px; opacity:0.8;">
+    Dashboard non ancora disponibile — i dati vengono generati alle 08:00 e 20:00 UTC.
+  </div>
+
+  <!-- Contenuto dashboard (nascosto finché i dati non sono pronti) -->
+  <div id="dashboard-content" style="display:none;">
+
+    <!-- Selector stazione -->
+    <div style="margin-bottom:20px;">
+      <label style="font-size:14px;">
+        Stazione:
+        <select id="station-select" style="margin-left:8px; background:#2a2a4a; color:white; border:1px solid rgba(255,255,255,0.2); border-radius:4px; padding:4px 8px; font-size:14px;"></select>
+      </label>
+    </div>
+
+    <div style="margin-bottom:20px;">
+      <button id="btn-temp" onclick="setVariable('temp')"
+        style="background:rgba(255,255,255,0.25); color:white; border:none; padding:6px 16px; border-radius:4px 0 0 4px; cursor:pointer; font-size:13px;">
+        🌡️ Temperatura
+      </button>
+      <button id="btn-hum" onclick="setVariable('hum')"
+        style="background:rgba(255,255,255,0.08); color:white; border:none; padding:6px 16px; border-radius:0; cursor:pointer; font-size:13px;">
+        💧 Umidità
+      </button>
+      <button id="btn-ws" onclick="setVariable('ws')"
+        style="background:rgba(255,255,255,0.08); color:white; border:none; padding:6px 16px; border-radius:0 4px 4px 0; cursor:pointer; font-size:13px;">
+        💨 Vento
+      </button>
+    </div>
+
+    <!-- Chart previsto vs osservato -->
+    <div style="background:rgba(255,255,255,0.05); border-radius:8px; padding:16px; margin-bottom:20px;">
+      <h2 id="series-title" style="font-size:15px; margin:0 0 12px 0;">Previsto vs Osservato — Temperatura</h2>
+      <canvas id="chart-series" height="120"></canvas>
+    </div>
+
+    <!-- Chart errore per anticipo -->
+    <div style="background:rgba(255,255,255,0.05); border-radius:8px; padding:16px; margin-bottom:20px;">
+      <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:0 0 4px 0;">
+        <h2 style="font-size:15px; margin:0;">Errore per anticipo</h2>
+        <select id="lead-scope" style="background:#2a2a4a; color:white; border:1px solid rgba(255,255,255,0.2); border-radius:4px; padding:2px 6px; font-size:12px;">
+          <option value="all">Tutte le stazioni</option>
+          <option value="station">Stazione selezionata</option>
+        </select>
+      </div>
+      <p id="lead-note" style="font-size:12px; opacity:0.7; margin:0 0 12px 0;"></p>
+      <div style="position:relative; height:280px;"><canvas id="chart-lead"></canvas></div>
+    </div>
+
+    <!-- Chart MAE per stazione -->
+    <div style="background:rgba(255,255,255,0.05); border-radius:8px; padding:16px;">
+      <h2 style="font-size:15px; margin:0 0 4px 0;">MAE per stazione</h2>
+      <p id="mae-global" style="font-size:12px; opacity:0.7; margin:0 0 12px 0;"></p>
+      <canvas id="chart-mae" height="300"></canvas>
+    </div>
+
+  </div>
+
+  <script>
+    let seriesChart = null;
+    let maeChart = null;
+    let leadChart = null;
+    let dashboardData = null;
+    let activeVar = 'temp';
+
+    // Per variabile: unità, nome, soglia MAE (verde/rosso), campi di mae_per_station, chiave di lead_errors
+    const VARS = {
+      temp: { unit: '°C',   name: 'Temperatura', threshold: 1.0, mae: 'mae',     n: 'n_pairs',     global: 'mae_global',     lead: 'temp' },
+      hum:  { unit: '%',    name: 'Umidità',     threshold: 5.0, mae: 'mae_hum', n: 'n_pairs_hum', global: 'mae_global_hum', lead: 'hum' },
+      ws:   { unit: 'km/h', name: 'Vento',       threshold: 3.0, mae: 'mae_ws',  n: 'n_pairs_ws',  global: 'mae_global_ws',  lead: 'wind' },
+    };
+
+    function setVariable(v) {
+      activeVar = v;
+      for (const k of Object.keys(VARS)) {
+        document.getElementById('btn-' + k).style.background =
+          v === k ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)';
+      }
+      updateSeriesChart(document.getElementById('station-select').value);
+      buildMaeChart();
+      buildLeadChart();
+    }
+
+    async function loadData() {
+      try {
+        const resp = await fetch('data/dashboard_data.json');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        dashboardData = await resp.json();
+      } catch (e) {
+        document.getElementById('error-msg').style.display = 'block';
+        return;
+      }
+
+      // Timestamp aggiornamento
+      const dt = new Date(dashboardData.generated_at);
+      const day = String(dt.getUTCDate()).padStart(2, '0');
+      const month = String(dt.getUTCMonth() + 1).padStart(2, '0');
+      const hours = String(dt.getUTCHours()).padStart(2, '0');
+      const minutes = String(dt.getUTCMinutes()).padStart(2, '0');
+      document.getElementById('generated-at').textContent =
+        `Aggiornato: ${day}/${month} ore ${hours}:${minutes}`;
+
+      // Popola selector stazioni (ordinate per nome)
+      const select = document.getElementById('station-select');
+      const sorted = [...dashboardData.stations].sort((a, b) =>
+        a.name.localeCompare(b.name, 'it')
+      );
+      sorted.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        select.appendChild(opt);
+      });
+
+      select.addEventListener('change', () => { updateSeriesChart(select.value); buildLeadChart(); });
+      document.getElementById('lead-scope').addEventListener('change', buildLeadChart);
+
+      document.getElementById('dashboard-content').style.display = 'block';
+
+      if (sorted.length > 0) {
+        select.value = sorted[0].id;
+        updateSeriesChart(sorted[0].id);
+      }
+
+      buildMaeChart();
+      buildLeadChart();
+    }
+
+    function buildLeadChart() {
+      const cfg = VARS[activeVar];
+      const le = dashboardData.lead_errors;
+      const byStation = document.getElementById('lead-scope').value === 'station';
+      const sel = document.getElementById('station-select');
+      const scope = byStation ? sel.value : 'all';
+      const d = le && le[scope] ? le[scope][cfg.lead] : null;
+      const n = d ? d.n.reduce((a, b) => a + b, 0) : 0;
+      const where = byStation ? sel.options[sel.selectedIndex].text : 'tutte le stazioni';
+
+      document.getElementById('lead-note').textContent = n > 0
+        ? `${cfg.name}, ${where}: MAE di M2 e di IFS grezzo per ore di anticipo (ultimi 7 giorni, emissioni delle 09 e 21 UTC, ${n} confronti)`
+        : `${cfg.name}, ${where}: nessun confronto disponibile negli ultimi 7 giorni`;
+
+      if (leadChart) {
+        leadChart.destroy();
+        leadChart = null;
+      }
+      if (!d || n === 0) return;
+
+      const ctx = document.getElementById('chart-lead').getContext('2d');
+      leadChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: le.leads.map(l => '+' + l),
+          datasets: [
+            { label: 'M2 (in produzione)', data: d.m2, borderColor: '#3498db', backgroundColor: 'transparent',
+              pointRadius: 0, borderWidth: 2, tension: 0.3, spanGaps: true },
+            { label: 'IFS grezzo', data: d.ifs, borderColor: 'rgba(255,255,255,0.45)', backgroundColor: 'transparent',
+              pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0.3, spanGaps: true },
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            x: {
+              title: { display: true, text: 'ore di anticipo', color: 'rgba(255,255,255,0.7)' },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)', maxTicksLimit: 12 }
+            },
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: `MAE (${cfg.unit})`, color: 'rgba(255,255,255,0.7)' },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)' }
+            }
+          },
+          plugins: {
+            legend: { labels: { color: 'white' } },
+            tooltip: { callbacks: {
+              label: c => `${c.dataset.label}: ${c.parsed.y === null ? 'n/d' : c.parsed.y.toFixed(2)} ${cfg.unit}`,
+              footer: items => `${d.n[items[0].dataIndex]} confronti`
+            } }
+          }
+        }
+      });
+    }
+
+    function updateSeriesChart(stationId) {
+      const sid = String(stationId);
+      const s = (dashboardData.series[sid] || { forecast: [], observed: [] });
+
+      const fcData  = s.forecast.map(p => ({ x: new Date(p.t), y: p[activeVar] }))
+                                 .filter(p => p.y !== null && p.y !== undefined);
+      const obsData = s.observed.map(p => ({ x: new Date(p.t), y: p[activeVar] }))
+                                 .filter(p => p.y !== null && p.y !== undefined);
+
+      const unit = VARS[activeVar].unit;
+      document.getElementById('series-title').textContent = 'Previsto vs Osservato — ' + VARS[activeVar].name;
+
+      if (seriesChart) {
+        seriesChart.destroy();
+        seriesChart = null;
+      }
+
+      const ctx = document.getElementById('chart-series').getContext('2d');
+      seriesChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          datasets: [
+            {
+              label: '🔵 Previsto',
+              data: fcData,
+              borderColor: '#3498db',
+              backgroundColor: 'transparent',
+              pointRadius: 2,
+              tension: 0.3,
+            },
+            {
+              label: '🟠 Osservato',
+              data: obsData,
+              borderColor: '#e67e22',
+              backgroundColor: 'transparent',
+              pointRadius: 2,
+              tension: 0.3,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: {
+              type: 'time',
+              time: { unit: 'day' },
+              adapters: { date: {} },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)' }
+            },
+            y: {
+              title: { display: true, text: unit, color: 'rgba(255,255,255,0.7)' },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)' }
+            }
+          },
+          plugins: {
+            legend: { labels: { color: 'white' } }
+          }
+        }
+      });
+    }
+
+    function buildMaeChart() {
+      const { mae: maeField, global: globalField, unit, threshold } = VARS[activeVar];
+
+      const maeData = [...dashboardData.mae_per_station].sort((a, b) => {
+        const av = a[maeField], bv = b[maeField];
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv;
+      });
+
+      const labels = maeData.map(e => e[maeField] === null ? e.name + ' (n/d)' : e.name);
+      const values = maeData.map(e => e[maeField] ?? 0);
+      const colors = maeData.map(e => {
+        if (e[maeField] === null) return 'rgba(255,255,255,0.2)';
+        return e[maeField] < threshold ? '#2ecc71' : '#e74c3c';
+      });
+
+      const globalVal = dashboardData[globalField];
+      document.getElementById('mae-global').textContent =
+        globalVal !== null && globalVal !== undefined
+          ? `MAE medio globale: ${globalVal} ${unit}`
+          : 'MAE medio globale: n/d';
+
+      if (maeChart) {
+        maeChart.destroy();
+        maeChart = null;
+      }
+
+      const ctx = document.getElementById('chart-mae').getContext('2d');
+      maeChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: `MAE (${unit})`,
+            data: values,
+            backgroundColor: colors,
+            borderColor: 'transparent',
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          scales: {
+            x: {
+              title: { display: true, text: unit, color: 'rgba(255,255,255,0.7)' },
+              grid: { color: 'rgba(255,255,255,0.1)' },
+              ticks: { color: 'rgba(255,255,255,0.7)' }
+            },
+            y: {
+              grid: { color: 'rgba(255,255,255,0.05)' },
+              ticks: { color: 'rgba(255,255,255,0.8)', font: { size: 11 } }
+            }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+    }
+
+    loadData();
+  </script>
+</body>
+</html>

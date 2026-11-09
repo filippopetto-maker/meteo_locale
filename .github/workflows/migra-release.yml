@@ -1,0 +1,79 @@
+name: Migra release archivi nel privato (una tantum)
+
+# Divide et impera_1, passo E1: copia gli asset delle release corse-* e radar-* di questo repo
+# nelle release omonime di metek-core (privato). Riprendibile: salta gli asset già presenti
+# nella destinazione e si ferma dopo "minuti" minuti per restare nelle 6 h del job; si rilancia
+# finché il riepilogo finale non mostra conteggi uguali. Le release del pubblico NON si toccano
+# (si cancellano a mano dopo 48 ore senza errori). Dopo la migrazione questo file si cancella.
+on:
+  workflow_dispatch:
+    inputs:
+      minuti:
+        description: "Minuti al massimo di copia in questo giro"
+        required: false
+        default: "300"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migra-release
+  cancel-in-progress: false
+
+jobs:
+  migra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      SRC: ${{ github.repository }}
+      DST: filippopetto-maker/metek-core
+      SRC_TOKEN: ${{ github.token }}
+      DST_TOKEN: ${{ secrets.ARCHIVE_TOKEN }}
+      MINUTI: ${{ inputs.minuti || '300' }}
+    steps:
+      - name: Copia asset
+        run: |
+          set -euo pipefail
+          [ -n "$DST_TOKEN" ] || { echo "::error::Secret ARCHIVE_TOKEN mancante"; exit 1; }
+          fine=$(( $(date +%s) + MINUTI * 60 ))
+          GH_TOKEN=$SRC_TOKEN gh release list --repo "$SRC" --limit 200 --json tagName -q '.[].tagName' \
+            | grep -E '^(corse|radar)-' | sort > tag.txt || true
+          echo "Release da migrare: $(wc -l < tag.txt)"
+          copiati=0
+          while read -r t; do
+            if ! GH_TOKEN=$DST_TOKEN gh release view "$t" --repo "$DST" >/dev/null 2>&1; then
+              titolo=$(GH_TOKEN=$SRC_TOKEN gh release view "$t" --repo "$SRC" --json name -q .name)
+              GH_TOKEN=$SRC_TOKEN gh release view "$t" --repo "$SRC" --json body -q .body > note.md
+              GH_TOKEN=$DST_TOKEN gh release create "$t" --repo "$DST" --title "$titolo" --notes-file note.md --latest=false
+            fi
+            GH_TOKEN=$SRC_TOKEN gh release view "$t" --repo "$SRC" --json assets -q '.assets[].name' | sort > src.txt
+            GH_TOKEN=$DST_TOKEN gh release view "$t" --repo "$DST" --json assets -q '.assets[].name' | sort > dst.txt
+            comm -23 src.txt dst.txt > mancanti.txt
+            echo "$t: $(wc -l < src.txt) asset, da copiare $(wc -l < mancanti.txt)"
+            while read -r a; do
+              if [ "$(date +%s)" -ge "$fine" ]; then
+                echo "::notice::Tempo finito dopo $copiati asset: rilanciare il workflow per continuare"
+                break 2
+              fi
+              mkdir -p tmp
+              GH_TOKEN=$SRC_TOKEN gh release download "$t" --repo "$SRC" --pattern "$a" --dir tmp --clobber
+              GH_TOKEN=$DST_TOKEN gh release upload "$t" "tmp/$a" --repo "$DST" --clobber
+              rm -f "tmp/$a"
+              copiati=$((copiati + 1))
+            done < mancanti.txt
+          done < tag.txt
+          echo "Asset copiati in questo giro: $copiati"
+
+      - name: Riepilogo (asset per release nei due repo)
+        if: always()
+        run: |
+          set -uo pipefail
+          printf '%-16s %8s %8s\n' release pubblico privato
+          tot=0
+          while read -r t; do
+            s=$(GH_TOKEN=$SRC_TOKEN gh release view "$t" --repo "$SRC" --json assets -q '.assets | length')
+            d=$(GH_TOKEN=$DST_TOKEN gh release view "$t" --repo "$DST" --json assets -q '.assets | length' 2>/dev/null || echo 0)
+            printf '%-16s %8s %8s %s\n' "$t" "$s" "$d" "$([ "$s" = "$d" ] && echo ok || echo DIVERSO)"
+            [ "$s" = "$d" ] || tot=$((tot + 1))
+          done < tag.txt
+          [ "$tot" = 0 ] && echo "Migrazione completa" || echo "::warning::$tot release con conteggi diversi"
