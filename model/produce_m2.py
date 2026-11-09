@@ -13,11 +13,17 @@ input ECMWF IFS della produzione e della prova in ombra. Scrive:
                   10 giorni: la verifica per anticipo della dashboard (scripts/export_static.py).
 
 Per ogni variabile si registra da dove viene il valore (colonne *_source):
-  temperatura  m2     M2 (model/m2/), ove la stazione ha il modello
+  temperatura  m2c    M2b (model/m2b/) corretto con il proprio errore medio per stazione × ora UTC
+                      (m2b_self_bias, ≥7 giorni di storia in forecasts_shadow_m2b, che resta acceso per questo)
+               m2b    M2b senza correzione, dove la storia non basta
+               m2     M2 (model/m2/), ripiego se M2b non dà valore (es. bias_features illeggibile)
                e      IFS − bias da bias_table (ripiego se M2 non dà valore)
                v1     modello attuale (stazioni escluse da M2, es. Sigillo)
-  umidità      m2h    M2 umidità H1 (model/m2_hum/), ove la stazione ha il modello
-               ifs    IFS a valid_for, come oggi in produzione (ripiego)
+  umidità      m2hb   M2 umidità H1b (model/m2hb/), con le feature di bias_features_rh
+               m2h    M2 umidità H1 (model/m2_hum/), ripiego se H1b non dà valore
+               ifs    IFS a valid_for (ripiego)
+M2c e H1b sono in produzione dal 09/11/2026 dopo la prova in ombra 22/10–09/11 (MAE 0,820 contro 0,874 di M2,
+4,18 contro 4,38 di H1).
   vento        m2w10  M2 vento a 10 m (model/m2_wind10/, verità METAR): velocità e direzione
                ifs    IFS a valid_for (ripiego, e per le stazioni escluse da M2)
 
@@ -50,7 +56,8 @@ for p in (_PROJECT_ROOT, _PROJECT_ROOT / "model"):
 
 import db  # noqa: E402
 import inference as inf  # noqa: E402
-from m2 import M2, M2Humidity, M2Wind10  # noqa: E402
+from m2 import M2, M2Humidity, M2HumidityB, M2Wind10  # noqa: E402
+from m2b import BIAS_FEATURES, M2b  # noqa: E402
 from shadow_m2 import MAX_RUN_AGE_H, NWP_MODEL, _r, ifs_run_time, load_bias, prefetch  # noqa: E402
 
 logger = logging.getLogger("produce_m2")
@@ -69,8 +76,47 @@ def verifica_rows(rows: list[dict]) -> list[dict]:
             for r in rows]
 
 
-def station_rows(st: dict, df: pd.DataFrame | None, m2: M2, m2h: M2Humidity, m10: M2Wind10, issue_at: datetime,
-                 run_at: datetime | None, leads: list[int], bias: dict, in_m2: bool) -> list[dict]:
+class BModels:
+    """M2b (con correzione propria, M2c) e H1b con le loro tabelle di bias. Se qualcosa non si carica il
+    modello relativo resta None e station_rows ripiega su M2 / H1: la produzione non si ferma."""
+
+    def __init__(self, issue_at: datetime):
+        self.m2b = self.m2hb = None
+        self.feat_t = self.feat_h = {}
+        self.end_t = self.end_h = None
+        self.self_bias: dict[tuple[int, int], float] = {}
+        try:
+            m2b = M2b()
+            rows = db.get_bias_features()
+            if not rows:
+                raise RuntimeError("bias_features vuota")
+            self.feat_t = {(r["station_id"], r["hour_utc"]): {k: r.get(k) for k in BIAS_FEATURES} for r in rows}
+            self.end_t = pd.Timestamp(max(r["window_end"] for r in rows))
+            sc = m2b.meta.get("self_correction", {})
+            self.self_bias = {(r["station_id"], r["hour_utc"]): r["bias"]
+                              for r in db.get_m2b_self_bias(issue_at.date(), int(sc.get("days", 30)))
+                              if r["n_days"] >= m2b.self_min_days and r["bias"] is not None}
+            self.m2b = m2b
+        except Exception as exc:
+            logger.error(f"M2b non disponibile, ripiego su M2: {exc}")
+        try:
+            m2hb = M2HumidityB()
+            rows = db.get_client().table("bias_features_rh").select("*").execute().data
+            if not rows:
+                raise RuntimeError("bias_features_rh vuota")
+            self.feat_h = {(r["station_id"], r["hour_utc"]): {k: r.get(k) for k in m2hb.BIAS_FEATURES} for r in rows}
+            self.end_h = pd.Timestamp(max(r["window_end"] for r in rows))
+            self.m2hb = m2hb
+        except Exception as exc:
+            logger.error(f"H1b non disponibile, ripiego su H1: {exc}")
+        for name, end in (("bias_features", self.end_t), ("bias_features_rh", self.end_h)):
+            if end is not None and (pd.Timestamp(issue_at) - end).days > 2:
+                logger.warning(f"{name} vecchia di {(pd.Timestamp(issue_at) - end).days} giorni (window_end {end:%Y-%m-%d})")
+
+
+def station_rows(st: dict, df: pd.DataFrame | None, m2: M2, m2h: M2Humidity, m10: M2Wind10, bm: BModels,
+                 issue_at: datetime, run_at: datetime | None, leads: list[int], bias: dict,
+                 in_m2: bool) -> list[dict]:
     sid = st["id"]
     if df is None:
         df = inf.fetch_forecast(st["lat"], st["lon"], past_days=2, forecast_days=4, model=NWP_MODEL)
@@ -79,24 +125,34 @@ def station_rows(st: dict, df: pd.DataFrame | None, m2: M2, m2h: M2Humidity, m10
     valid = [pd.Timestamp(p["valid_for"]) for p in base]
     t_m2 = m2.predict(df, st, valid, {h: v[0] for h, v in hours.items()}) if in_m2 else {}
     h_m2 = m2h.predict(df, st, valid, {h: v[2] for h, v in hours.items()}) if in_m2 else {}
+    t_m2b = (bm.m2b.predict(df, st, valid, {h: bm.feat_t.get((sid, h), {}) for h in range(24)}, bm.end_t)
+             if in_m2 and bm.m2b else {})
+    h_m2hb = (bm.m2hb.predict(df, st, valid, {h: bm.feat_h.get((sid, h), {}) for h in range(24)}, bm.end_h)
+              if in_m2 and bm.m2hb else {})
     wind = {}
     if in_m2:
         w = m10.predict(df, st, valid)
         wind = {pd.Timestamp(r.valid_for): (r.w_m2, r.d_m2) for r in w.itertuples()}
 
+    tag = "+".join([bm.m2b.tag if bm.m2b else m2.tag, bm.m2hb.tag if bm.m2hb else m2h.tag, m10.tag])
     rows = []
     for p in base:
         vf = pd.Timestamp(p["valid_for"])
         b, sb = hours[vf.hour][:2]
         corr = b if b is not None else sb
         t_ifs = p.get("nwp_temperature")
-        if in_m2 and t_m2.get(vf) is not None:
+        if t_m2b.get(vf) is not None:
+            sbias = bm.self_bias.get((sid, vf.hour))
+            temp, src = bm.m2b.correct(t_m2b[vf], sbias), ("m2b" if sbias is None else "m2c")
+        elif in_m2 and t_m2.get(vf) is not None:
             temp, src = t_m2[vf], "m2"
         elif in_m2 and t_ifs is not None and corr is not None:
             temp, src = t_ifs - corr, "e"
         else:
             temp, src = p.get("temperature"), "v1"
-        if in_m2 and h_m2.get(vf) is not None:
+        if h_m2hb.get(vf) is not None:
+            hum, hsrc = h_m2hb[vf][0], "m2hb"
+        elif in_m2 and h_m2.get(vf) is not None:
             hum, hsrc = h_m2[vf], "m2h"
         else:
             hum, hsrc = p.get("humidity"), "ifs"
@@ -110,7 +166,7 @@ def station_rows(st: dict, df: pd.DataFrame | None, m2: M2, m2h: M2Humidity, m10
             "temperature": _r(temp), "humidity": _r(hum),
             "wind_speed": ws, "wind_direction": wd,
             "temp_source": src, "hum_source": hsrc, "wind_source": wsrc,
-            "model_tag": f"{m2.tag}+{m2h.tag}+{m10.tag}", "_nwp_t": _r(t_ifs), "_nwp_h": p.get("nwp_humidity"),
+            "model_tag": tag, "_nwp_t": _r(t_ifs), "_nwp_h": p.get("nwp_humidity"),
             "_nwp_w": p.get("wind_speed"),
             "_corrected": bool(p.get("corrected", False)),
         })
@@ -128,15 +184,18 @@ def run(leads: list[int], dry_run: bool, write_lead1: bool, json_out: str | None
     excluded = set(m2.meta["excluded_stations"])
     stations = sorted(db.get_active_stations(), key=lambda s: s["id"])
     bias = load_bias()
+    bm = BModels(issue_at)
     logger.info(f"Emissione {issue_at:%Y-%m-%d %H:%M}Z, {len(stations)} stazioni "
                 f"({len(excluded & {s['id'] for s in stations})} fuori da M2), lead {leads[0]}–{leads[-1]}, "
-                f"modelli {m2.tag} + {m2h.tag} + {m10.tag}, bias_table {len(bias)} celle")
+                f"modelli {bm.m2b.tag if bm.m2b else '-'} + {bm.m2hb.tag if bm.m2hb else '-'} + {m10.tag} "
+                f"(ripieghi {m2.tag} + {m2h.tag}), bias_table {len(bias)} celle, "
+                f"celle con errore proprio M2b {len(bm.self_bias)}")
 
     rows, failed = [], []
     pre = prefetch(stations)
     for st in stations:
         try:
-            rows += station_rows(st, pre.get(st["id"]), m2, m2h, m10, issue_at, run_at, leads, bias,
+            rows += station_rows(st, pre.get(st["id"]), m2, m2h, m10, bm, issue_at, run_at, leads, bias,
                                  st["id"] not in excluded)
         except Exception as exc:  # una stazione in errore non deve fermare le altre
             logger.error(f"st.{st['id']}: {exc}")
