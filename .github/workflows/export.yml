@@ -1,0 +1,23 @@
+name: export-static
+
+# Rigenera latest.json, wind_grid.json e forecast_48h.json e pubblica il sito su Pages come
+# artifact (publish.yml), senza commit nel repo. Il vecchio job che committava i JSON su main
+# è stato tolto con divide et impera_1: ogni commit del bot sul main pubblico verrebbe
+# cancellato dalla sincronizzazione successiva.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: export-push
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      mode: static
+    secrets: inherit

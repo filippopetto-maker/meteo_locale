@@ -1,0 +1,70 @@
+name: Produzione M2 (1–48 h)
+
+# M2 in produzione dal 31/10/2026: scrive forecasts_48h (ultima emissione, sovrascritta) e,
+# con write_lead1 = true o da schedule, il lead 1 in forecasts al posto di inference.yml
+# (che resta solo manuale: i due scriverebbero la stessa riga station_id, valid_for, lead 1).
+# Ritorno indietro: riattivare inference su cron-job.org e fermare il job di produce-m2.
+on:
+  # Rete di sicurezza: GitHub salta o ritarda gli schedule su repo poco attivi; il trigger principale
+  # è cron-job.org (ogni ora al minuto 0, prima dell'export delle :05, body {"ref":"main","inputs":{"write_lead1":"true"}}).
+  schedule:
+    - cron: "20 * * * *"
+  workflow_dispatch:
+    inputs:
+      write_lead1:
+        description: "Scrive anche il lead 1 in forecasts (sostituisce inference.yml)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Prova a vuoto: nessuna scrittura su Supabase (--dry-run)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: produce-m2
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    name: Run produce_m2
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Modelli congelati dalla release privata di metek-core (tag e sha256 in models.lock).
+      - name: Fetch models
+        uses: ./.github/actions/fetch-models
+        with:
+          token: ${{ secrets.MODELS_TOKEN }}
+
+      - name: "Setup Miniconda (env: meteo, Python 3.12)"
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: meteo
+          python-version: "3.12"
+          auto-activate-base: false
+          use-mamba: true
+
+      - name: Install pip dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run produce_m2
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.write_lead1 }}" = "true" ]; then
+            python3 model/produce_m2.py --write-lead1 $DRY_RUN
+          else
+            python3 model/produce_m2.py $DRY_RUN
+          fi

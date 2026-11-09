@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Meteo Roma</title>
+  <link rel="manifest" href="./manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <!-- FASE A (set 2026) — bug barra nera PWA: 'black-translucent' faceva ancorare il
+       contenuto a y=0 ma dimensionava il layout viewport a screen.height - 47pt (status
+       bar), lasciando 47pt neri in fondo al cold boot. Con 'black' il contenuto parte
+       sotto la status bar e il viewport 797 combacia. CONFERMATO su iPhone 12 il 7 set
+       2026: buco in fondo sparito; badge diag riporta innerHeight/mapRectBottom = 797
+       (= 844 - 47), ora ancorati a y=47 quindi senza gap. Soluzione definitiva.
+       NOTA: iOS legge questo meta SOLO al momento dell'"Aggiungi a Home", non ai boot
+       successivi — dopo il deploy va reinstallata l'icona. Se un domani si torna a
+       'black-translucent', vedi FASE B nel brief (altezza forzata da screen.height). -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Metek">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#0e1119">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      --bg-panel: rgba(18, 22, 32, 0.94);
+      --border-panel: rgba(255, 255, 255, 0.08);
+      --text-primary: #e7ecf5;
+      --text-secondary: #a7afc0;
+      --text-muted: #8892a4;
+      --accent: #2f6fe0;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      position: fixed; inset: 0;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0e1119;
+    }
+    #map { position: fixed; inset: 0; background: #0e1119; }
+
+    /* ─── Pannello di controllo unico — top-left (iniettato da JS) ─── */
+    #control-panel {
+      position: fixed;
+      top: 10px; /* fallback per browser senza supporto env() */
+      top: calc(10px + env(safe-area-inset-top, 0px)); /* evita sovrapposizione con Dynamic Island/status bar in modalità PWA standalone */
+      left: 10px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: var(--bg-panel);
+      border: 0.5px solid var(--border-panel);
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: var(--text-primary);
+      font-size: 13px;
+      line-height: 1.5;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      max-width: calc(100vw - 20px);
+      max-height: calc(100vh - 20px);
+      overflow-y: auto;
+    }
+
+    .panel-head { display: flex; flex-direction: column; }
+    .info-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+    .info-title { display: flex; align-items: center; gap: 8px; }
+    /* Testata del sito: logo (ricarica) · lente · impostazioni */
+    .head-row { display: flex; align-items: center; gap: 6px; }
+    button.info-title { flex: 1; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+    .head-btn { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06); color: var(--text-secondary); cursor: pointer; transition: background .15s, color .15s; }
+    .head-btn:hover { background: rgba(255, 255, 255, 0.12); color: var(--text-primary); }
+    .head-btn.active { background: var(--accent); color: #fff; }
+    #panel-settings { display: flex; flex-direction: column; gap: 8px; }
+    #panel-settings[hidden] { display: none; }
+    /* L'ora della previsione la dice già la barra in basso */
+    #control-panel #valid-for-label { display: none; }
+    .prefs-label { font-size: 11px; color: var(--text-muted); margin-bottom: -4px; }
+    .info-title .brand-mark { width: 26px; height: 26px; flex: 0 0 auto; }
+    .info-title .brand-word { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+    .info-update { font-size: 11px; color: var(--text-secondary); }
+
+    .panel-divider { height: 1px; background: var(--border-panel); }
+
+    /* ─── Segmented control (layer + Adesso/+1h) ─── */
+    .layer-toggle {
+      display: flex;
+      gap: 2px;
+      padding: 2px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+    }
+    .layer-toggle button {
+      flex: 1;
+      background: transparent;
+      color: var(--text-secondary);
+      border: none;
+      padding: 5px 9px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+      white-space: nowrap;
+      transition: background .15s ease, color .15s ease;
+    }
+    .layer-toggle button:hover:not(.active) {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-primary);
+    }
+    .layer-toggle button.active {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    /* ─── Switch iOS-like (Mostra vento / Frecce direzionali) ─── */
+    .ctrl-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .ctrl-row:hover { color: var(--text-primary); }
+    .ctrl-row.is-disabled { opacity: .4; cursor: default; }
+    /* Valori lungo le linee di livello (stile isobare) */
+    .contour-label { pointer-events: none; }
+    .contour-label span { display: inline-block; transform: translate(-50%, -50%); padding: 0 4px; border-radius: 4px;
+      background: rgba(14, 17, 25, 0.78); font: 600 10px/14px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .ctrl-row.is-disabled:hover { color: var(--text-secondary); }
+    .ctrl-row input[type="checkbox"] {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .switch {
+      position: relative;
+      flex: 0 0 auto;
+      width: 32px;
+      height: 18px;
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.14);
+      transition: background .18s ease;
+    }
+    .switch::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform .18s ease;
+    }
+    .ctrl-row input:checked ~ .switch { background: var(--accent); }
+    .ctrl-row input:checked ~ .switch::after { transform: translateX(14px); }
+    .ctrl-row input:focus-visible ~ .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ─── Pillole radio (km/h — nodi) ─── */
+    .pill-group {
+      display: flex;
+      gap: 2px;
+      padding: 2px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+      align-self: flex-start;
+    }
+    .pill { position: relative; cursor: pointer; }
+    .pill input[type="radio"] {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .pill span {
+      display: block;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      transition: background .15s ease, color .15s ease;
+    }
+    .pill:hover input:not(:checked) + span { color: var(--text-primary); }
+    .pill input:checked + span {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+    .pill input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ─── Link dashboard ─── */
+    .dashboard-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 12px;
+    }
+    .dashboard-link:hover { color: var(--text-primary); }
+    .dashboard-link .chevron { color: var(--text-muted); }
+
+    /* ─── Legenda — bottom-right (gradiente e valori calcolati da JS) ─── */
+    .temp-legend {
+      position: fixed;
+      bottom: 30px; /* fallback per browser senza supporto env() */
+      bottom: calc(30px + env(safe-area-inset-bottom, 0px)); /* evita sovrapposizione con la home indicator di iOS */
+      right: 10px;
+      z-index: 1000;
+      background: var(--bg-panel);
+      border: 0.5px solid var(--border-panel);
+      border-radius: 10px;
+      color: var(--text-primary);
+      padding: 8px 12px;
+      font-family: inherit;
+      font-size: 12px;
+      width: 160px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .temp-legend.legend-radar-mode, .temp-legend.legend-fc48-mode {
+      bottom: 118px; /* fallback per browser senza supporto env() */
+      bottom: calc(118px + env(safe-area-inset-bottom, 0px));
+    }
+    .legend-title { font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; }
+    .legend-bar { height: 6px; border-radius: 3px; margin-bottom: 3px; }
+    .legend-labels { position: relative; height: 1.2em; margin-top: 4px; }
+    .legend-tick {
+      position: absolute;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .legend-tick:first-child { transform: translateX(0); }
+    .legend-tick:last-child  { transform: translateX(-100%); }
+
+    /* ─── Popup Leaflet in tema scuro ─── */
+    .meteo-popup .leaflet-popup-content-wrapper {
+      background: var(--bg-panel);
+      color: var(--text-primary);
+      border: 0.5px solid var(--border-panel);
+      border-radius: 10px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    }
+    .meteo-popup .leaflet-popup-content {
+      margin: 10px 12px;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .meteo-popup .leaflet-popup-content > b:first-child,
+    .meteo-popup .pp-name {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .pp-name { display: block; padding-right: 14px; }
+    .pp-min .pp-line { margin-top: 2px; }
+    .pp-k { color: var(--text-secondary); }
+    .pp-min .pp-v { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+    /* Il nome nel popup apre la scheda 48 h */
+    .pp-link { border: 0; background: none; padding: 0 14px 0 0; color: inherit; font: inherit; font-size: 13px; font-weight: 600;
+      cursor: pointer; text-align: left; display: flex; align-items: baseline; gap: 4px; }
+    .pp-link:hover { color: var(--accent); }
+    .pp-link .pp-chev { color: var(--accent); font-size: 16px; line-height: 1; }
+    .pp-wname { color: var(--text-muted); font-style: italic; }
+    .meteo-popup .leaflet-popup-tip {
+      background: var(--bg-panel);
+      border: 0.5px solid var(--border-panel);
+      box-shadow: none;
+    }
+    .meteo-popup .leaflet-popup-close-button { color: var(--text-muted); }
+    .meteo-popup .leaflet-popup-close-button:hover { color: var(--text-primary); }
+
+    /* ─── Controlli Leaflet in tema scuro ─── */
+    .leaflet-bar a, .leaflet-bar a:hover {
+      background: var(--bg-panel);
+      color: var(--text-primary);
+      border-bottom: 0.5px solid var(--border-panel);
+    }
+    .leaflet-bar a:hover { background: #1c2130; }
+    .leaflet-control-attribution {
+      background: rgba(18, 22, 32, 0.8) !important;
+      color: var(--text-muted) !important;
+      font-size: 10px;
+    }
+    .leaflet-control-attribution a { color: var(--text-secondary) !important; }
+
+    /* ─── Barra temporale Radar — bottom, visibile solo con layer Radar ─── */
+    .radar-timeline {
+      position: fixed;
+      left: 50%;
+      bottom: 16px; /* fallback per browser senza supporto env() */
+      bottom: calc(16px + env(safe-area-inset-bottom, 0px)); /* evita sovrapposizione con la home indicator di iOS */
+      transform: translateX(-50%);
+      z-index: 1000;
+      width: min(640px, calc(100vw - 20px));
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: var(--bg-panel);
+      border: 0.5px solid var(--border-panel);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: var(--text-primary);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .radar-timeline-row { display: flex; align-items: center; gap: 10px; }
+    .radar-play-btn {
+      flex: 0 0 auto;
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      font-size: 12px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .radar-play-btn:hover { filter: brightness(1.1); }
+    .radar-track-wrap { position: relative; flex: 1; height: 18px; display: flex; align-items: center; }
+    .radar-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.25);
+      outline: none;
+      cursor: pointer;
+    }
+    .radar-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: #fff;
+      border: 2px solid var(--accent);
+      cursor: pointer;
+    }
+    .radar-slider::-moz-range-thumb {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: #fff;
+      border: 2px solid var(--accent);
+      cursor: pointer;
+    }
+    /* Radar: un livello per fotogramma, si passa dall'uno all'altro con una breve dissolvenza (radar.js) */
+    .radar-frame { transition: opacity .18s linear; }
+    .radar-now-marker {
+      position: absolute;
+      top: -3px;
+      width: 2px; height: 10px;
+      background: #fff;
+      transform: translateX(-1px);
+      pointer-events: none;
+    }
+    .radar-timeline-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10.5px;
+      color: var(--text-secondary);
+    }
+    .radar-timeline-labels #radar-label-now { color: var(--text-primary); font-weight: 600; }
+    .radar-unavailable { font-size: 12px; color: var(--text-secondary); text-align: center; padding: 4px 0; }
+    .radar-credit { font-size: 10px; color: var(--text-muted); text-align: right; }
+    .radar-credit a { color: var(--text-secondary); }
+    .radar-note { cursor: help; text-decoration: underline dotted; }
+
+    @media (max-width: 480px) {
+      #control-panel {
+        right: 10px;
+        gap: 6px;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+      .layer-toggle button { padding: 5px 6px; font-size: 11px; }
+      .temp-legend {
+        width: 140px;
+        bottom: 20px; /* fallback per browser senza supporto env() */
+        bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+      }
+      .temp-legend.legend-radar-mode, .temp-legend.legend-fc48-mode {
+        bottom: 100px; /* fallback per browser senza supporto env() */
+        bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+      }
+      .radar-timeline {
+        padding: 8px 10px;
+        bottom: 10px; /* fallback per browser senza supporto env() */
+        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+      }
+    }
+
+    /* ════════════════════════════════════════════════════════════════════
+       Redesign "Metek" — attivo SOLO quando <html> ha classe .is-pwa
+       (PWA standalone installata da Home Screen, vedi script in <head>).
+       Tutto il CSS sopra questo blocco resta invariato e attivo di default
+       per qualunque visita da browser normale, a qualunque larghezza.
+       ════════════════════════════════════════════════════════════════════ */
+
+    /* ─── Splash — nascosto di default, visibile solo in .is-pwa ─── */
+    #splash { display: none; }
+    .is-pwa #splash {
+      display: flex;
+      position: fixed; inset: 0; z-index: 9999;
+      flex-direction: column; align-items: center; justify-content: center; gap: 30px;
+      background: radial-gradient(90% 70% at 50% 38%, #1e2138 0%, #141626 55%, #0e1119 100%);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #splash svg { display: block; width: 152px; height: 152px; }
+    .is-pwa #splash .iso {
+      fill: none; stroke-linecap: round; stroke-width: 7;
+      stroke-dasharray: 520; stroke-dashoffset: 520;
+      animation: splash-draw 1.25s cubic-bezier(.22, .61, .36, 1) forwards;
+    }
+    .is-pwa #splash .iso:nth-child(2) { animation-delay: .08s; }
+    .is-pwa #splash .iso:nth-child(3) { animation-delay: .16s; }
+    .is-pwa #splash .iso:nth-child(4) { animation-delay: .24s; }
+    .is-pwa #splash .iso:nth-child(5) { animation-delay: .32s; }
+    .is-pwa #splash .hot { animation: splash-pulse 1.6s ease-in-out .5s infinite; }
+    .is-pwa #splash .word {
+      font-weight: 500; font-size: 30px; line-height: 1; letter-spacing: .01em; color: #e9e9ed;
+      opacity: 0; transform: translateY(8px);
+      animation: splash-word .5s ease-out .95s forwards;
+    }
+    .is-pwa #splash .track {
+      position: absolute; bottom: 78px; left: 50%; transform: translateX(-50%);
+      width: 96px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, .1);
+      overflow: hidden;
+    }
+    .is-pwa #splash .bar {
+      height: 100%; width: 0; background: #9184d9;
+      animation: splash-bar 1.7s ease-in-out forwards;
+    }
+    .is-pwa:not(.is-standalone) #splash { display: none; }  /* sito da browser: niente splash */
+    .is-pwa #splash.done { opacity: 0; pointer-events: none; transition: opacity .32s ease; }
+    @keyframes splash-draw { to { stroke-dashoffset: 0; } }
+    @keyframes splash-word { to { opacity: 1; transform: none; } }
+    @keyframes splash-bar { to { width: 100%; } }
+    @keyframes splash-pulse {
+      0%, 100% { opacity: .4; transform: scale(.9); }
+      50%      { opacity: 1;  transform: scale(1.06); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .is-pwa #splash .iso { animation: none; stroke-dashoffset: 0; }
+      .is-pwa #splash .word { animation: none; opacity: 1; transform: none; }
+      .is-pwa #splash .bar { animation: none; width: 100%; }
+      .is-pwa #splash .hot { animation: none; }
+    }
+
+    /* ─── Design tokens nuovi — solo dentro lo scope .is-pwa ─── */
+    .is-pwa {
+      --accent: #9184d9;
+      --accent-press: rgba(145, 132, 217, .28);
+      --accent-fill: rgba(145, 132, 217, .18);
+      --accent-on: #14121f;
+      --accent-100: #c6bff0;
+      --accent-300: #9184d9;
+      --accent-500: #7b76cc;
+      --accent-700: #5b63b4;
+      --accent-900: #3f4a86;
+      --warm: #f4a93f;
+      --bg: #0e1119;
+      --bg-ds: #161826;
+      --glass: rgba(20, 22, 34, .86);
+      --glass-strong: rgba(20, 22, 34, .93);
+      --glass-soft: rgba(22, 24, 38, .72);
+      --border: rgba(255, 255, 255, .12);
+      --border-soft: rgba(255, 255, 255, .09);
+      --text: #e9e9ed;
+      --text-2: rgba(233, 233, 237, .85);
+      --text-3: rgba(233, 233, 237, .55);
+      --text-off: rgba(233, 233, 237, .52);
+      /* Diagnostica round 4: espone i valori env() come custom property leggibili da JS
+         (getComputedStyle), per verificare se risolvono a 0 al primo paint su iOS standalone
+         e si correggono solo dopo un reflow. Vedi log temporaneo in app.js. */
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+    }
+
+    /* ─── Altezza viewport iPhone standalone — approccio vh/dvh ABBANDONATO.
+           Diagnosi (numeri del log round 6, iPhone 390×844pt): innerHeight,
+           visualViewport.height e map.getSize() riportano staticamente 797 invece di
+           844 fin dal primo frame, rotazioni incluse. Lo scarto di 47px è esattamente
+           safe-area-inset-top (notch/Dynamic Island). Non è un valore che si assesta
+           male dopo un evento mancato (ipotesi dei round 5/6): WebKit lo considera
+           definitivo dal boot, quindi nessun ricalcolo d'altezza — vh, dvh, innerHeight,
+           resize/ResizeObserver — potrà correggerlo. Fix: html/body/#map usano
+           position:fixed; inset:0 (vedi sopra), riempiono il layout viewport reale senza
+           mai passare da un'altezza calcolata. Vale identico in PWA e in browser, quindi
+           non serve più una regola .is-pwa dedicata. env(safe-area-inset-*) resta usato
+           altrove per il padding dei controlli: quello era ed è corretto.
+
+           AGGIORNAMENTO set 2026: lo scarto di 47px NON era un valore da correggere
+           lato pagina — era iOS che dimensionava il viewport come opaco pur ancorando
+           il contenuto come translucent. Vedi meta status-bar-style in <head>. ─── */
+
+    /* ─── Brand lockup (top-left) ─── */
+    .is-pwa #brand-lockup {
+      display: flex; align-items: center; gap: 8px;
+      position: fixed;
+      top: 9px; /* fallback per browser senza supporto env() */
+      top: calc(env(safe-area-inset-top, 0px) + 9px);
+      left: 14px;
+      z-index: 1000;
+      max-width: calc(100vw - 150px); /* rete di sicurezza: non invadere mai la pillola tempo */
+      text-shadow: 0 1px 6px rgba(0, 0, 0, .85);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #brand-lockup .brand-mark {
+      width: 26px; height: 26px; flex: 0 0 auto;
+      filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .6));
+    }
+    .is-pwa #brand-lockup .brand-text { min-width: 0; } /* consente all'ellipsis di funzionare in un flex item */
+    .is-pwa #brand-lockup .brand-word {
+      font-weight: 500; font-size: 13px; letter-spacing: -.01em; color: var(--text);
+    }
+    /* Ora e aggiornamento non si mostrano più qui: li dice già la barra in basso
+       (#brand-meta torna visibile solo con "Dati non disponibili") */
+    .is-pwa #brand-meta:not(.is-error),
+    .is-pwa #info-radar { display: none !important; }
+    .is-pwa #brand-meta {
+      font-weight: 400; font-size: 9.5px; color: var(--text-3);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ─── Pillola tempo (top-right), sostituisce #time-toggle in PWA ─── */
+    .is-pwa #time-toggle {
+      display: flex; gap: 2px; padding: 3px; border-radius: 999px;
+      background: rgba(20, 22, 34, .8); border: .5px solid rgba(255, 255, 255, .1);
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      position: fixed;
+      top: 9px;
+      top: calc(env(safe-area-inset-top, 0px) + 9px);
+      right: 14px;
+      z-index: 1000;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #time-toggle button {
+      font-family: inherit; border: none; background: transparent; cursor: pointer;
+      padding: 6px 13px; border-radius: 999px; min-height: 32px;
+      font-weight: 600; font-size: 11.5px; color: var(--text-off);
+    }
+    .is-pwa #time-toggle button.active { background: var(--accent); color: var(--accent-on); }
+
+    /* ─── Pillole modalità (top-right, dove stava la pillola tempo Adesso/+1h) ─── */
+    .is-pwa #tempmode-toggle,
+    .is-pwa #hummode-toggle {
+      display: flex; gap: 2px; padding: 3px; border-radius: 999px;
+      background: rgba(20, 22, 34, .8); border: .5px solid rgba(255, 255, 255, .1);
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      position: fixed;
+      top: 9px; /* fallback per browser senza supporto env() */
+      top: calc(env(safe-area-inset-top, 0px) + 9px); /* la pillola Adesso/Previsione non c'è più */
+      right: 14px;
+      z-index: 1000;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #tempmode-toggle button,
+    .is-pwa #hummode-toggle button {
+      font-family: inherit; border: none; background: transparent; cursor: pointer;
+      padding: 6px 13px; border-radius: 999px; min-height: 32px;
+      font-weight: 600; font-size: 11.5px; color: var(--text-off);
+    }
+    .is-pwa #tempmode-toggle button.active,
+    .is-pwa #hummode-toggle button.active { background: var(--accent); color: var(--accent-on); }
+
+    /* ─── Badge centrale "Dati assenti" ─── */
+    #nodata-overlay {
+      display: none;
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 900; padding: 10px 18px; border-radius: 999px;
+      background: rgba(20, 22, 34, .85); border: .5px solid rgba(255, 255, 255, .12);
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      color: var(--text-2, #c8ccd6); font-size: 13px; font-weight: 600;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      pointer-events: none;
+    }
+
+    /* ─── Rail layer (bottom-center) ─── */
+    .is-pwa #layer-rail {
+      display: flex; align-items: center; gap: 3px; padding: 4px; border-radius: 999px;
+      background: var(--glass); border: .5px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
+      position: fixed;
+      left: 50%; transform: translateX(-50%);
+      bottom: 44px;
+      z-index: 1000;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa .rail-item {
+      width: 68px; height: 52px; border-radius: 999px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      background: transparent; border: none; cursor: pointer; color: var(--text-off);
+      font-family: inherit;
+    }
+    .is-pwa .rail-item svg { width: 20px; height: 20px; }
+    .is-pwa .rail-item span { font-weight: 500; font-size: 9.5px; }
+    .is-pwa .rail-item.active { background: var(--accent-fill); color: var(--accent-100); }
+    .is-pwa .rail-item:active { background: var(--accent-press); }
+    .is-pwa #rail-divider { width: .5px; height: 30px; background: rgba(255, 255, 255, .14); margin: 0 1px; }
+    .is-pwa #prefs-btn {
+      width: 48px; height: 52px; border-radius: 999px;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; border: none; cursor: pointer; color: var(--text-off);
+    }
+    .is-pwa #prefs-btn svg { width: 21px; height: 21px; }
+    .is-pwa #prefs-btn.active { background: var(--accent-fill); color: var(--accent-100); }
+
+    /* ─── Popover preferenze — riusa .ctrl-row/.switch/.pill-group/.pill/.dashboard-link
+           (stessi id/markup del pannello legacy, solo skin diversa qui sotto) ─── */
+    .is-pwa #prefs-popover {
+      position: fixed; right: 14px; bottom: 112px; z-index: 1001;
+      width: 232px; padding: 12px 14px; border-radius: 18px;
+      background: var(--glass-strong); border: .5px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 18px 46px rgba(0, 0, 0, .6);
+      display: flex; flex-direction: column; gap: 2px;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa #prefs-popover.hidden { display: none; }
+    .is-pwa #prefs-popover.lifted::after { display: none; }
+    .is-pwa #prefs-popover::after {
+      content: ''; position: absolute; right: 32px; bottom: -6px;
+      width: 12px; height: 12px; transform: rotate(45deg);
+      background: var(--glass-strong);
+      border-right: .5px solid var(--border); border-bottom: .5px solid var(--border);
+    }
+    .is-pwa #prefs-popover .ctrl-row {
+      display: flex; align-items: center; justify-content: space-between;
+      min-height: 30px; font-size: 12.5px; color: var(--text-2);
+    }
+    .is-pwa #prefs-popover .switch { width: 42px; height: 25px; border-radius: 13px; }
+    .is-pwa #prefs-popover .switch::after { top: 2.5px; left: 2.5px; width: 20px; height: 20px; }
+    .is-pwa #prefs-popover .ctrl-row input:checked ~ .switch::after { transform: translateX(15.5px); }
+    .is-pwa #prefs-popover .pill-group {
+      padding: 3px; gap: 3px; background: rgba(255, 255, 255, .06); border-radius: 9px;
+      align-self: flex-end;
+    }
+    .is-pwa #prefs-popover .pill span { padding: 5px 11px; border-radius: 6px; font-size: 11px; }
+    .is-pwa #prefs-popover .prefs-label { align-self: flex-end; margin: 4px 0 0; }
+    .is-pwa #prefs-popover .panel-divider { background: var(--border-soft); margin: 7px 0; }
+    .is-pwa #prefs-popover .dashboard-link {
+      padding-top: 2px; color: var(--text-2); font-size: 12.5px;
+    }
+
+    /* ─── Legenda — barra sottile senza card, solo min/max ───
+           bottom: rail è bottom:44px + altezza box ~60px (.rail-item 52px + padding 4px×2)
+           → bordo superiore del rail a ~104px. 108px lasciava solo 4px di margine, troppo
+           poco su device reale (confermato: "rail sopra legenda" su tutti i layer) — portato
+           a 128px, ~24px di respiro reale sopra il rail. ─── */
+    .is-pwa .temp-legend {
+      display: flex; flex-direction: column; gap: 4px;
+      position: fixed; left: 16px; right: 16px; bottom: 128px; width: auto;
+      background: none; border: none; border-radius: 0; box-shadow: none;
+      backdrop-filter: none; -webkit-backdrop-filter: none; padding: 0;
+      text-shadow: 0 1px 5px rgba(0, 0, 0, .9);
+    }
+    .is-pwa .temp-legend.legend-radar-mode { bottom: 220px; }
+    .is-pwa .temp-legend.legend-fc48-mode { bottom: 236px; }
+    .is-pwa #legend-title { display: none; }
+    .is-pwa #legend-bar { box-shadow: 0 1px 6px rgba(0, 0, 0, .6); margin-bottom: 0; }
+    .is-pwa #legend-labels { position: static; height: auto; margin-top: 0; }
+    .is-pwa .legend-tick {
+      font: 400 10px ui-monospace, "SF Mono", monospace; color: rgba(233, 233, 237, .7);
+    }
+
+    /* ─── Timeline radar ristilizzata (stessi id/logica di radar.js) ─── */
+    .is-pwa .radar-timeline {
+      left: 14px; right: 14px; bottom: 112px; transform: none; width: auto;
+      border-radius: 18px; padding: 11px 14px 9px;
+      background: rgba(20, 22, 34, .9); border: .5px solid rgba(255, 255, 255, .11);
+      backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+      box-shadow: 0 14px 40px rgba(0, 0, 0, .5);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .is-pwa .radar-timeline-header {
+      display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;
+    }
+    .is-pwa .radar-timeline-header .hdr-title {
+      font-weight: 500; font-size: 11px; letter-spacing: .02em; color: rgba(233, 233, 237, .8);
+    }
+    .is-pwa .radar-timeline-header .hdr-credit {
+      font-weight: 400; font-size: 9.5px; color: rgba(233, 233, 237, .4);
+      cursor: help; text-decoration: underline dotted;
+    }
+    .is-pwa .radar-play-btn { width: 38px; height: 38px; }
+    .is-pwa .radar-slider { height: 5px; }
+    .is-pwa .radar-slider::-webkit-slider-thumb { width: 18px; height: 18px; }
+    .is-pwa .radar-slider::-moz-range-thumb { width: 18px; height: 18px; }
+    .is-pwa .radar-timeline-labels { font-size: 10px; color: rgba(233, 233, 237, .6); }
+
+    /* ─── Barra Ora/+48 h (fc48) e barra radar — stessa card compatta: play, cursore e ora su
+           una riga, sotto la scala colori (la .temp-legend viene spostata dentro la card attiva
+           da app.js). Siedono sopra il rail (bordo superiore ~104px) con bottom 112px. ─── */
+    .is-pwa #fc48-timeline, .is-pwa #radar-timeline { padding: 8px 12px 9px; }
+    .is-pwa #fc48-timeline .radar-timeline-row, .is-pwa #radar-timeline .radar-timeline-row { gap: 10px; }
+    .is-pwa #fc48-timeline .radar-play-btn, .is-pwa #radar-timeline .radar-play-btn { width: 34px; height: 34px; flex: 0 0 auto; }
+    .is-pwa .fc48-now {
+      /* larghezza fissa sul testo più lungo ("Adesso 22:40"): il cursore non cambia misura scorrendo */
+      flex: 0 0 88px; width: 88px; text-align: right; white-space: nowrap; overflow: hidden;
+      font-weight: 600; font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums;
+    }
+    .is-pwa .fc48-now.radar-note { text-decoration: none; cursor: help; } /* tooltip coi limiti del dato radar */
+    .is-pwa .fc48-legend-slot, .is-pwa .radar-legend-slot { margin-top: 7px; }
+    .is-pwa .fc48-legend-slot:empty, .is-pwa .radar-legend-slot:empty { display: none; }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) .temp-legend {
+      position: static; left: auto; right: auto; bottom: auto;
+      display: flex; flex-direction: row; align-items: center; gap: 8px;
+      text-shadow: none;
+    }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) #legend-bar { order: 1; flex: 1; height: 5px; box-shadow: none; }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) #legend-labels { display: contents; }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) .legend-tick { position: static; transform: none; order: 0; }
+    .is-pwa :is(#fc48-timeline, #radar-timeline) .legend-tick:last-child { order: 2; }
+    /* Radar: tre tick (debole, moderata, intensa) — nella riga restano solo gli estremi */
+    .is-pwa :is(#fc48-timeline, #radar-timeline) .legend-tick:not(:first-child):not(:last-child) { display: none; }
+
+    /* ════════ v2 (8 nov 2026): barra in alto A1, scheda a tre posizioni, card comandi B1 ════════ */
+    .is-pwa #brand-lockup {
+      left: 10px; right: 10px; top: calc(env(safe-area-inset-top, 0px) + 8px); max-width: none;
+      height: 52px; padding: 0 4px 0 12px; gap: 4px; border-radius: 18px; text-shadow: none;
+      background: var(--glass); border: .5px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+    }
+    .is-pwa #brand-lockup .brand-id { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
+    .is-pwa #brand-lockup .brand-mark { width: 28px; height: 28px; filter: none; }
+    .is-pwa #brand-lockup .brand-word { font-size: 18px; font-weight: 700; }
+    .is-pwa #brand-lockup .top-time { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; margin-right: 2px; }
+    .is-pwa .top-btn { width: 44px; height: 44px; flex: 0 0 auto; border: 0; border-radius: 14px; background: transparent;
+      color: var(--text); display: grid; place-items: center; cursor: pointer; }
+    .is-pwa .top-btn svg { width: 20px; height: 20px; }
+    .is-pwa .top-btn:active, .is-pwa .top-btn.active { background: var(--accent-fill); color: var(--accent-100); }
+    .is-pwa #prefs-popover { top: calc(env(safe-area-inset-top, 0px) + 68px); bottom: auto !important; right: 10px; }
+    .is-pwa #prefs-popover::after { display: none; }
+
+    .is-pwa #dock {
+      position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); z-index: 1000;
+      display: flex; flex-direction: column; gap: 10px; padding: 12px;
+      border-radius: 22px; background: var(--glass); border: .5px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      transition: transform .3s cubic-bezier(.2, .8, .2, 1), opacity .2s;
+    }
+    @media (min-width: 700px) { .is-pwa #dock { left: 50%; right: auto; width: 560px; margin-left: -280px; } }
+    body.ml-sheet-open #dock { transform: translateY(calc(100% + 40px)); opacity: 0; pointer-events: none; }
+    .is-pwa #dock .radar-timeline {
+      position: static; left: auto; right: auto; bottom: auto; transform: none; width: auto; padding: 0;
+      background: none; border: 0; border-radius: 0; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    .is-pwa #dock #layer-rail {
+      position: static; transform: none; left: auto; bottom: auto; padding: 3px; gap: 3px; border-radius: 14px;
+      background: rgba(0, 0, 0, .28); border: 0; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    .is-pwa #dock .rail-item { flex: 1; width: auto; height: 50px; border-radius: 11px; }
+    .is-pwa #dock .rail-item.active { background: var(--accent); color: var(--accent-on); }
+    .is-pwa #dock .rail-item span { font-size: 10.5px; }
+    .is-pwa #dock-modes { position: absolute; right: 0; bottom: calc(100% + 10px); display: flex; }
+    .is-pwa #dock-modes :is(#tempmode-toggle, #hummode-toggle) { position: static; top: auto; right: auto; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+
+    /* Stazioni: pillola col valore del layer attivo */
+    .st-pin-wrap { background: none; border: 0; }
+    .st-pin { transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 2px; padding: 2px 6px;
+      border-radius: 999px; background: rgba(14, 17, 25, .86); border: 1px solid rgba(255, 255, 255, .4); color: #fff;
+      font: 700 11px/14px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; white-space: nowrap;
+      font-variant-numeric: tabular-nums; box-shadow: 0 1px 4px rgba(0, 0, 0, .6); cursor: pointer; }
+    .st-pin.st-dot { width: 12px; height: 12px; padding: 0; background: #9ca3af; border: 2px solid #fff; }
+  </style>
+  <script>
+    // Redesign "Metek" (splash, brand lockup, rail, popover) attivo SOLO in PWA standalone
+    // installata da Home Screen — mai per visite browser normali (desktop, Safari non
+    // installato, iPad non installato). Eseguito qui, prima che <body> venga parsato, per
+    // evitare qualunque flash in entrambe le direzioni.
+    // Dall'8 nov 2026 (v2) il design Metek vale per l'app installata E per il sito aperto da telefono
+    // (schermo touch col lato corto sotto 600 px: telefoni in verticale e orizzontale, non tablet).
+    // Da computer resta il pannello classico. .is-standalone segna solo l'app installata (splash).
+    var standalone = window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+    var phone = window.matchMedia('(pointer: coarse)').matches &&
+      Math.min(screen.width, screen.height) < 600;
+    document.documentElement.classList.toggle('is-pwa', standalone || phone);
+    document.documentElement.classList.toggle('is-standalone', standalone);
+  </script>
+</head>
+<body>
+  <!-- Splash "Metek" — visibile solo in PWA standalone (.is-pwa su <html>, vedi <head>).
+       Porting da splash-reference.html dell'handoff di design. -->
+  <div id="splash">
+    <svg viewBox="0 0 180 180">
+      <path class="iso" d="M-6 150c26-40 60-30 88-46s34-46 68-52" stroke="#3f4a86"/>
+      <path class="iso" d="M-6 126c30-38 58-26 86-44s36-42 70-48" stroke="#5b63b4"/>
+      <path class="iso" d="M2 104c28-34 54-22 80-40s34-38 66-44" stroke="#7b76cc"/>
+      <path class="iso" d="M16 84c24-28 46-16 70-34s30-32 62-38" stroke="#9184d9"/>
+      <path class="iso" d="M34 68c20-22 38-10 58-28s26-24 56-30" stroke="#c6bff0"/>
+      <circle class="hot" cx="104" cy="52" r="16" fill="#f4a93f" style="transform-origin:104px 52px"/>
+    </svg>
+    <div class="word">Metek</div>
+    <div class="track"><div class="bar"></div></div>
+  </div>
+  <script>
+    // Espone window.hideSplash(), chiamata da app.js a fine caricamento dati (successo o
+    // errore). Durata minima 1.7s per non "sfarfallare". No-op immediato fuori da .is-pwa.
+    (function () {
+      if (!document.documentElement.classList.contains('is-standalone')) {
+        window.hideSplash = function () {};
+        return;
+      }
+      var splash = document.getElementById('splash');
+      var MIN_MS = 1700;
+      var t0 = performance.now();
+      window.hideSplash = function () {
+        var wait = Math.max(0, MIN_MS - (performance.now() - t0));
+        setTimeout(function () {
+          splash.classList.add('done');
+          setTimeout(function () { splash.remove(); }, 340);
+        }, wait);
+      };
+    })();
+  </script>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet-velocity@2.1.1/dist/leaflet-velocity.min.js"></script>
+  <script src="js/radar.js"></script>
+  <script src="js/luogo.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

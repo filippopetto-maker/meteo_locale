@@ -1,0 +1,29 @@
+# Credenziali — MAI nel repo
+.env
+.env\
+
+# Dati grezzi (si rigenerano con historical.py)
+data/*.parquet
+data/*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Installer e file locali
+Miniforge3-MacOSX-arm64.sh
+.claude/
+logs/
+.env
+\.env\ 
+*.bak
+
+# Repo pubblico (divide et impera_1): modelli e dati stanno solo in metek-core
+model/m2*/
+model/*.txt
+model/*.pkl
+data/
+docs/data/*.json
+*.tar.gz

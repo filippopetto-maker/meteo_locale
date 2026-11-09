@@ -1,0 +1,2005 @@
+(function () {
+  'use strict';
+
+  function degreesToCardinal(deg) {
+    const labels = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
+                    'S','SSO','SO','OSO','O','ONO','NO','NNO'];
+    return labels[Math.round(deg / 22.5) % 16];
+  }
+
+  const WIND_NAMES = {
+    N:   'Tramontana', NNE: 'Bora',        NE: 'Grecale',   ENE: 'Schiavo',
+    E:   'Levante',    ESE: 'Solano',      SE: 'Scirocco',  SSE: 'Africo',
+    S:   'Ostro',      SSO: 'Cauro',       SO: 'Libeccio',  OSO: 'Etesia',
+    O:   'Ponente',    ONO: 'Traversone',  NO: 'Maestrale', NNO: 'Zefiro',
+  };
+
+  function windName(deg) {
+    if (deg == null) return '';
+    const label = degreesToCardinal(deg);
+    if (label.length <= 2) return WIND_NAMES[label];
+    // 3 lettere: il primo carattere della sigla è sempre il vento a 1 lettera più vicino
+    return `${WIND_NAMES[label[0]]} - ${WIND_NAMES[label]}`;
+  }
+
+  function formatTime(isoStr) {
+    return new Date(isoStr).toLocaleTimeString('it-IT', {
+      timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit',
+    });
+  }
+
+  const HUM_SCALE_MIN  =   0;  // %
+  const HUM_SCALE_MAX  = 100;  // %
+  const TEMP_MIN_SPAN  =  15;  // °C — larghezza minima scala temperatura
+
+  // Palettes: ogni stop ha { t, r, g, b }
+  const TEMP_PALETTE = [
+    { t: 0.000, r: 0x2c, g: 0x3e, b: 0x95 },
+    { t: 0.125, r: 0x3a, g: 0x6f, b: 0xc4 },
+    { t: 0.250, r: 0x4f, g: 0xb8, b: 0xc4 },
+    { t: 0.375, r: 0x6f, g: 0xc4, b: 0x6a },
+    { t: 0.500, r: 0xd4, g: 0xd2, b: 0x4a },
+    { t: 0.625, r: 0xf4, g: 0xa9, b: 0x3f },
+    { t: 0.750, r: 0xe8, g: 0x54, b: 0x2f },
+    { t: 0.875, r: 0xa5, g: 0x00, b: 0x26 },
+    { t: 1.000, r: 0x67, g: 0x00, b: 0x1f },
+  ];
+  const HUM_PALETTE = [
+    { t: 0.00, r: 0xd9, g: 0x6f, b: 0x27 }, // #d96f27 — arancio secco
+    { t: 0.30, r: 0xfe, g: 0xe0, b: 0x80 }, // #fee080 — giallo paglierino
+    { t: 0.50, r: 0xb0, g: 0xe0, b: 0x90 }, // #b0e090 — verde chiaro (pivot visivo)
+    { t: 0.75, r: 0x31, g: 0x7e, b: 0xc8 }, // #317ec8 — blu medio
+    { t: 1.00, r: 0x08, g: 0x30, b: 0x6b }, // #08306b — blu scuro umido
+  ];
+  const WIND_PALETTE = [
+    { t: 0.00, r: 0x00, g: 0x33, b: 0x99 }, // blu scuro — calma
+    { t: 0.20, r: 0x00, g: 0x99, b: 0xff }, // azzurro — brezza
+    { t: 0.40, r: 0x00, g: 0xcc, b: 0x66 }, // verde — moderato
+    { t: 0.60, r: 0xff, g: 0xdd, b: 0x00 }, // giallo — sostenuto
+    { t: 0.80, r: 0xff, g: 0x66, b: 0x00 }, // arancio — forte
+    { t: 1.00, r: 0xcc, g: 0x00, b: 0x00 }, // rosso — molto forte
+  ];
+  const WIND_SPEED_MIN = 0;   // fallback se wind_speed_grid non disponibile
+  const WIND_SPEED_MAX = 50;
+
+  function lerp(a, b, f) { return a + (b - a) * f; }
+
+  function valueToColor(value, vMin, vMax, palette) {
+    const norm = Math.max(0, Math.min(1, (value - vMin) / (vMax - vMin || 1)));
+    let lo = palette[0], hi = palette[palette.length - 1];
+    for (let i = 0; i < palette.length - 1; i++) {
+      if (norm >= palette[i].t && norm <= palette[i + 1].t) {
+        lo = palette[i]; hi = palette[i + 1]; break;
+      }
+    }
+    const f = (norm - lo.t) / ((hi.t - lo.t) || 1);
+    return [
+      Math.round(lerp(lo.r, hi.r, f)),
+      Math.round(lerp(lo.g, hi.g, f)),
+      Math.round(lerp(lo.b, hi.b, f)),
+    ];
+  }
+
+  // ── Linee di livello (impostazione "Linee di livello") ─────────────────────
+  // Marching squares sulla griglia: per ogni livello, i segmenti dove il campo attraversa il valore.
+  // Le linee sono vettoriali (canvas di Leaflet), quindi restano nitide a ogni zoom; sotto resta
+  // un velo leggero della mappa colorata per leggere dove fa più caldo o più freddo.
+  let contourMode = (() => { try { return localStorage.getItem('metek.mappa.linee') === '1'; } catch { return false; } })();
+  let contourRenderer = null;
+
+  // Passo "tondo" per avere circa `target` linee nell'intervallo (vento: dipende dalle 48 h)
+  function niceStep(span, target) {
+    const raw = span / target;
+    const p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const m = raw / p;
+    return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p;
+  }
+
+  function contourSegments(grid, levels) {
+    const { nx, ny, lat_min, lat_max, lon_min, lon_max, values } = grid;
+    const dLat = (lat_max - lat_min) / (ny - 1), dLon = (lon_max - lon_min) / (nx - 1);
+    const out = levels.map(() => []);
+    const L0 = levels[0], step = levels.length > 1 ? levels[1] - levels[0] : 1;
+    // La prima e l'ultima riga/colonna della griglia sono copie di bordo (valori non fisici):
+    // si saltano, altrimenti compare una linea lungo il contorno della mappa
+    for (let r = 1; r < ny - 2; r++) {
+      const la0 = lat_max - r * dLat, la1 = la0 - dLat;
+      for (let c = 1; c < nx - 2; c++) {
+        const tl = values[r * nx + c], tr = values[r * nx + c + 1];
+        const bl = values[(r + 1) * nx + c], br = values[(r + 1) * nx + c + 1];
+        if (tl == null || tr == null || bl == null || br == null) continue;
+        const lo = Math.min(tl, tr, bl, br), hi = Math.max(tl, tr, bl, br);
+        let k0 = Math.max(0, Math.ceil((lo - L0) / step)), k1 = Math.min(levels.length - 1, Math.floor((hi - L0) / step));
+        if (k1 < k0) continue;
+        const lo0 = lon_min + c * dLon, lo1 = lo0 + dLon;
+        for (let k = k0; k <= k1; k++) {
+          const v = levels[k];
+          const idx = (tl > v ? 8 : 0) | (tr > v ? 4 : 0) | (br > v ? 2 : 0) | (bl > v ? 1 : 0);
+          if (idx === 0 || idx === 15) continue;
+          // punti sui quattro lati (interpolazione lineare)
+          const top    = () => [la0, lo0 + dLon * (v - tl) / (tr - tl)];
+          const right  = () => [la0 - dLat * (v - tr) / (br - tr), lo1];
+          const bottom = () => [la1, lo0 + dLon * (v - bl) / (br - bl)];
+          const left   = () => [la0 - dLat * (v - tl) / (bl - tl), lo0];
+          const seg = out[k];
+          switch (idx) {
+            case 1: case 14: seg.push([left(), bottom()]); break;
+            case 2: case 13: seg.push([bottom(), right()]); break;
+            case 3: case 12: seg.push([left(), right()]); break;
+            case 4: case 11: seg.push([top(), right()]); break;
+            case 6: case 9:  seg.push([top(), bottom()]); break;
+            case 7: case 8:  seg.push([left(), top()]); break;
+            case 5: case 10: {  // sella: decide la media dei quattro angoli
+              const mid = (tl + tr + bl + br) / 4 > v;
+              if ((idx === 5) === mid) { seg.push([left(), top()]); seg.push([bottom(), right()]); }
+              else { seg.push([left(), bottom()]); seg.push([top(), right()]); }
+              break;
+            }
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // Etichette dei valori lungo le linee marcate, come le isobare: rimesse a ogni zoom/spostamento,
+  // al massimo una ogni ~240 px sulla stessa linea e mai addosso a un'altra etichetta.
+  const ContourLabels = L.Layer.extend({
+    initialize(cands) { this._c = cands; this._g = L.layerGroup(); },
+    onAdd(map) {
+      this._m = map;
+      this._g.addTo(map);
+      map.on('zoomend moveend', this._place, this);
+      this._place();
+    },
+    onRemove(map) {
+      map.off('zoomend moveend', this._place, this);
+      map.removeLayer(this._g);
+      this._m = null;
+    },
+    _place() {
+      const map = this._m;
+      if (!map) return;
+      this._g.clearLayers();
+      const size = map.getSize(), kept = [], perLevel = new Map();
+      for (const c of this._c) {
+        const p = map.latLngToContainerPoint([c.lat, c.lng]);
+        if (p.x < 24 || p.y < 24 || p.x > size.x - 24 || p.y > size.y - 24) continue;
+        const same = perLevel.get(c.v) || [];
+        if (same.some(q => q.distanceTo(p) < 240) || kept.some(q => q.distanceTo(p) < 48)) continue;
+        same.push(p); perLevel.set(c.v, same); kept.push(p);
+        this._g.addLayer(L.marker([c.lat, c.lng], {
+          interactive: false, keyboard: false,
+          icon: L.divIcon({ className: 'contour-label', iconSize: null, html: `<span style="color:${c.color}">${c.text}</span>` }),
+        }));
+        if (kept.length >= 80) break;
+      }
+    },
+  });
+
+  function renderContours(gridData, vMin, vMax, palette, step, major, fmt) {
+    if (!contourRenderer) contourRenderer = L.canvas({ padding: 0.3 });
+    const vals = gridData.values.filter(v => v != null);
+    const gMin = Math.min(...vals), gMax = Math.max(...vals);
+    const levels = [];
+    for (let v = Math.ceil(gMin / step) * step; v <= gMax + 1e-9; v += step) levels.push(+v.toFixed(6));
+    if (!levels.length) return null;
+    const segs = contourSegments(gridData, levels);
+    const lines = [], cands = [];
+    levels.forEach((v, k) => {
+      if (!segs[k].length) return;
+      const [r, g, b] = valueToColor(v, vMin, vMax, palette);
+      // schiarite verso il bianco: sul fondo scuro i colori della scala da soli si perdono
+      const mix = x => Math.round(x + (255 - x) * 0.35);
+      const isMajor = Math.abs(v / major - Math.round(v / major)) < 1e-6;
+      const color = `rgb(${mix(r)},${mix(g)},${mix(b)})`;
+      lines.push(L.polyline(segs[k], {
+        renderer: contourRenderer, interactive: false, smoothFactor: 0,
+        color, weight: isMajor ? 2 : 1, opacity: isMajor ? 1 : 0.85,
+      }));
+      if (isMajor && fmt) {
+        const text = fmt(v);
+        segs[k].forEach((sg, i) => {
+          if (i % 4) return;  // candidati sparsi: la scelta finale la fa ContourLabels
+          cands.push({ lat: (sg[0][0] + sg[1][0]) / 2, lng: (sg[0][1] + sg[1][1]) / 2, v, color, text });
+        });
+      }
+    });
+    return L.layerGroup([renderGridLayer(gridData, vMin, vMax, palette, 55, null), ...lines,
+                         ...(cands.length ? [new ContourLabels(cands)] : [])]);
+  }
+
+  function renderGridLayer(gridData, vMin, vMax, palette, alpha = 127, contour) {
+    if (contourMode && contour) return renderContours(gridData, vMin, vMax, palette, contour.step, contour.major, contour.fmt);
+    const { nx, ny, lat_min, lat_max, lon_min, lon_max, values } = gridData;
+    const canvas = document.createElement('canvas');
+    canvas.width = nx; canvas.height = ny;
+    const ctx = canvas.getContext('2d');
+    const imgData = ctx.createImageData(nx, ny);
+    for (let i = 0; i < ny * nx; i++) {
+      const [r, g, b] = valueToColor(values[i], vMin, vMax, palette);
+      imgData.data[i * 4]     = r;
+      imgData.data[i * 4 + 1] = g;
+      imgData.data[i * 4 + 2] = b;
+      imgData.data[i * 4 + 3] = alpha;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    const bounds = [[lat_min, lon_min], [lat_max, lon_max]];
+    return L.imageOverlay(canvas.toDataURL(), bounds, { opacity: 1.0 });
+  }
+
+  function ensureMinSpan(vMin, vMax, minSpan) {
+    const span = vMax - vMin;
+    if (span >= minSpan) return [vMin, vMax];
+    const mid = (vMin + vMax) / 2;
+    return [mid - minSpan / 2, mid + minSpan / 2];
+  }
+
+  // Bulbo umido termodinamico — Stull (2011).
+  // Valida per T in [-20, 50]°C e RH in [5, 99]%; accuratezza tipica ±0.3°C.
+  // RH viene clampata al dominio: a saturazione il bulbo umido tende a T,
+  // quindi il clamp a 99 introduce un errore trascurabile ed evita buchi in mappa.
+  // Assume pressione al livello del mare — errore di qualche decimo di grado alle
+  // quote del Lazio, trascurabile.
+  function wetBulbStull(tempC, rhPct) {
+    const t  = tempC;
+    const rh = Math.min(99, Math.max(5, rhPct));
+    return t * Math.atan(0.151977 * Math.sqrt(rh + 8.313659))
+         + Math.atan(t + rh)
+         - Math.atan(rh - 1.676331)
+         + 0.00391838 * Math.pow(rh, 1.5) * Math.atan(0.023101 * rh)
+         - 4.686035;
+  }
+
+  // Temperatura apparente: Steadman (1994), versione all'ombra del Bureau of Meteorology
+  // australiano. Una sola formula per tutto l'anno, continua, con umidità e vento insieme:
+  //   AT = T + 0.33·e − 0.70·v − 4.0     (e = pressione di vapore in hPa, v = vento a 10 m in m/s)
+  // Sostituisce lo schema a tre rami Humidex/Wind Chill/T reale (scalini fino a 3,7 °C a 20 °C,
+  // vento ignorato tra 10 e 20 °C). Contro l'UTCI (rif. WMO), sulla distribuzione reale
+  // Netatmo 2024–26, l'errore medio scende da 4,0 a 2,6 °C (prova del 7/11/2026).
+  // Senza vento (griglia o serie assente) si mostra la T reale: niente valore inventato.
+  function apparentTemp(tempC, rhPct, windKmh) {
+    if (tempC == null || rhPct == null) return tempC;
+    if (windKmh == null || !isFinite(windKmh)) return tempC;
+    const rh = Math.min(100, Math.max(0, rhPct));
+    const e  = 6.112 * Math.exp(17.62 * tempC / (243.12 + tempC)) * rh / 100;
+    const v  = Math.max(0, windKmh) / 3.6;
+    return tempC + 0.33 * e - 0.70 * v - 4.0;
+  }
+
+  // Linee ogni 0,5 °C (marcate ed etichettate ogni 2,5 °C); umidità ogni 5% (marcate ogni 10%)
+  const CONTOUR_T = { step: 0.5, major: 2.5, fmt: v => (Number.isInteger(v) ? v : v.toFixed(1)) + '°' };
+  const CONTOUR_H = { step: 5, major: 10, fmt: v => Math.round(v) + '%' };
+
+  function renderTemperature(latest, time) {
+    if (tempMode === 'apparent') {
+      const ag = time === 'forecast' ? apparentGridFc : apparentGridObs;
+      if (!ag) return null;
+      return renderGridLayer(ag, globalAMin, globalAMax, TEMP_PALETTE, 127, CONTOUR_T);
+    }
+    const tg = time === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
+    if (!tg || !tg.values || tg.values.length === 0) return null;
+    return renderGridLayer(tg, globalTMin, globalTMax, TEMP_PALETTE, 127, CONTOUR_T);
+  }
+
+  function renderHumidity(latest, time) {
+    if (humMode === 'wetbulb') {
+      const wg = time === 'forecast' ? wetBulbGridFc : wetBulbGridObs;
+      if (!wg) return null;
+      // Palette temperatura: il bulbo umido è una temperatura, non una percentuale
+      return renderGridLayer(wg, globalWMin, globalWMax, TEMP_PALETTE, 149, CONTOUR_T);
+    }
+    const hg = time === 'forecast' ? latest.humidity_grid_forecast : latest.humidity_grid_observed;
+    if (!hg || !hg.values || hg.values.length === 0) return null;
+    return renderGridLayer(hg, globalHMin, globalHMax, HUM_PALETTE, 149, CONTOUR_H);
+  }
+
+  function renderWindSpeed(latest) {
+    const wg = latest.wind_speed_grid;
+    if (!wg || !wg.values || wg.values.length === 0) return null;
+    // Vento: passo scelto sull'intervallo delle 48 h (ws_min/ws_max), circa 16 linee
+    const wStep = niceStep(Math.max(5, wg.ws_max - wg.ws_min), 16);
+    const wFmt = v => (windUnit === 'kts' ? (v * 0.539957).toFixed(1) : (Number.isInteger(v) ? v : v.toFixed(1)));
+    return renderGridLayer(wg, wg.ws_min, wg.ws_max, WIND_PALETTE, 149, { step: wStep, major: wStep * 5, fmt: wFmt });
+  }
+
+  let windUnit = 'kmh'; // 'kmh' | 'kts'
+  let currentWsMin = WIND_SPEED_MIN;
+  let currentWsMax = WIND_SPEED_MAX;
+
+  function formatWind(kmh) {
+    if (windUnit === 'kts') return (kmh * 0.539957).toFixed(1) + ' kts';
+    return kmh.toFixed(1) + ' km/h';
+  }
+
+  // Stato layer attivo
+  let activeLayer = 'temperature';
+  let activeTime = 'observed';  // 'observed' | 'forecast'
+  let tempMode = 'real';  // 'real' | 'apparent'  — solo tab Temperatura
+  let humMode  = 'real';  // 'real' | 'wetbulb'   — solo tab Umidità
+  const POPUP_STYLE_KEY = 'metek.popup.stile';
+  let popupStyle = (() => { try { return localStorage.getItem(POPUP_STYLE_KEY) === 'min' ? 'min' : 'full'; } catch { return 'full'; } })();
+
+  // Range temperatura unificato tra le due griglie (Adesso e +1h)
+  let globalTMin = 0;
+  let globalTMax = 40;
+  // Range umidità unificato tra le due griglie (osservata e prevista)
+  let globalHMin = 0;
+  let globalHMax = 100;
+  // Griglie derivate (percepita, bulbo umido) — calcolate una volta post-fetch
+  let apparentGridObs  = null, apparentGridFc  = null;
+  let wetBulbGridObs   = null, wetBulbGridFc   = null;
+  let globalAMin = 0, globalAMax = 40;
+  let globalWMin = 0, globalWMax = 30;
+  let heatOverlay = null;
+
+  const MICROCLIMA_COLORS = {
+    isola_calore: '#e74c3c',
+    brezza_marina: '#3498db',
+    collinare:     '#27ae60',
+    standard:      '#f39c12',
+  };
+
+  function updateStationPopups(markers, stations) {
+    if (V2) { updateStationPins(markers, stations); return; }
+    stations.forEach((st, i) => {
+      const fc = st.forecast;
+      const ob = st.observation;
+      const tPrev = fc?.temperature    != null ? fc.temperature.toFixed(1)  + '°C' : 'n/d';
+      const tOss  = ob?.temperature    != null ? ob.temperature.toFixed(1)  + '°C' : 'n/d';
+      const vento = fc?.wind_speed     != null ? formatWind(fc.wind_speed)          : 'n/d';
+      const dir   = fc?.wind_direction != null ? degreesToCardinal(fc.wind_direction) : 'n/d';
+      const wName = fc?.wind_direction != null ? windName(fc.wind_direction)        : '';
+      const hPrev = fc?.humidity       != null ? fc.humidity.toFixed(0)     + '%'  : 'n/d';
+      const hOss  = ob?.humidity       != null ? ob.humidity.toFixed(0)     + '%'  : 'n/d';
+      const ore   = fc?.valid_for      ? formatTime(fc.valid_for) : '';
+      markers[i].setPopupContent(
+        `<b>${st.name}</b> <small style="opacity:.7">${st.microclima}</small><br>` +
+        `🌡️ Prevista: <b>${tPrev}</b> — Osservata: <b>${tOss}</b><br>` +
+        `💨 <b>${vento}</b> da <b>${dir}</b><br>` +
+        (wName ? `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` : '') +
+        `💧 Prevista: <b>${hPrev}</b> — Osservata: <b>${hOss}</b><br>` +
+        `<small style="opacity:.6">Valido ore ${ore}</small>`
+      );
+    });
+  }
+
+  // ── v2: le stazioni sono pillole col valore del layer attivo; il tocco apre la
+  // scheda della stazione (js/luogo.js) invece del popup ──
+  const V2 = document.documentElement.classList.contains('is-pwa');
+  function pinValue(st) {
+    const obsNow = activeTime === 'observed';
+    // Valori dell'ora mostrata: misura per "Ora", previsione M2 per +1…+48 h
+    const t  = obsNow ? (st.observation?.temperature ?? st.forecast?.temperature) : st.forecast?.temperature;
+    const rh = obsNow ? (st.observation?.humidity ?? st.forecast?.humidity) : st.forecast?.humidity;
+    const ws = st.forecast?.wind_speed ?? null;
+    if (activeLayer === 'temperature') {
+      // Percepita: stessa formula della mappa (Steadman), con il vento previsto della stazione
+      const v = tempMode === 'apparent' ? (t != null && rh != null ? apparentTemp(t, rh, ws) : null) : t;
+      return v != null && isFinite(v) ? { txt: Math.round(v) + '°', v, kind: 't' } : null;
+    }
+    if (activeLayer === 'humidity') {
+      if (humMode === 'wetbulb') {
+        const v = t != null && rh != null ? wetBulbStull(t, rh) : null;
+        return v != null && isFinite(v) ? { txt: Math.round(v) + '°', v, kind: 'wb' } : null;
+      }
+      return rh != null ? { txt: Math.round(rh) + '%', v: rh, kind: 'h' } : null;
+    }
+    if (activeLayer === 'wind') {
+      const v = st.forecast?.wind_speed;
+      return v != null ? { txt: String(Math.round(windUnit === 'kts' ? v * 0.539957 : v)), v, kind: 'w', dir: st.forecast?.wind_direction } : null;
+    }
+    return null;
+  }
+  function pinHTML(st) {
+    const p = pinValue(st);
+    if (!p) return '<div class="st-pin st-dot"></div>';
+    const arrow = p.kind === 'w' && p.dir != null
+      ? `<svg width="10" height="10" viewBox="0 0 16 16" style="transform:rotate(${Math.round(p.dir + 180)}deg)" aria-hidden="true"><path d="M8 1 13 13 8 10 3 13z" fill="currentColor"/></svg>` : '';
+    return `<div class="st-pin">${arrow}${p.txt}</div>`;
+  }
+  function updateStationPins(markers, stations) {
+    if (!V2) return;
+    stations.forEach((st, i) => {
+      const m = markers[i];
+      if (!m) return;
+      // L'icona va aggiornata anche nelle opzioni: se le stazioni vengono tolte e rimesse (impostazioni),
+      // Leaflet ricrea l'elemento da lì e prima ricompariva il valore dell'apertura
+      m.options.icon = pinIcon(st);
+      const el = m.getElement();
+      if (el) el.innerHTML = pinHTML(st);
+    });
+  }
+  const pinIcon = st => L.divIcon({ className: 'st-pin-wrap', html: pinHTML(st), iconSize: null });
+
+  function renderStations(map, stations) {
+    if (V2) {
+      return stations.map(st => {
+        const m = L.marker([st.lat, st.lon], { icon: pinIcon(st), keyboard: false, riseOnHover: true, bubblingMouseEvents: false }).addTo(map);
+        m.on('click', ev => { L.DomEvent.stop(ev); map.closePopup(); window.MeteoLuogo?.openStation(st); });
+        return m;
+      });
+    }
+    const markers = stations.map(st => {
+      const marker = L.circleMarker([st.lat, st.lon], {
+        radius:      8,
+        color:       '#fff',
+        weight:      2,
+        fillColor:   '#9ca3af',
+        fillOpacity: 0.9,
+      }).addTo(map);
+      marker.bindPopup('', { maxWidth: 220, className: 'meteo-popup' });
+      return marker;
+    });
+    updateStationPopups(markers, stations);
+    return markers;
+  }
+
+  function renderWind(map, windGrid, show = true) {
+    if (!windGrid || !windGrid[0] || !windGrid[0].data || windGrid[0].data.length === 0) {
+      return null;
+    }
+    const layer = L.velocityLayer({
+      displayValues: false,
+      displayOptions: {
+        velocityType:   'Wind',
+        position:       'bottomright',
+        emptyString:    'N/D',
+        angleConvention: 'bearingCW',
+        speedUnit:      'm/s',
+      },
+      data:          windGrid,
+      colorScale:    ['#ffffff'],
+      velocityScale: 0.004,
+      particleAge:   64,
+      lineWidth:     2,
+      opacity:       0.9,
+    });
+    // Con le linee di livello attive le particelle non si aggiungono nemmeno (aggiungerle e
+    // toglierle subito lascia timer di leaflet-velocity che scrivono errori in console)
+    if (show) layer.addTo(map);
+    return layer;
+  }
+
+  const _localityCache = {};
+
+  async function getLocalityName(lat, lng) {
+    const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+    if (_localityCache[key]) return _localityCache[key];
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse` +
+        `?lat=${lat}&lon=${lng}&format=json&zoom=14&accept-language=it`,
+        { headers: { 'User-Agent': 'meteo_locale/1.0' } }
+      );
+      const data = await res.json();
+      const a = data.address || {};
+      const city    = a.city || a.town || a.municipality || '';
+      const quarter = a.neighbourhood || a.quarter || a.suburb || a.village || '';
+      const name = city && quarter && quarter !== city
+        ? `${city}, ${quarter}`
+        : city || quarter || `${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`;
+      _localityCache[key] = name;
+      return name;
+    } catch {
+      return `${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`;
+    }
+  }
+
+  let arrowMarkers = [];
+  let stationMarkers = [];
+  let fc48Ctl = null;  // scorrimento orario +1…+48 h (vedi setupForecast48)
+
+  function clearArrowLayer(map) {
+    arrowMarkers.forEach(m => map.removeLayer(m));
+    arrowMarkers = [];
+  }
+
+  function arrowSpacingDeg(zoom) {
+    const spacings = { 7: 1.0, 8: 0.75, 9: 0.45, 10: 0.32, 11: 0.20, 12: 0.12, 13: 0.08 };
+    return spacings[Math.min(13, Math.max(7, zoom))] ?? 0.32;
+  }
+
+  function windBarbSVG(speedKmh, dirDeg, size) {
+    const s = size;
+    const halfS = s / 2;
+
+    let remaining = Math.round(speedKmh / 5) * 5;
+    const flags   = Math.floor(remaining / 50); remaining -= flags * 50;
+    const full    = Math.floor(remaining / 10); remaining -= full * 10;
+    const half    = Math.floor(remaining / 5);
+
+    const shaft   = `M ${halfS} ${s * 0.1} L ${halfS} ${s * 0.85}`;
+    const tipY    = s * 0.85;
+    const tipSize = s * 0.13;
+    const arrowTip = `M ${halfS} ${tipY} L ${halfS - tipSize} ${tipY - tipSize * 1.4} L ${halfS + tipSize} ${tipY - tipSize * 1.4} Z`;
+    const step    = s * 0.12;
+    const barbLen = s * 0.38;
+    const halfBL  = s * 0.22;
+    let barbs = '';
+    let y = s * 0.15;
+
+    for (let i = 0; i < flags; i++) {
+      barbs += `M ${halfS} ${y} L ${halfS + barbLen} ${y + step * 0.5} L ${halfS} ${y + step} Z `;
+      y += step;
+    }
+    for (let i = 0; i < full; i++) {
+      barbs += `M ${halfS} ${y} L ${halfS + barbLen} ${y - step * 0.3} `;
+      y += step;
+    }
+    if (half) {
+      barbs += `M ${halfS} ${y} L ${halfS + halfBL} ${y - step * 0.3} `;
+    }
+
+    return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"
+                style="transform:rotate(${dirDeg}deg);transform-origin:${halfS}px ${halfS}px"
+                xmlns="http://www.w3.org/2000/svg">
+              <path d="${shaft}" stroke="white" stroke-width="2" fill="none"
+                    stroke-linecap="round"/>
+              <path d="${arrowTip}" fill="white" stroke="none"/>
+              <path d="${barbs}" stroke="white" stroke-width="1.8" fill="white"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+  }
+
+  function bilinearLookup(lat, lon, band) {
+    const hdr = band.header;
+    if (!hdr) return null;
+    const { nx, ny, la1, la2, lo1, lo2 } = hdr;
+    const data = band.data;
+
+    const col = (lon - lo1) / (lo2 - lo1) * (nx - 1);
+    const row = (la1 - lat) / (la1 - la2) * (ny - 1);
+    if (col < 0 || col > nx - 1 || row < 0 || row > ny - 1) return null;
+
+    const c0 = Math.floor(col), c1 = Math.min(c0 + 1, nx - 1);
+    const r0 = Math.floor(row), r1 = Math.min(r0 + 1, ny - 1);
+    const dc = col - c0, dr = row - r0;
+
+    return data[r0*nx+c0]*(1-dr)*(1-dc) +
+           data[r0*nx+c1]*(1-dr)*dc +
+           data[r1*nx+c0]*dr*(1-dc) +
+           data[r1*nx+c1]*dr*dc;
+  }
+
+  function renderArrowLayer(map, windGrid) {
+    clearArrowLayer(map);
+    if (!windGrid || !windGrid[0] || !windGrid[0].data.length) return;
+
+    const uData = windGrid[0];
+    const vData = windGrid[1];
+    const { nx, ny, la1, la2, lo1, lo2 } = uData.header;
+
+    const zoom    = map.getZoom();
+    const spacing = arrowSpacingDeg(zoom);
+    const bounds  = map.getBounds();
+
+    const latMin = Math.max(la2, bounds.getSouth());
+    const latMax = Math.min(la1, bounds.getNorth());
+    const lonMin = Math.max(lo1, bounds.getWest());
+    const lonMax = Math.min(lo2, bounds.getEast());
+
+    for (let lat = latMin; lat <= latMax; lat += spacing) {
+      for (let lon = lonMin; lon <= lonMax; lon += spacing) {
+        const u = bilinearLookup(lat, lon, uData);
+        const v = bilinearLookup(lat, lon, vData);
+        if (u === null || v === null) continue;
+
+        const speedMs  = Math.sqrt(u*u + v*v);
+        const speedKmh = speedMs * 3.6;
+        let dir = Math.atan2(-u, -v) * 180 / Math.PI;
+        if (dir < 0) dir += 360;
+
+        const size = zoom >= 11 ? 48 : zoom >= 9 ? 36 : 26;
+
+        const icon = L.divIcon({
+          className: '',
+          html:       windBarbSVG(speedKmh, dir, size),
+          iconSize:   [size, size],
+          iconAnchor: [size/2, size/2],
+        });
+
+        const m = L.marker([lat, lon], { icon, interactive: false });
+        m.addTo(map);
+        arrowMarkers.push(m);
+      }
+    }
+  }
+
+  function hideStations(map, markers) {
+    markers.forEach(m => map.removeLayer(m));
+  }
+  function showStations(map, markers) {
+    if (!stationsVisible) return;   // spente dalle impostazioni
+    markers.forEach(m => m.addTo(map));
+  }
+  // Stazioni sulla mappa: si possono togliere dalle impostazioni (scelta ricordata)
+  const STATIONS_KEY = 'metek.mappa.stazioni';
+  let stationsVisible = (() => { try { return localStorage.getItem(STATIONS_KEY) !== '0'; } catch { return true; } })();
+
+  // Round 6 — causa isolata: Leaflet non ha un ResizeObserver interno sul suo container,
+  // ascolta SOLO l'evento nativo 'resize' di window (leaflet-src.js, _updateMapPanes:
+  // `onOff(window, 'resize', this._onResize, this)`), poi lo rimbalza con rAF su
+  // invalidateSize(). Round 3 aveva già confermato che window.visualViewport non spara mai
+  // un evento 'resize' al boot in standalone iOS; per lo stesso motivo neanche il 'resize'
+  // nativo di window scatta in quella finestra — non è un resize "vero" agli occhi del
+  // sistema, è il compositor WebKit che si assesta da solo sul primissimo paint. Risultato:
+  // L.map() misura this._container.clientHeight una volta sola, alla costruzione, e se in
+  // quel preciso istante il valore non è ancora quello vero, Leaflet resta convinto di
+  // avere meno spazio per sempre — nessun evento arriverà mai a smentirlo. Le tile/l'overlay
+  // heatmap vengono quindi disegnati solo fino a quell'altezza sbagliata: sotto resta il
+  // background di #map (#0e1119, quasi nero) non dipinto — la barra nera segnalata in foto.
+  // Il vecchio criterio "fermati quando innerHeight smette di cambiare" (Round 5) è cieco a
+  // questo, perché window.innerHeight risulta già stabile e corretto dal boot (Round 4,
+  // ipotesi chiusa) — il valore sbagliato è tutto interno alla cache di Leaflet
+  // (map.getSize()/this._size), mai controllato finora. Fix: invalidare su un calendario
+  // fisso che copre l'intera finestra dello splash screen (min. 1700ms + 340ms fade, vedi
+  // index.html — l'utente vede la mappa solo alla rimozione dello splash, molto dopo che il
+  // vecchio ciclo breve si era già fermato), così anche un assestamento tardivo del
+  // compositor viene comunque intercettato prima che l'utente guardi lo schermo.
+  const STABILIZE_CHECKPOINTS_MS = [0, 100, 250, 500, 900, 1400, 2000, 2600, 3200];
+  function stabilizeMapSize(map) {
+    STABILIZE_CHECKPOINTS_MS.forEach(delay => {
+      setTimeout(() => map.invalidateSize(), delay);
+    });
+  }
+
+  async function init() {
+    const map = L.map('map', { center: [41.85, 12.72], zoom: 8 });
+
+    // Diagnostica bug barra nera PWA — badge on-demand.
+    // Attivazione: 5 tap rapidi sul logo "Metek" (gesto permanente, innocuo perché
+    // richiede un'azione esplicita — wiring più sotto, dopo la creazione di #brand-lockup).
+    // L'attivazione automatica su isPWA usata per il test della FASE A è stata rimossa
+    // (7 set 2026) dopo aver raccolto i numeri: con status-bar-style 'black' il viewport
+    // resta 797 su iPhone 12 ma è ancorato a y=47, quindi 47+797=844 e nessun buco in fondo.
+    function runDiagBadge() {
+      const mapRect = document.getElementById('map').getBoundingClientRect();
+      const htmlRect = document.documentElement.getBoundingClientRect();
+      const info = {
+        isPWA: document.documentElement.classList.contains('is-pwa'),
+        screenH: window.screen.height,
+        innerH: window.innerHeight,
+        vvH: window.visualViewport?.height ?? 'n/d',
+        htmlRectH: Math.round(htmlRect.height),
+        mapRectH: Math.round(mapRect.height),
+        mapRectBottom: Math.round(mapRect.bottom),
+        dpr: window.devicePixelRatio,
+        mapCSSHeight: getComputedStyle(document.getElementById('map')).height,
+        bodyCSSHeight: getComputedStyle(document.body).height,
+      };
+      console.log('[diag]', info);
+      const badge = document.createElement('div');
+      badge.style.cssText =
+        'position:fixed; top:4px; left:4px; z-index:99999; ' +
+        'background:rgba(0,0,0,.85); color:#0f0; font:9px monospace; ' +
+        'padding:4px 6px; border-radius:4px; max-width:96vw; white-space:pre-wrap;';
+      badge.textContent = JSON.stringify(info, null, 0);
+      document.body.appendChild(badge);
+    }
+
+    L.tileLayer('https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=cb1_2z1t_1_543dbd31737c2140d7d3e4bd', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      maxZoom: 19,
+    }).addTo(map);
+
+    let windLayer = null;
+
+    // Redesign "Metek" (splash, brand lockup, rail, popover) attivo SOLO in PWA standalone —
+    // vedi script di detection in <head> di index.html. Dichiarato qui (non dentro il try)
+    // così resta leggibile anche dal catch, per lo splash e i messaggi d'errore.
+    const isPWA = document.documentElement.classList.contains('is-pwa');
+
+    // Solo PWA: trucco storico per lo stesso bug WebKit di miscalcolo del viewport — un
+    // micro-scroll subito al boot imita l'evento di resize reale che la rotazione genera
+    // (e che risolve il problema), senza chiedere all'utente di ruotare fisicamente lo
+    // schermo. Va prima di qualunque lettura/uso delle dimensioni (zoomControl, stabilizeMapSize)
+    // così, se funziona, quelle letture partono già dal viewport corretto.
+    if (isPWA) {
+      document.documentElement.style.overflow = 'auto';
+      window.scrollTo(0, 1);
+      requestAnimationFrame(() => {
+        window.scrollTo(0, 0);
+        document.documentElement.style.overflow = 'hidden'; // ripristina lo stato originale
+      });
+    }
+
+    // Solo PWA: il controllo +/- nativo di Leaflet si sovrappone al brand lockup e non fa
+    // parte del design. Pinch-to-zoom/scroll-wheel restano attivi: sono handler della mappa
+    // indipendenti dal widget visivo, non toccati da questa rimozione. Legacy invariato.
+    if (isPWA) map.zoomControl.remove();
+
+    // Solo PWA: Leaflet misura #map una sola volta, a L.map(...), e congela il risultato in
+    // this._size. Su iOS standalone il viewport reale può assestarsi dopo il primo paint —
+    // se la misura iniziale cade prima di quel momento, la mappa resta convinta di avere
+    // meno spazio di quanto ne abbia davvero, e tutto ciò che è ancorato al bottom del
+    // documento (rail/legenda/timeline) finisce scorrelato dall'altezza vera dello schermo.
+    if (isPWA) {
+      // Round 3: confermato su device che window.visualViewport non emette mai un evento
+      // 'resize' per l'assestamento iniziale (non è un resize agli occhi di quell'API), e un
+      // doppio rAF non basta perché l'assestamento reale non ha una durata fissa in frame.
+      // Calendario fisso di invalidateSize() su tutta la finestra dello splash (Round 6,
+      // vedi commento sopra stabilizeMapSize) — copre il caso in cui l'assestamento del
+      // compositor arrivi più tardi di quanto ci si aspetterebbe.
+      stabilizeMapSize(map);
+
+      // Fix strutturale, non solo una tantum: visualViewport è l'API pensata apposta per
+      // "il viewport visibile è cambiato dopo il load" — copre le rotazioni schermo future
+      // (confermato funzionante su device). Fallback su resize se non disponibile.
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => map.invalidateSize());
+      } else {
+        window.addEventListener('resize', () => map.invalidateSize());
+      }
+
+      // Round 6 — fix primario: Leaflet non osserva la vera box CSS di #map, solo l'evento
+      // 'resize' di window (mai sparato al boot, vedi sopra). Un ResizeObserver diretto su
+      // #map non dipende da nessun evento e da nessun calendario indovinato: scatta esattamente
+      // nell'istante in cui il compositor WebKit cambia davvero le dimensioni del container,
+      // qualunque esso sia — copre in un colpo solo sia il boot lento sia qualunque altro
+      // ridimensionamento che sfugga a window/visualViewport. Supportato su iOS Safari da
+      // versione 13.4 (2020), quindi sempre disponibile sui device target di questa PWA.
+      if ('ResizeObserver' in window) {
+        const mapEl = document.getElementById('map');
+        let lastW = -1, lastH = -1;
+        const mapResizeObserver = new ResizeObserver(entries => {
+          for (const entry of entries) {
+            const w = Math.round(entry.contentRect.width);
+            const h = Math.round(entry.contentRect.height);
+            if (w !== lastW || h !== lastH) {
+              lastW = w; lastH = h;
+              map.invalidateSize();
+            }
+          }
+        });
+        mapResizeObserver.observe(mapEl);
+      }
+
+      // Riapertura da background (app switcher) è, per questo bug, uno scenario analogo al
+      // cold boot: il WebView può ripresentare un compositor non ancora risincronizzato con
+      // il container. Stesso trattamento del boot, senza bisogno che l'utente ruoti lo schermo.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') stabilizeMapSize(map);
+      });
+      window.addEventListener('pageshow', () => stabilizeMapSize(map));
+    }
+
+    try {
+      const [latestRes, windRes] = await Promise.all([
+        fetch('data/latest.json'),
+        fetch('data/wind_grid.json'),
+      ]);
+
+      if (!latestRes.ok) throw new Error('latest.json non trovato');
+      const latest   = await latestRes.json();
+      const windGrid = windRes.ok ? await windRes.json() : null;
+      let windGridNow = windGrid;  // griglia particelle dell'ora mostrata (timeline +48 h)
+
+      // Range unificato T / T+1 — scala fissa per rendere confrontabile il toggle
+      const tgObs = latest.temp_grid_observed;
+      const tgFc  = latest.temp_grid_forecast;
+      globalTMin = Math.min(tgObs?.t_min ?? Infinity,  tgFc?.t_min ?? Infinity);
+      globalTMax = Math.max(tgObs?.t_max ?? -Infinity, tgFc?.t_max ?? -Infinity);
+      // Guardia: se entrambe le griglie T mancano i valori restano ±Infinity → NaN nel
+      // rendering. Bug latente mai emerso (le griglie T ci sono sempre), ma allineato a H.
+      if (!isFinite(globalTMin) || !isFinite(globalTMax)) {
+        globalTMin = 0;
+        globalTMax = 40;
+      }
+
+      // Range unificato Umidità osservata / prevista — stesso pattern della temperatura
+      const hgObs = latest.humidity_grid_observed;
+      const hgFc  = latest.humidity_grid_forecast;
+      globalHMin = Math.min(hgObs?.h_min ?? Infinity,  hgFc?.h_min ?? Infinity);
+      globalHMax = Math.max(hgObs?.h_max ?? -Infinity, hgFc?.h_max ?? -Infinity);
+      if (!isFinite(globalHMin) || !isFinite(globalHMax)) {
+        globalHMin = HUM_SCALE_MIN;
+        globalHMax = HUM_SCALE_MAX;
+      }
+
+      // ── Griglie derivate (percepita, bulbo umido) — calcolate una volta sola ──
+      // Stesse dimensioni delle griglie sorgente; nessuna interpolazione aggiuntiva:
+      // T e RH sono già interpolate separatamente, le derivate si calcolano per cella.
+      function buildDerivedGrid(tGrid, hGrid, wGrid, fn) {
+        if (!tGrid?.values || !hGrid?.values) return null;
+        if (tGrid.values.length !== hGrid.values.length) {
+          console.warn('Griglie T e RH di dimensioni diverse — derivata non calcolabile');
+          return null;
+        }
+        const n = tGrid.values.length;
+        const w = (wGrid?.values && wGrid.values.length === n) ? wGrid.values : null;
+        const out = new Array(n);
+        let vMin = Infinity, vMax = -Infinity;
+        for (let i = 0; i < n; i++) {
+          const v = fn(tGrid.values[i], hGrid.values[i], w ? w[i] : null);
+          out[i] = v;
+          if (v < vMin) vMin = v;
+          if (v > vMax) vMax = v;
+        }
+        return {
+          lat_min: tGrid.lat_min, lat_max: tGrid.lat_max,
+          lon_min: tGrid.lon_min, lon_max: tGrid.lon_max,
+          nx: tGrid.nx, ny: tGrid.ny,
+          values: out,
+          v_min: Math.round(vMin * 10) / 10,
+          v_max: Math.round(vMax * 10) / 10,
+        };
+      }
+      console.time('derived');
+      const wsGrid = latest.wind_speed_grid;
+      apparentGridObs = buildDerivedGrid(tgObs, hgObs, wsGrid, apparentTemp);
+      apparentGridFc  = buildDerivedGrid(tgFc,  hgFc,  wsGrid, apparentTemp);
+      wetBulbGridObs  = buildDerivedGrid(tgObs, hgObs, null, (t, h) => wetBulbStull(t, h));
+      wetBulbGridFc   = buildDerivedGrid(tgFc,  hgFc,  null, (t, h) => wetBulbStull(t, h));
+      console.timeEnd('derived');
+      // Range unificati tra Adesso e +1h, stesso pattern di globalTMin/globalTMax
+      globalAMin = Math.min(apparentGridObs?.v_min ?? Infinity,  apparentGridFc?.v_min ?? Infinity);
+      globalAMax = Math.max(apparentGridObs?.v_max ?? -Infinity, apparentGridFc?.v_max ?? -Infinity);
+      if (!isFinite(globalAMin) || !isFinite(globalAMax)) { globalAMin = 0; globalAMax = 40; }
+      globalWMin = Math.min(wetBulbGridObs?.v_min ?? Infinity,  wetBulbGridFc?.v_min ?? Infinity);
+      globalWMax = Math.max(wetBulbGridObs?.v_max ?? -Infinity, wetBulbGridFc?.v_max ?? -Infinity);
+      if (!isFinite(globalWMin) || !isFinite(globalWMax)) { globalWMin = 0; globalWMax = 30; }
+
+      // Il ramo `else` sotto è il pannello legacy, invariato, per qualunque visita da browser
+      // normale; il ramo `if (isPWA)` costruisce brand lockup/rail/popover.
+      const firstFc = (latest.stations || []).find(s => s.forecast?.valid_for);
+      const validOre = firstFc ? formatTime(firstFc.forecast.valid_for) : '';
+
+      // Righe di preferenze (Mostra vento / Frecce direzionali / unità) — markup condiviso
+      // byte-per-byte, riusato sia nel pannello legacy sia nel popover PWA: stessi id, quindi
+      // switchLayer()/i listener di wind-check/arrow-check/unità restano invariati sotto.
+      const prefsRowsHtml =
+        `<label class="ctrl-row" id="stations-toggle">` +
+        `<input type="checkbox" id="stations-check"${stationsVisible ? ' checked' : ''}>` +
+        `<span class="switch"></span>` +
+        `<span>Stazioni sulla mappa</span>` +
+        `</label>` +
+        `<label class="ctrl-row" id="contour-toggle">` +
+        `<input type="checkbox" id="contour-check">` +
+        `<span class="switch"></span>` +
+        `<span>Linee di livello</span>` +
+        `</label>` +
+        `<label class="ctrl-row" id="wind-toggle">` +
+        `<input type="checkbox" id="wind-check" checked>` +
+        `<span class="switch"></span>` +
+        `<span>Mostra vento</span>` +
+        `</label>` +
+        `<label class="ctrl-row" id="arrow-toggle" style="display:none">` +
+        `<input type="checkbox" id="arrow-check">` +
+        `<span class="switch"></span>` +
+        `<span>Frecce direzionali</span>` +
+        `</label>` +
+        `<div class="pill-group" id="wind-unit-group">` +
+        `<label class="pill"><input type="radio" name="wind-unit" value="kmh" checked><span>km/h</span></label>` +
+        `<label class="pill"><input type="radio" name="wind-unit" value="kts"><span>nodi</span></label>` +
+        `</div>` +
+        `<div class="prefs-label">Popup sulla mappa</div>` +
+        `<div class="pill-group" id="popup-style-group">` +
+        `<label class="pill"><input type="radio" name="popup-style" value="full"><span>Completo</span></label>` +
+        `<label class="pill"><input type="radio" name="popup-style" value="min"><span>Minimale</span></label>` +
+        `</div>`;
+
+      const ICON_SLIDERS_SM =
+        `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">` +
+        `<path d="M4 7h9M17 7h3M4 17h3M11 17h9"></path><circle cx="15" cy="7" r="2.3"></circle><circle cx="9" cy="17" r="2.3"></circle></svg>`;
+
+      // Logo Metek (tre onde + sole): lo stesso nel lockup della PWA e nel pannello del sito
+      const BRAND_MARK_SVG =
+        `<svg class="brand-mark" viewBox="0 0 180 180" xmlns="http://www.w3.org/2000/svg">` +
+        `<g fill="none" stroke-linecap="round">` +
+        `<path d="M-4 46c34 0 46 22 84 22s52-22 104-22" stroke="#4b5192" stroke-width="10"></path>` +
+        `<path d="M-4 82c34 0 46 22 84 22s52-22 104-22" stroke="#9184d9" stroke-width="11"></path>` +
+        `<path d="M-4 118c34 0 46 22 84 22s52-22 104-22" stroke="#c6bff0" stroke-width="10"></path>` +
+        `</g><circle cx="126" cy="96" r="9" fill="#f4a93f"></circle>` +
+        `</svg>`;
+
+      if (isPWA) {
+        const railIconSvg = inner =>
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">${inner}</svg>`;
+        const ICON_WIND = railIconSvg('<path d="M3 8h11a3 3 0 100-6"></path><path d="M3 12h15a3.5 3.5 0 110 7"></path><path d="M3 16h7a2.5 2.5 0 110 5"></path>');
+        const ICON_TEMP = railIconSvg('<path d="M14 14.8V5a2 2 0 10-4 0v9.8a4 4 0 104 0z"></path>');
+        const ICON_DROP = railIconSvg('<path d="M12 3s6 6.4 6 10.4A6 6 0 016 13.4C6 9.4 12 3 12 3z"></path>');
+        const ICON_RADAR = railIconSvg('<path d="M5 14a4 4 0 011.4-7.7A5.5 5.5 0 0117 7.6 3.6 3.6 0 0119 14z"></path><path d="M8 18l-1 2.5M12 18l-1 2.5M16 18l-1 2.5"></path>');
+        const ICON_SLIDERS = railIconSvg('<path d="M4 7h9M17 7h3M4 17h3M11 17h9"></path><circle cx="15" cy="7" r="2.3"></circle><circle cx="9" cy="17" r="2.3"></circle>');
+
+        // ─── Brand lockup (top-left) — riusa #info-mos/#info-radar/#valid-for-label così
+        // switchLayer()/switchTime()/RadarLayer.onUpdate restano invariati ───
+        const brand = L.DomUtil.create('div');
+        brand.id = 'brand-lockup';
+        // v2: barra in alto (A1) con logo, ora dei dati, lente e menu impostazioni
+        brand.innerHTML =
+          `<div class="brand-id">` + BRAND_MARK_SVG +
+          `<div class="brand-text">` +
+          `<div class="brand-word">Metek</div>` +
+          `<div id="info-mos">` +
+          `<div id="brand-meta">${formatTime(latest.generated_at)}` +
+          `<span id="valid-for-label">${validOre ? ` · previsioni ${validOre}` : ''}</span>` +
+          `</div>` +
+          `</div>` +
+          `<div id="info-radar" style="display:none"></div>` +
+          `</div></div>` +
+          `<span class="top-time">${formatTime(latest.generated_at)}</span>` +
+          `<button class="top-btn" id="top-search" type="button" aria-label="Cerca un luogo">` +
+          `<svg width="19" height="19" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m12.2 12.2 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` +
+          `<button class="top-btn" id="prefs-btn" type="button" aria-label="Impostazioni">${ICON_SLIDERS}</button>`;
+        document.body.appendChild(brand);
+        brand.querySelector('#top-search').addEventListener('click', () => window.MeteoLuogo?.openSearch());
+
+        // ─── Gesto diagnostico nascosto: 5 tap rapidi sul logo → runDiagBadge() ───
+        // Permanente: innocuo perché richiede un'azione esplicita dell'utente.
+        // Un tocco solo ricarica l'app (dopo una breve attesa, per distinguerlo dai 5 tocchi).
+        let tapCount = 0, tapTimer = null, reloadTimer = null;
+        brand.querySelector('.brand-id').addEventListener('click', () => {
+          tapCount++;
+          clearTimeout(tapTimer);
+          clearTimeout(reloadTimer);
+          if (tapCount === 1) reloadTimer = setTimeout(() => location.reload(), 400);
+          tapTimer = setTimeout(() => { tapCount = 0; }, 2000);
+          if (tapCount >= 5) {
+            tapCount = 0;
+            runDiagBadge();
+          }
+        });
+
+        // ─── Pillole modalità (top-right) — mutuamente esclusive per tab. L'ora (Ora / +N h)
+        // si sceglie dalla barra in basso: la pillola Adesso/Previsione non c'è più ───
+        const tempModeToggle = L.DomUtil.create('div');
+        tempModeToggle.id = 'tempmode-toggle';
+        tempModeToggle.innerHTML =
+          `<button id="btn-treal" class="active">Reale</button>` +
+          `<button id="btn-tapp">Percepita</button>`;
+        document.body.appendChild(tempModeToggle);
+
+        const humModeToggle = L.DomUtil.create('div');
+        humModeToggle.id = 'hummode-toggle';
+        humModeToggle.innerHTML =
+          `<button id="btn-hreal" class="active">Reale</button>` +
+          `<button id="btn-hwb">Bulbo umido</button>`;
+        document.body.appendChild(humModeToggle);
+
+        // ─── Rail layer (bottom-center) ───
+        const rail = L.DomUtil.create('div');
+        rail.id = 'layer-rail';
+        rail.innerHTML =
+          `<button class="rail-item" id="btn-wind">${ICON_WIND}<span>Vento</span></button>` +
+          `<button class="rail-item active" id="btn-temp">${ICON_TEMP}<span>Temp.</span></button>` +
+          `<button class="rail-item" id="btn-hum">${ICON_DROP}<span>Umidità</span></button>` +
+          `<button class="rail-item" id="btn-radar">${ICON_RADAR}<span>Radar</span></button>`;
+        // v2 (B1): barra del tempo, scala colori e livelli in un'unica card in basso
+        const dock = L.DomUtil.create('div');
+        dock.id = 'dock';
+        document.body.appendChild(dock);
+        // Reale/Percepita e Reale/Bulbo umido: pillola sopra la card, a destra
+        const modes = L.DomUtil.create('div');
+        modes.id = 'dock-modes';
+        dock.appendChild(modes);
+        modes.appendChild(tempModeToggle);
+        modes.appendChild(humModeToggle);
+        dock.appendChild(rail);
+        // Le barre del tempo (+48 h e radar) nascono più tardi: appena compaiono entrano nella card
+        new MutationObserver(() => {
+          ['fc48-timeline', 'radar-timeline'].forEach(id => {
+            const t = document.getElementById(id);
+            if (t && t.parentNode !== dock) dock.insertBefore(t, rail);
+          });
+        }).observe(document.body, { childList: true });
+        L.DomEvent.disableClickPropagation(dock);
+        L.DomEvent.disableScrollPropagation(dock);
+
+        // ─── Popover preferenze — chiuso di default ───
+        const popover = L.DomUtil.create('div');
+        popover.id = 'prefs-popover';
+        popover.classList.add('hidden');
+        popover.innerHTML =
+          prefsRowsHtml +
+          `<div class="panel-divider"></div>` +
+          `<a class="dashboard-link" href="dashboard.html">` +
+          `<span>Dashboard</span><span class="chevron">›</span>` +
+          `</a>`;
+        document.body.appendChild(popover);
+      } else {
+        // ─── Pannello di controllo unico — top-left (comportamento legacy, invariato) ───
+        const infoPanel = L.DomUtil.create('div');
+        infoPanel.id = 'control-panel';
+        infoPanel.innerHTML =
+          `<div class="panel-head">` +
+          `<div class="head-row">` +
+          `<button class="info-title" id="brand-reload" type="button" title="Ricarica">${BRAND_MARK_SVG}<span class="brand-word">Metek</span></button>` +
+          `<button class="head-btn" id="head-search" type="button" aria-label="Cerca un luogo" title="Cerca un luogo">` +
+          `<svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m12.2 12.2 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` +
+          `<button class="head-btn" id="head-prefs" type="button" aria-label="Impostazioni" aria-expanded="false" aria-controls="panel-settings" title="Impostazioni">${ICON_SLIDERS_SM}</button>` +
+          `</div>` +
+          `<div id="info-mos">` +
+          `<div class="info-update">Aggiornato: ${formatTime(latest.generated_at)}</div>` +
+          `<div class="info-update" id="valid-for-label">${validOre ? `Previsioni per le ore ${validOre}` : ''}</div>` +
+          `</div>` +
+          `<div class="info-update" id="info-radar" style="display:none"></div>` +
+          `</div>` +
+          `<div class="layer-toggle">` +
+          `<button id="btn-wind">💨 Vento</button>` +
+          `<button id="btn-temp" class="active">🌡️ Temperatura</button>` +
+          `<button id="btn-hum">💧 Umidità</button>` +
+          `<button id="btn-radar">🌧️ Radar</button>` +
+          `</div>` +
+          `<div class="layer-toggle" id="tempmode-toggle">` +
+          `<button id="btn-treal" class="active">Reale</button>` +
+          `<button id="btn-tapp">Percepita</button>` +
+          `</div>` +
+          `<div class="layer-toggle" id="hummode-toggle">` +
+          `<button id="btn-hreal" class="active">Reale</button>` +
+          `<button id="btn-hwb">Bulbo umido</button>` +
+          `</div>` +
+          `<div id="panel-settings" hidden>` +
+          `<div class="panel-divider"></div>` +
+          prefsRowsHtml +
+          `</div>` +
+          `<div class="panel-divider"></div>` +
+          `<a class="dashboard-link" href="dashboard.html">` +
+          `<span>📊 Dashboard</span><span class="chevron">›</span>` +
+          `</a>`;
+        document.body.appendChild(infoPanel);
+
+        // Logo e scritta ricaricano la pagina (come Cmd+R); lente → ricerca; ingranaggio → impostazioni
+        document.getElementById('brand-reload').addEventListener('click', () => location.reload());
+        document.getElementById('head-search').addEventListener('click', () => window.MeteoLuogo?.openSearch());
+        const headPrefs = document.getElementById('head-prefs');
+        headPrefs.addEventListener('click', () => {
+          const box = document.getElementById('panel-settings');
+          box.hidden = !box.hidden;
+          headPrefs.classList.toggle('active', !box.hidden);
+          headPrefs.setAttribute('aria-expanded', String(!box.hidden));
+        });
+      }
+
+      // Stile del popup sulla mappa: completo (tutti i valori) o minimale (solo il dato del layer)
+      document.querySelectorAll('input[name="popup-style"]').forEach(r => {
+        r.checked = r.value === popupStyle;
+        r.addEventListener('change', e => {
+          popupStyle = e.target.value;
+          try { localStorage.setItem(POPUP_STYLE_KEY, popupStyle); } catch { /* storage bloccato */ }
+        });
+      });
+
+      // Legenda — bottom-right (aggiornata da updateLegend)
+      const legend = L.DomUtil.create('div', 'temp-legend');
+      legend.innerHTML =
+        `<div id="legend-title" class="legend-title"></div>` +
+        `<div id="legend-bar" class="legend-bar"></div>` +
+        `<div id="legend-labels" class="legend-labels"></div>`;
+      document.getElementById('map').appendChild(legend);
+
+      function updateLegend(layer, vMin, vMax, unit, customTicks) {
+        const unitLabel = unit.trim();
+        const titles = {
+          temperature: `Temperatura (${unitLabel})`,
+          apparent:    `Percepita (${unitLabel})`,
+          wetbulb:     `Bulbo umido (${unitLabel})`,
+          humidity:    `Umidità (${unitLabel})`,
+          wind:        `Velocità vento (${unitLabel})`,
+          radar:       `Intensità precipitazione (${unitLabel})`,
+        };
+        const tempGradient = 'linear-gradient(to right, #2c3e95 0%, #3a6fc4 12.5%, #4fb8c4 25%, #6fc46a 37.5%, #d4d24a 50%, #f4a93f 62.5%, #e8542f 75%, #a50026 87.5%, #67001f 100%)';
+        const gradients = {
+          temperature: tempGradient,
+          apparent:    tempGradient,
+          wetbulb:     tempGradient,
+          humidity:    'linear-gradient(to right, #d96f27, #fee080, #b0e090, #317ec8, #08306b)',
+          wind:        'linear-gradient(to right, #003399, #0099ff, #00cc66, #ffdd00, #ff6600, #cc0000)',
+          radar:       'linear-gradient(to right, #6ec6e0 0%, #4caf50 25%, #ffd54f 50%, #ff7043 75%, #b71c1c 100%)',
+        };
+        document.getElementById('legend-title').textContent = titles[layer] ?? layer;
+        document.getElementById('legend-bar').style.background = gradients[layer] ?? '';
+        const labelsEl = document.getElementById('legend-labels');
+        labelsEl.innerHTML = '';
+        if (customTicks) {
+          customTicks.forEach((text, i) => {
+            const pos = customTicks.length > 1 ? (i / (customTicks.length - 1)) * 100 : 0;
+            const span = document.createElement('span');
+            span.className = 'legend-tick';
+            span.textContent = text;
+            span.style.left = pos + '%';
+            labelsEl.appendChild(span);
+          });
+          return;
+        }
+        // PWA: solo min/max, unità accodata solo al max. Browser normale: invariato (3 tick,
+        // unità su tutti) — stesso identico comportamento di oggi.
+        const ticks = isPWA ? [vMin, vMax] : [vMin, (vMin + vMax) / 2, vMax];
+        ticks.forEach((v, i) => {
+          const pos = ((v - vMin) / (vMax - vMin)) * 100;
+          const span = document.createElement('span');
+          span.className = 'legend-tick';
+          const decimals = (layer === 'temperature' || layer === 'apparent' || layer === 'wetbulb') ? 1 : 0;
+          const showUnit = !isPWA || i === ticks.length - 1;
+          span.textContent = v.toFixed(decimals) + (showUnit ? unit : '');
+          span.style.left = pos + '%';
+          labelsEl.appendChild(span);
+        });
+      }
+
+      // Badge centrale "Dati assenti" — mostrato quando una griglia derivata non è
+      // calcolabile (griglie sorgente mancanti) e la mappa resterebbe senza overlay.
+      function setNoDataOverlay(visible) {
+        let el = document.getElementById('nodata-overlay');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'nodata-overlay';
+          el.textContent = 'Dati assenti';
+          document.body.appendChild(el);
+        }
+        el.style.display = visible ? 'block' : 'none';
+      }
+
+      // Stato popover preferenze — solo PWA, il pannello legacy non ha un concetto di
+      // apertura/chiusura (le righe sono sempre visibili inline come oggi).
+      let prefsOpen = false;
+      function renderPrefsVisibility() {
+        if (!isPWA) return;
+        const pop = document.getElementById('prefs-popover');
+        pop?.classList.toggle('hidden', !prefsOpen);
+        document.getElementById('prefs-btn')?.classList.toggle('active', prefsOpen);
+        // v2: il popover scende dal menu nella barra in alto
+        if (V2) return;
+        // Con la barra Ora/+48 h o radar aperta il popover si apre sopra di essa, non dietro
+        if (pop && prefsOpen) {
+          const bar = [...document.querySelectorAll('#fc48-timeline, #radar-timeline')]
+            .find(el => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0);
+          pop.style.bottom = bar
+            ? `${Math.round(window.innerHeight - bar.getBoundingClientRect().top + 10)}px`
+            : '';
+          pop.classList.toggle('lifted', !!bar);   // alzato: la freccetta punterebbe alla barra
+        }
+      }
+
+      // Solo PWA: sul layer Radar la timeline occupa spazio variabile in fondo (testo che
+      // va a capo, stato "non disponibile" più basso della timeline normale, ecc.) — invece
+      // di un bottom fisso indovinato via CSS, misuriamo l'altezza reale a runtime e
+      // spostiamo la legenda sopra di essa + un margine. Richiamata da switchLayer(),
+      // dall'update di RadarLayer (quando i frame arrivano/falliscono) e al resize.
+      const RADAR_TIMELINE_BOTTOM = 112; // deve combaciare con .is-pwa .radar-timeline { bottom }
+      const RADAR_LEGEND_GAP = 8;
+      function updateRadarLegendOffset() {
+        if (!isPWA) return;
+        const legendEl = document.querySelector('.temp-legend');
+        if (!legendEl) return;
+        const radarSlot = document.querySelector('#radar-timeline .radar-legend-slot');
+        if (activeLayer !== 'radar') {
+          legendEl.style.bottom = '';
+          // Uscendo dal radar la scala lascia la card radar (la barra Ora/+48 h se la riprende)
+          if (radarSlot && legendEl.parentNode === radarSlot) document.body.appendChild(legendEl);
+          return;
+        }
+        const timelineEl = document.getElementById('radar-timeline');
+        const visible = timelineEl && getComputedStyle(timelineEl).display !== 'none';
+        // Card radar compatta: la scala colori sta dentro la card, sotto il cursore
+        if (visible && radarSlot) {
+          legendEl.style.bottom = '';
+          if (legendEl.parentNode !== radarSlot) radarSlot.appendChild(legendEl);
+          return;
+        }
+        if (radarSlot && legendEl.parentNode === radarSlot) document.body.appendChild(legendEl);
+        if (!visible) {
+          // Al primo switch su Radar la timeline non esiste ancora (creata lazy dentro
+          // RadarLayer.activate(), asincrono) o non è ancora visibile: misurarla ora darebbe
+          // 0 e posizionerebbe la legenda troppo in basso, dentro lo spazio che la timeline
+          // occuperà a breve — meglio lasciare il fallback CSS (.legend-radar-mode, 220px,
+          // già abbondante) finché non c'è una misura vera da usare.
+          legendEl.style.bottom = '';
+          return;
+        }
+        const timelineH = timelineEl.getBoundingClientRect().height;
+        legendEl.style.bottom = `${RADAR_TIMELINE_BOTTOM + timelineH + RADAR_LEGEND_GAP}px`;
+      }
+
+      function switchLayer(layer) {
+        activeLayer = layer;
+        fc48Ctl?.refresh();
+        if (heatOverlay) map.removeLayer(heatOverlay);
+        heatOverlay = null;
+
+        document.getElementById('btn-wind').classList.toggle('active', layer === 'wind');
+        document.getElementById('btn-temp').classList.toggle('active', layer === 'temperature');
+        document.getElementById('btn-hum').classList.toggle('active',  layer === 'humidity');
+        document.getElementById('btn-radar').classList.toggle('active', layer === 'radar');
+        document.getElementById('tempmode-toggle').style.display =
+          layer === 'temperature' ? 'flex' : 'none';
+        document.getElementById('hummode-toggle').style.display =
+          layer === 'humidity' ? 'flex' : 'none';
+
+        const windToggle    = document.getElementById('wind-toggle');
+        const arrowToggle   = document.getElementById('arrow-toggle');
+        const windCheck     = document.getElementById('wind-check');
+        const arrowCheck    = document.getElementById('arrow-check');
+        const windUnitGroup = document.getElementById('wind-unit-group');
+        const infoMos       = document.getElementById('info-mos');
+        const infoRadar     = document.getElementById('info-radar');
+
+        if (windUnitGroup) windUnitGroup.style.display = '';
+        if (infoMos)   infoMos.style.display   = layer === 'radar' ? 'none' : '';
+        if (infoRadar) infoRadar.style.display = layer === 'radar' ? '' : 'none';
+        document.querySelector('.temp-legend')?.classList.toggle('legend-radar-mode', layer === 'radar');
+        updateRadarLegendOffset();
+
+        if (layer !== 'radar' && window.RadarLayer && window.RadarLayer.isActive()) {
+          window.RadarLayer.deactivate();
+        }
+
+        if (isPWA) {
+          // Radar: nessuna impostazione applicabile — tasto regolazioni e divider spariscono,
+          // popover si chiude se era aperto (richiesta esplicita del design). Su qualunque
+          // altro layer restano visibili.
+          const prefsBtnEl = document.getElementById('prefs-btn');
+          const railDividerEl = document.getElementById('rail-divider');
+          // v2: il menu sta nella barra in alto e resta sempre (contiene anche la Dashboard)
+          if (prefsBtnEl && !V2) prefsBtnEl.style.display = layer === 'radar' ? 'none' : '';
+          if (railDividerEl) railDividerEl.style.display = layer === 'radar' ? 'none' : '';
+          if (layer === 'radar' && prefsOpen) {
+            prefsOpen = false;
+            renderPrefsVisibility();
+          }
+        }
+
+        const contourToggle = document.getElementById('contour-toggle');
+        if (contourToggle) contourToggle.style.display = layer === 'radar' ? 'none' : '';
+
+        if (layer === 'radar') {
+          if (windToggle)    windToggle.style.display    = 'none';
+          if (arrowToggle)   arrowToggle.style.display   = 'none';
+          if (windUnitGroup) windUnitGroup.style.display = 'none';
+          clearArrowLayer(map);
+          showStations(map, stationMarkers);
+          if (windLayer) map.removeLayer(windLayer);
+          updateLegend('radar', null, null, 'mm/h', ['debole', 'moderata', 'intensa']);
+          if (window.RadarLayer) window.RadarLayer.activate();
+          // activate() crea e mostra subito la barra radar (prima di qualunque attesa di rete): la scala
+          // colori entra nella card adesso, non mezzo secondo dopo. Prima restava un attimo fuori, sopra
+          // la card, e si vedeva "saltare" (iPhone, 8/11)
+          updateRadarLegendOffset();
+        } else if (layer === 'wind') {
+          if (windToggle)  windToggle.style.display  = 'none';
+          if (arrowToggle) arrowToggle.style.display = '';
+          heatOverlay = renderWindSpeed(latest);
+          const wg    = latest.wind_speed_grid;
+          currentWsMin = wg ? wg.ws_min : WIND_SPEED_MIN;
+          currentWsMax = wg ? wg.ws_max : WIND_SPEED_MAX;
+          updateWindLegend();
+          // Frecce off di default → reset checkbox e mostra particelle
+          if (arrowCheck) arrowCheck.checked = false;
+          clearArrowLayer(map);
+          if (windLayer && !contourMode) windLayer.addTo(map);
+        } else {
+          if (windToggle)  windToggle.style.display  = '';
+          if (arrowToggle) arrowToggle.style.display = 'none';
+          clearArrowLayer(map);
+          showStations(map, stationMarkers);
+          // Particelle: rispetta stato di #wind-check
+          if (windLayer) {
+            if (windCheck && windCheck.checked && !contourMode) windLayer.addTo(map);
+            else map.removeLayer(windLayer);
+          }
+          if (layer === 'temperature') {
+            heatOverlay = renderTemperature(latest, activeTime);
+            if (tempMode === 'apparent') updateLegend('apparent', globalAMin, globalAMax, '°C');
+            else                         updateLegend('temperature', globalTMin, globalTMax, '°C');
+          } else {
+            heatOverlay = renderHumidity(latest, activeTime);
+            if (humMode === 'wetbulb') updateLegend('wetbulb', globalWMin, globalWMax, '°C');
+            else                       updateLegend('humidity', globalHMin, globalHMax, '%');
+          }
+        }
+
+        if (heatOverlay) heatOverlay.addTo(map);
+        setNoDataOverlay(!heatOverlay && layer !== 'radar');
+        updateStationPins(stationMarkers, latest.stations || []);
+      }
+
+      // L'ora mostrata si sceglie solo dalla barra (setupForecast48 → setPos): "Ora" = osservato,
+      // +1…+48 h = previsione. Non c'è più l'interruttore Adesso/Previsione.
+      function switchTime(time) {
+        activeTime = time;
+        fc48Ctl?.updateValidLabel();
+        if (activeLayer === 'temperature' || activeLayer === 'humidity') switchLayer(activeLayer);
+      }
+
+      function switchTempMode(mode) {
+        tempMode = mode;
+        document.getElementById('btn-treal').classList.toggle('active', mode === 'real');
+        document.getElementById('btn-tapp').classList.toggle('active', mode === 'apparent');
+        if (activeLayer === 'temperature') switchLayer('temperature');
+      }
+      function switchHumMode(mode) {
+        humMode = mode;
+        document.getElementById('btn-hreal').classList.toggle('active', mode === 'real');
+        document.getElementById('btn-hwb').classList.toggle('active', mode === 'wetbulb');
+        if (activeLayer === 'humidity') switchLayer('humidity');
+      }
+
+      function setupForecast48(latest, stations) {
+        const base = {
+          t: latest.temp_grid_forecast, h: latest.humidity_grid_forecast, ws: latest.wind_speed_grid,
+          a: apparentGridFc, wb: wetBulbGridFc,
+          st: stations.map(s => (s.forecast ? { ...s.forecast } : null)),
+        };
+        let data = null;        // {times: [...ISO], series: Map(id → {t, rh, ws, wd} allineate a times)}
+        let weights = null;     // Float32Array celle × stazioni (IDW normalizzato), calcolata una volta
+        let wIds = [];
+        let idx = 0;            // ora di previsione mostrata (0 = +1h)
+        let pos = 0;            // posizione nella barra: 0 = Ora (osservato), k = +k h (idx = k − 1)
+        let timer = null;
+        let wsRange = null;     // scala colori del vento fissa sulle 48 ore
+        const cache = new Map();
+
+        const el = document.createElement('div');
+        el.className = 'radar-timeline';
+        el.id = 'fc48-timeline';
+        el.style.display = 'none';
+        // PWA: card unica e bassa: play, cursore e ora scelta su una riga; sotto, la scala colori
+        // (la .temp-legend viene spostata qui dentro da refresh()). Niente titolo né etichette Ora/+48h.
+        el.innerHTML = isPWA ?
+          `<div class="radar-timeline-row">` +
+          `<button id="fc48-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
+          `<div class="radar-track-wrap"><input type="range" id="fc48-slider" class="radar-slider" min="0" max="0" step="1" value="0" aria-label="Ora mostrata sulla mappa"></div>` +
+          `<span id="fc48-now" class="fc48-now"></span>` +
+          `</div>` +
+          `<div class="fc48-legend-slot"></div>` +
+          `<span id="fc48-start" hidden></span><span id="fc48-end" hidden></span>`
+          :
+          `<div class="radar-timeline-row">` +
+          `<button id="fc48-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
+          `<div class="radar-track-wrap"><input type="range" id="fc48-slider" class="radar-slider" min="0" max="0" step="1" value="0"></div>` +
+          `</div>` +
+          `<div class="radar-timeline-labels"><span id="fc48-start"></span><span id="fc48-now"></span><span id="fc48-end"></span></div>` +
+          `<div class="radar-credit">Ora: stazioni · poi previsioni M2 fino a +48 h</div>`;
+        document.body.appendChild(el);
+        const slider = el.querySelector('#fc48-slider');
+        const playBtn = el.querySelector('#fc48-play');
+
+        const fmt = iso => new Date(iso).toLocaleString('it-IT', {
+          timeZone: 'Europe/Rome', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+
+        let readyResolve;
+        const whenReady = new Promise(r => { readyResolve = r; });  // true se le 48 ore sono caricate
+        fetch('data/forecast_48h.json', { cache: 'no-store' })
+          .then(r => (r.ok ? r.json() : null))
+          .then(j => { init(j); readyResolve(!!data && data.series.size > 0); })
+          .catch(() => { init(null); readyResolve(!!data && data.series.size > 0); });
+
+        // Senza 48 ore valide la barra resta, con due posizioni: Ora e la +1h di latest.json
+        function initLite() {
+          const ref = stations.find(s => s.forecast?.valid_for);
+          if (!ref || data) return;
+          data = { times: [ref.forecast.valid_for], series: new Map(), land: null };
+          setupControls();
+        }
+
+        function init(j) {
+          if (!j) { initLite(); return; }
+          const ageH = (Date.now() - new Date(j.issue_at).getTime()) / 3.6e6;
+          if (!(ageH < 6)) { initLite(); return; }  // file vecchio: solo Ora e +1h
+          const ref = stations.find(s => s.forecast?.valid_for);
+          if (!ref) return;
+          const start = new Date(ref.forecast.valid_for).getTime();  // ora della +1h di latest.json
+          const series = new Map();
+          let times = null;
+          for (const s of stations) {
+            const e = j.stations?.[String(s.id)];
+            if (!e) continue;
+            const t0 = e.valid_for.findIndex(v => new Date(v).getTime() === start);
+            if (t0 < 0) continue;
+            const sl = (a) => a.slice(t0);
+            series.set(s.id, { t: sl(e.t), rh: sl(e.rh), ws: sl(e.ws), wd: sl(e.wd) });
+            if (!times || e.valid_for.length - t0 > times.length) times = e.valid_for.slice(t0);
+          }
+          if (!times || times.length < 2 || series.size < 2) { initLite(); return; }
+          let land = null;  // peso terra 0–1 per cella (1 = terraferma), dal file; senza, nessun peso
+          const lw = j.land_weight;
+          if (lw && lw.nx === base.t?.nx && lw.ny === base.t?.ny) {
+            const bin = atob(lw.b64);
+            land = new Float32Array(bin.length);
+            for (let c = 0; c < bin.length; c++) land[c] = bin.charCodeAt(c) / 100;
+          }
+          data = { times, series, land };
+          // Scala colori fissa su tutte le 48 ore, così lo scorrimento resta confrontabile
+          let wsMin = base.ws ? base.ws.ws_min : Infinity, wsMax = base.ws ? base.ws.ws_max : -Infinity;
+          for (const ser of series.values()) {
+            for (const v of ser.t)  if (v != null) { globalTMin = Math.min(globalTMin, v); globalTMax = Math.max(globalTMax, v); }
+            for (const v of ser.rh) if (v != null) { globalHMin = Math.min(globalHMin, v); globalHMax = Math.max(globalHMax, v); }
+            for (const v of ser.ws) if (v != null) { wsMin = Math.min(wsMin, v); wsMax = Math.max(wsMax, v); }
+            // Percepita e bulbo umido: stessa logica, ora per ora sulle stazioni
+            ser.t.forEach((tv, k) => {
+              const hv = ser.rh[k];
+              if (tv == null || hv == null) return;
+              const av = apparentTemp(tv, hv, ser.ws[k]);
+              if (av != null && isFinite(av)) { globalAMin = Math.min(globalAMin, av); globalAMax = Math.max(globalAMax, av); }
+              const wv = wetBulbStull(tv, hv);
+              if (isFinite(wv)) { globalWMin = Math.min(globalWMin, wv); globalWMax = Math.max(globalWMax, wv); }
+            });
+          }
+          if (base.ws) {
+            wsRange = { min: Math.round(wsMin), max: Math.round(wsMax) };
+            base.ws = { ...base.ws, ws_min: wsRange.min, ws_max: wsRange.max };
+          }
+          setupControls();
+        }
+
+        function setupControls() {
+          slider.max = String(data.times.length);
+          el.querySelector('#fc48-end').textContent = `+${data.times.length}h`;
+          slider.addEventListener('input', e => { pause(); setPos(parseInt(e.target.value, 10)); });
+          playBtn.addEventListener('click', () => (timer ? pause() : play()));
+          setPos(0, true);
+          refresh();
+          // La mappa all'apertura è stata disegnata prima che arrivasse forecast_48h, con la scala
+          // di sole Ora e +1h: la si ridisegna con quella delle 48 ore, la stessa che si vede
+          // scorrendo (prima i colori cambiavano dopo aver mosso la barra avanti e indietro)
+          if (activeLayer === 'temperature' || activeLayer === 'humidity') switchTime(activeTime);
+          else if (activeLayer === 'wind') setPos(pos);
+        }
+
+        // Il vento non ha un "Ora" osservato su griglia: lì la barra parte dalla +1h
+        const minPos = () => (activeLayer === 'wind' ? 1 : 0);
+
+        function setPos(p, silent) {
+          p = Math.max(minPos(), Math.min(data.times.length, p));
+          pos = p;
+          slider.value = String(p);
+          activeTime = p === 0 ? 'observed' : 'forecast';
+          show(Math.max(0, p - 1), silent);
+        }
+
+        function buildWeights(grid) {
+          const pts = stations.filter(s => data.series.has(s.id));
+          wIds = pts.map(s => s.id);
+          const { nx, ny, lat_min, lat_max, lon_min, lon_max } = grid;
+          const k = pts.length, w = new Float32Array(nx * ny * k);
+          const cosLat = Math.cos(((lat_min + lat_max) / 2) * Math.PI / 180);
+          for (let r = 0; r < ny; r++) {
+            const lat = lat_max - (lat_max - lat_min) * r / (ny - 1);
+            for (let c = 0; c < nx; c++) {
+              const lon = lon_min + (lon_max - lon_min) * c / (nx - 1);
+              const o = (r * nx + c) * k;
+              let sum = 0;
+              for (let i = 0; i < k; i++) {
+                const d2 = (lat - pts[i].lat) ** 2 + ((lon - pts[i].lon) * cosLat) ** 2 + 1e-6;
+                const wi = 1 / d2;
+                w[o + i] = wi; sum += wi;
+              }
+              for (let i = 0; i < k; i++) w[o + i] /= sum;
+            }
+          }
+          return w;
+        }
+
+        function shifted(grid, key, i) {
+          if (!grid?.values) return grid;
+          if (!weights) weights = buildWeights(grid);
+          const k = wIds.length, n = grid.values.length;
+          const delta = wIds.map(id => {
+            const s = data.series.get(id)[key];
+            return (s[i] != null && s[0] != null) ? s[i] - s[0] : 0;
+          });
+          const out = new Array(n);
+          let vMin = Infinity, vMax = -Infinity;
+          for (let c = 0; c < n; c++) {
+            let d = 0;
+            const o = c * k;
+            for (let j = 0; j < k; j++) d += weights[o + j] * delta[j];
+            // Sul mare la variazione delle stazioni di terra non si applica (riscaldamento diurno);
+            // il vento invece cambia anche al largo, come nella griglia delle particelle
+            if (data.land && key !== 'ws') d *= data.land[c];
+            let v = grid.values[c] + d;
+            if (key === 'rh') v = Math.min(100, Math.max(0, v));
+            if (key === 'ws') v = Math.max(0, v);
+            out[c] = v;
+            if (v < vMin) vMin = v;
+            if (v > vMax) vMax = v;
+          }
+          return { ...grid, values: out, v_min: vMin, v_max: vMax };
+        }
+
+        function gridsFor(i) {
+          if (i === 0) return base;
+          if (cache.has(i)) return cache.get(i);
+          const t = shifted(base.t, 't', i), h = shifted(base.h, 'rh', i);
+          let ws = shifted(base.ws, 'ws', i);
+          if (ws && wsRange) ws = { ...ws, ws_min: wsRange.min, ws_max: wsRange.max };
+          const derive = (fn, wg) => {
+            if (!t?.values || !h?.values) return null;
+            const vals = t.values.map((tv, c) => fn(tv, h.values[c], wg ? wg.values[c] : null));
+            return { ...t, values: vals, v_min: Math.min(...vals), v_max: Math.max(...vals) };
+          };
+          const g = { t, h, ws, a: derive(apparentTemp, ws), wb: derive((tv, hv) => wetBulbStull(tv, hv), null) };
+          cache.set(i, g);
+          return g;
+        }
+
+        function show(i, silent) {
+          idx = i;
+          const g = gridsFor(i);
+          latest.temp_grid_forecast = g.t;
+          latest.humidity_grid_forecast = g.h;
+          apparentGridFc = g.a;
+          wetBulbGridFc = g.wb;
+          stations.forEach((s, n) => {
+            const b = base.st[n];
+            const ser = data.series.get(s.id);
+            if (!b) return;
+            if (i === 0 || !ser) { s.forecast = { ...b }; return; }
+            s.forecast = { ...b, valid_for: data.times[i], temperature: ser.t[i], humidity: ser.rh[i],
+                           wind_speed: ser.ws[i], wind_direction: ser.wd[i] };
+          });
+          latest.wind_speed_grid = g.ws;
+          currentWsMin = g.ws ? g.ws.ws_min : WIND_SPEED_MIN;
+          currentWsMax = g.ws ? g.ws.ws_max : WIND_SPEED_MAX;
+          windGridNow = windGridFor(i);
+          if (windLayer) windLayer.setData(windGridNow);
+          el.querySelector('#fc48-now').textContent = isPWA
+            ? (pos === 0 ? `Ora ${formatTime(latest.generated_at)}` : fmt(data.times[i]))
+            : (pos === 0 ? `Ora · ${fmt(latest.generated_at)}` : `+${i + 1}h · ${fmt(data.times[i])}`);
+          updateValidLabel();
+          if (silent) return;
+          updateStationPopups(stationMarkers, stations);
+          if (activeLayer !== 'wind') { switchTime(activeTime); return; }
+          // Scheda Vento: si ridisegnano solo sfondo, legenda ed eventuali frecce
+          if (heatOverlay) map.removeLayer(heatOverlay);
+          heatOverlay = renderWindSpeed(latest);
+          if (heatOverlay) heatOverlay.addTo(map);
+          updateWindLegend();
+          if (document.getElementById('arrow-check')?.checked) renderArrowLayer(map, windGridNow);
+        }
+
+        // Particelle dell'ora i: stessa interpolazione del server (export_static.build_wind_grid_json,
+        // IDW potenza 2 in gradi) sul vento delle stazioni; alla +1h resta la griglia del server
+        function windGridFor(i) {
+          if (i === 0 || !windGrid?.[0]?.data?.length) return windGrid;
+          const { nx, ny, la1, la2, lo1, lo2 } = windGrid[0].header;
+          const pts = [];
+          for (const s of stations) {
+            const f = s.forecast;
+            if (f?.wind_speed == null || f?.wind_direction == null) continue;
+            const rad = f.wind_direction * Math.PI / 180, ms = f.wind_speed / 3.6;
+            pts.push([s.lat, s.lon, -ms * Math.sin(rad), -ms * Math.cos(rad)]);
+          }
+          if (pts.length < 2) return windGrid;
+          const u = new Array(nx * ny), v = new Array(nx * ny);
+          for (let r = 0; r < ny; r++) {
+            const lat = la1 - (la1 - la2) * r / (ny - 1);
+            for (let c = 0; c < nx; c++) {
+              const lon = lo1 + (lo2 - lo1) * c / (nx - 1);
+              let su = 0, sv = 0, sw = 0, hit = null;
+              for (const p of pts) {
+                const d2 = (lat - p[0]) ** 2 + (lon - p[1]) ** 2;
+                if (d2 === 0) { hit = p; break; }
+                su += p[2] / d2; sv += p[3] / d2; sw += 1 / d2;
+              }
+              u[r * nx + c] = Math.round((hit ? hit[2] : su / sw) * 1e4) / 1e4;
+              v[r * nx + c] = Math.round((hit ? hit[3] : sv / sw) * 1e4) / 1e4;
+            }
+          }
+          return [{ ...windGrid[0], data: u }, { ...windGrid[1], data: v }];
+        }
+
+        function play() {
+          playBtn.textContent = '❚❚';
+          // Sul vento le particelle ripartono a ogni ora: passo più lento per lasciarle muovere
+          const step = () => {
+            timer = setTimeout(() => { setPos(pos >= data.times.length ? minPos() : pos + 1); step(); },
+                               activeLayer === 'wind' ? 1600 : 900);
+          };
+          step();
+        }
+        function pause() {
+          if (timer) clearTimeout(timer);
+          timer = null;
+          playBtn.textContent = '▶';
+        }
+
+        function refresh() {
+          // Una sola barra per Ora e +1…+48 h su temperatura, umidità e vento; sul radar c'è la sua
+          const on = !!data && activeLayer !== 'radar';
+          el.style.display = on ? '' : 'none';
+          // Stesso spazio della timeline radar: la legenda sale sopra la timeline
+          const legendEl = document.querySelector('.temp-legend');
+          legendEl?.classList.toggle('legend-fc48-mode', on);
+          if (isPWA && legendEl) {
+            // Telefono: la scala colori sta dentro la card della barra; sul radar torna al suo posto
+            const slot = el.querySelector('.fc48-legend-slot');
+            if (on && legendEl.parentNode !== slot) { legendEl.style.bottom = ''; slot.appendChild(legendEl); }
+            else if (!on && legendEl.parentNode === slot) document.body.appendChild(legendEl);
+          }
+          if (!data) return;
+          slider.min = String(minPos());
+          el.querySelector('#fc48-start').textContent = minPos() === 0 ? 'Ora' : '+1h';
+          if (!on) {
+            pause();
+            // Sul radar la mappa torna all'osservato
+            if (pos !== 0) { setPos(0, true); updateStationPopups(stationMarkers, stations); }
+          } else if (pos < minPos()) {
+            setPos(minPos(), true);
+          }
+        }
+
+        // Testata: l'ora mostrata sulla mappa quando è una previsione, niente quando è "Ora"
+        function updateValidLabel() {
+          const label = document.getElementById('valid-for-label');
+          if (!label) return;
+          if (pos === 0 || !data) { label.textContent = ''; return; }
+          const ore = formatTime(data.times[idx]);
+          label.textContent = isPWA ? ` · previsione ${ore}` : `Previsione per le ore ${ore}`;
+        }
+
+        // Le 48 ore in un punto (scheda del luogo cercato, js/luogo.js), coerenti con la mappa:
+        // valore della griglia +1h nel punto + IDW della variazione delle stazioni (stessi pesi di
+        // buildWeights, stesso peso terra di shifted); direzione del vento con l'IDW di windGridFor.
+        // Usa sempre `base`, non le griglie dell'ora mostrata in quel momento dalla timeline.
+        function pointSeries(lat, lng) {
+          if (!data) return null;
+          const pts = stations.filter(s => data.series.has(s.id));
+          const g = base.t;
+          const cosLat = g ? Math.cos(((g.lat_min + g.lat_max) / 2) * Math.PI / 180) : 1;
+          let sum = 0;
+          const w = pts.map(s => {
+            const wi = 1 / ((lat - s.lat) ** 2 + ((lng - s.lon) * cosLat) ** 2 + 1e-6);
+            sum += wi;
+            return wi;
+          }).map(x => x / sum);
+          let land = 1;
+          if (data.land && g) {
+            const r = Math.round((g.lat_max - lat) / (g.lat_max - g.lat_min) * (g.ny - 1));
+            const c = Math.round((lng - g.lon_min) / (g.lon_max - g.lon_min) * (g.nx - 1));
+            if (r >= 0 && r < g.ny && c >= 0 && c < g.nx) land = data.land[r * g.nx + c];
+          }
+          const at = grid => (grid?.values ? lookupGrid(lat, lng, grid) : null);
+          const t0 = at(base.t), h0 = at(base.h), w0 = at(base.ws);
+          return data.times.map((time, i) => {
+            const delta = key => pts.reduce((acc, s, j) => {
+              const v = data.series.get(s.id)[key];
+              return acc + ((v[i] != null && v[0] != null) ? w[j] * (v[i] - v[0]) : 0);
+            }, 0);
+            const t  = t0 != null ? t0 + delta('t') * land : null;
+            const rh = h0 != null ? Math.min(100, Math.max(0, h0 + delta('rh') * land)) : null;
+            const ws = w0 != null ? Math.max(0, w0 + delta('ws')) : null;
+            let su = 0, sv = 0, sw = 0;
+            for (const s of pts) {
+              const ser = data.series.get(s.id);
+              if (ser.ws[i] == null || ser.wd[i] == null) continue;
+              const rad = ser.wd[i] * Math.PI / 180;
+              const d2 = (lat - s.lat) ** 2 + (lng - s.lon) ** 2 + 1e-9;
+              su += -ser.ws[i] * Math.sin(rad) / d2; sv += -ser.ws[i] * Math.cos(rad) / d2; sw += 1 / d2;
+            }
+            let wd = null;
+            if (sw > 0) { wd = Math.atan2(-su, -sv) * 180 / Math.PI; if (wd < 0) wd += 360; }
+            return { time, t, rh, ws, wd, a: (t != null && rh != null) ? apparentTemp(t, rh, ws) : null };
+          });
+        }
+
+        return { refresh, pointSeries, whenReady, updateValidLabel };
+      }
+
+      document.getElementById('btn-wind').addEventListener('click', () => switchLayer('wind'));
+      document.getElementById('btn-temp').addEventListener('click', () => switchLayer('temperature'));
+      document.getElementById('btn-hum').addEventListener('click', () => switchLayer('humidity'));
+      document.getElementById('btn-radar').addEventListener('click', () => switchLayer('radar'));
+      document.getElementById('btn-treal').addEventListener('click', () => switchTempMode('real'));
+      document.getElementById('btn-tapp').addEventListener('click',  () => switchTempMode('apparent'));
+      document.getElementById('btn-hreal').addEventListener('click', () => switchHumMode('real'));
+      document.getElementById('btn-hwb').addEventListener('click',   () => switchHumMode('wetbulb'));
+
+      if (isPWA) {
+        document.getElementById('prefs-btn')?.addEventListener('click', () => {
+          prefsOpen = !prefsOpen;
+          renderPrefsVisibility();
+        });
+      }
+
+      if (window.RadarLayer) {
+        window.RadarLayer.init(map);
+        window.RadarLayer.onUpdate((epochSec) => {
+          const el = document.getElementById('info-radar');
+          if (el) {
+            el.textContent = epochSec != null
+              ? `🕐 Radar aggiornato: ${formatTime(new Date(epochSec * 1000).toISOString())}`
+              : '🕐 Radar non disponibile';
+          }
+          // A questo punto showUnavailable() ha già applicato lo stato finale della timeline
+          // (disponibile o "non disponibile", altezze diverse) — la misura è affidabile.
+          updateRadarLegendOffset();
+        });
+      }
+
+      if (isPWA) {
+        window.addEventListener('resize', updateRadarLegendOffset);
+      }
+
+      const stations = latest.stations || [];
+      stationMarkers = renderStations(map, stations);
+      if (!stationsVisible) hideStations(map, stationMarkers);
+      document.getElementById('stations-check').addEventListener('change', e => {
+        stationsVisible = e.target.checked;
+        try { localStorage.setItem(STATIONS_KEY, stationsVisible ? '1' : '0'); } catch { /* storage bloccato */ }
+        // Sul vento con le frecce le stazioni restano nascoste comunque
+        const arrows = activeLayer === 'wind' && document.getElementById('arrow-check')?.checked;
+        if (stationsVisible && !arrows) showStations(map, stationMarkers);
+        else hideStations(map, stationMarkers);
+      });
+      switchLayer('temperature');
+
+      // ── Scorrimento orario +1…+48 h (data/forecast_48h.json, previsioni M2) ─────────────────
+      // La griglia dell'ora scelta = griglia +1h di latest.json (ERA5 + correzioni delle stazioni,
+      // calcolata dal server) + IDW della variazione prevista a ogni stazione tra +1h e l'ora scelta:
+      // la struttura spaziale resta quella della +1h, cambia l'andamento nel tempo. Le griglie derivate
+      // (percepita, bulbo umido) si ricalcolano con le stesse formule. Senza il file, o con un file vecchio,
+      // la timeline non compare e la mappa resta com'è.
+      fc48Ctl = setupForecast48(latest, stations);
+
+      // Ricerca di un luogo → scheda a 48 ore (js/luogo.js). Diversa dal click sulla mappa (popup).
+      const tObs = latest.temp_grid_observed;
+      window.MeteoLuogo?.init({
+        map, stations, isPWA,
+        bounds: tObs ? [[tObs.lat_min, tObs.lon_min], [tObs.lat_max, tObs.lon_max]] : null,
+        pointSeries: (lat, lng) => fc48Ctl.pointSeries(lat, lng),
+        whenReady: fc48Ctl.whenReady,
+        nowTemp: (lat, lng) => (tObs?.values ? lookupGrid(lat, lng, tObs) : null),
+        windUnit: () => windUnit,
+        localityName: getLocalityName,
+      });
+
+      if (stations.length > 0) {
+        const bounds = stations.map(st => [st.lat, st.lon]);
+        map.fitBounds(bounds, { padding: [50, 50] });
+      }
+
+      if (isPWA) window.hideSplash?.();
+
+      // Scheda 48 h sulla posizione del dispositivo, senza bisogno di cercare (js/luogo.js).
+      // Dopo il fitBounds, così il volo verso il punto non viene annullato.
+      window.MeteoLuogo?.locateOnStart();
+
+      if (windGrid) {
+        windLayer = renderWind(map, windGrid, !contourMode);
+      }
+      // Elenco dei fotogrammi radar in anticipo, a mappa già pronta
+      setTimeout(() => window.RadarLayer?.prefetch?.(), 2500);
+
+      map.on('zoomend', () => {
+        if (activeLayer === 'wind') {
+          const arrowCheck = document.getElementById('arrow-check');
+          if (arrowCheck && arrowCheck.checked) renderArrowLayer(map, windGridNow);
+        }
+      });
+
+      // IDW al punto cliccato
+      map.on('click', async function (e) {
+        if (isPWA && prefsOpen) {
+          prefsOpen = false;
+          renderPrefsVisibility();
+        }
+
+        // Popup minimale sul Radar: non c'è un dato del punto da mostrare, niente popup
+        if (popupStyle === 'min' && activeLayer === 'radar') return;
+
+        const lat = e.latlng.lat;
+        const lng = e.latlng.lng;
+
+        const tgActive = activeTime === 'forecast' ? latest.temp_grid_forecast : latest.temp_grid_observed;
+        const temp = tgActive ? lookupGrid(lat, lng, tgActive) : null;
+
+        const windU = idwPoint(lat, lng, stations, st => {
+          const s = st.forecast?.wind_speed    ?? null;
+          const d = st.forecast?.wind_direction ?? null;
+          if (s === null || d === null) return null;
+          const rad = d * Math.PI / 180;
+          return -(s / 3.6) * Math.sin(rad);
+        });
+        const windV = idwPoint(lat, lng, stations, st => {
+          const s = st.forecast?.wind_speed    ?? null;
+          const d = st.forecast?.wind_direction ?? null;
+          if (s === null || d === null) return null;
+          const rad = d * Math.PI / 180;
+          return -(s / 3.6) * Math.cos(rad);
+        });
+
+        const speed = Math.sqrt(windU ** 2 + windV ** 2) * 3.6;
+        let dir = Math.atan2(-windU, -windV) * 180 / Math.PI;
+        if (dir < 0) dir += 360;
+
+        const hgActive = activeTime === 'forecast'
+          ? latest.humidity_grid_forecast : latest.humidity_grid_observed;
+        const hum = hgActive ? lookupGrid(lat, lng, hgActive) : null;
+
+        // Derivati puntuali: letti da lookupGrid sulle griglie derivate (non ricalcolati
+        // dalla formula) così il popup resta coerente al pixel con la heatmap.
+        const agActive = activeTime === 'forecast' ? apparentGridFc : apparentGridObs;
+        const wgActive = activeTime === 'forecast' ? wetBulbGridFc  : wetBulbGridObs;
+        const tApp = agActive ? lookupGrid(lat, lng, agActive) : null;
+        const tWb  = wgActive ? lookupGrid(lat, lng, wgActive) : null;
+
+        const cardinal = degreesToCardinal(dir);
+        const wName    = windName(dir);
+
+        const c1 = v => (v !== null && v !== undefined ? v.toFixed(1) + '°C' : 'n/d');
+        // Il solo dato che si sta guardando (stile minimale)
+        function mainLine() {
+          if (activeLayer === 'temperature') {
+            return tempMode === 'apparent'
+              ? `<span class="pp-k">Percepita</span> <b class="pp-v">${c1(tApp)}</b>`
+              : `<span class="pp-k">Temperatura</span> <b class="pp-v">${c1(temp)}</b>`;
+          }
+          if (activeLayer === 'humidity') {
+            return humMode === 'wetbulb'
+              ? `<span class="pp-k">Bulbo umido</span> <b class="pp-v">${c1(tWb)}</b>`
+              : `<span class="pp-k">Umidità</span> <b class="pp-v">${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>`;
+          }
+          if (activeLayer === 'wind') {
+            return `<span class="pp-k">Vento</span> <b class="pp-v">${formatWind(speed)}</b> <span class="pp-k">${cardinal}</span>` +
+              (wName ? `<br><small class="pp-wname">${wName}</small>` : '');
+          }
+          return '';
+        }
+        // Il nome del luogo è cliccabile e apre la scheda 48 h sul punto (js/luogo.js)
+        function titleHTML(localita) {
+          const attrs = `data-p48 data-lat="${lat}" data-lng="${lng}" data-name="${String(localita).replace(/"/g, '&quot;')}"`;
+          return `<button class="pp-name pp-link" type="button" ${attrs} title="Previsioni 48 ore">${localita}<span class="pp-chev">›</span></button>`;
+        }
+
+        function buildContent(localita) {
+          if (popupStyle === 'min') {
+            const line = mainLine();
+            return `<div class="pp pp-min">` + titleHTML(localita) +
+              (line ? `<div class="pp-line">${line}</div>` : '') + `</div>`;
+          }
+          const tStr = temp !== null ? temp.toFixed(1) + '°C' : 'n/d';
+          let tempLine = `🌡️ <b>${tStr}</b>`;
+          if (activeLayer === 'temperature' && tApp !== null) {
+            tempLine += ` · perc. <b>${tApp.toFixed(1)}°C</b>`;
+          } else if (activeLayer === 'humidity' && tWb !== null) {
+            tempLine += ` · 💦 <b>${tWb.toFixed(1)}°C</b>`;
+          }
+          return (
+            `<div class="pp">` + titleHTML(localita) +
+            tempLine + `<br>` +
+            `💨 <b>${formatWind(speed)}</b> — ${cardinal}<br>` +
+            `<small style="opacity:.65;font-style:italic;margin-left:1.4em">${wName}</small><br>` +
+            `💧 Umidità: <b>${hum !== null ? hum.toFixed(0) + '%' : 'n/d'}</b>` +
+            `</div>`
+          );
+        }
+
+        // Apri subito il popup con placeholder, poi aggiorna con la località
+        let popupClosed = false;
+        const popup = L.popup({ className: 'meteo-popup' })
+          .setLatLng(e.latlng)
+          .setContent(buildContent('📍 ...'))
+          .openOn(map);
+        popup.on('remove', () => { popupClosed = true; });
+        // Dal popup alla scheda 48 h sul punto toccato
+        popup.getElement()?.addEventListener('click', ev => {
+          const b = ev.target.closest('[data-p48]');
+          if (!b) return;
+          const name = b.dataset.name && !b.dataset.name.startsWith('📍') ? b.dataset.name : 'Punto sulla mappa';
+          window.MeteoLuogo?.open({ name, sub: 'punto sulla mappa', lat: +b.dataset.lat, lon: +b.dataset.lng });
+        });
+
+        const localita = await getLocalityName(lat, lng);
+        if (!popupClosed) popup.setContent(buildContent(localita));
+      });
+
+      function updateWindLegend() {
+        if (activeLayer !== 'wind') return;
+        const isKts = document.querySelector('input[name="wind-unit"][value="kts"]')?.checked;
+        const factor = isKts ? 0.539957 : 1;
+        const unit = isKts ? ' kts' : ' km/h';
+        updateLegend('wind', currentWsMin * factor, currentWsMax * factor, unit);
+      }
+
+      document.querySelectorAll('input[name="wind-unit"]').forEach(radio => {
+        radio.addEventListener('change', e => {
+          windUnit = e.target.value;
+          updateStationPopups(stationMarkers, stations);
+          updateWindLegend();
+          // Le etichette delle linee del vento sono nell'unità scelta
+          if (contourMode && activeLayer === 'wind') {
+            if (heatOverlay) map.removeLayer(heatOverlay);
+            heatOverlay = renderWindSpeed(latest);
+            if (heatOverlay) heatOverlay.addTo(map);
+          }
+        });
+      });
+
+      // Linee di livello: con le linee le particelle del vento si spengono (sarebbe troppo confuso)
+      const contourCheck = document.getElementById('contour-check');
+      function syncContourUI() {
+        contourCheck.checked = contourMode;
+        const wc = document.getElementById('wind-check');
+        if (wc) wc.disabled = contourMode;
+        document.getElementById('wind-toggle')?.classList.toggle('is-disabled', contourMode);
+      }
+      syncContourUI();
+      contourCheck.addEventListener('change', e => {
+        contourMode = e.target.checked;
+        try { localStorage.setItem('metek.mappa.linee', contourMode ? '1' : '0'); } catch { /* storage bloccato */ }
+        syncContourUI();
+        if (windLayer) {
+          const wc = document.getElementById('wind-check');
+          const arrows = document.getElementById('arrow-check')?.checked;
+          const want = !contourMode && (activeLayer === 'wind' ? !arrows : (activeLayer !== 'radar' && wc?.checked));
+          if (want) windLayer.addTo(map); else map.removeLayer(windLayer);
+        }
+        if (activeLayer !== 'radar') {
+          if (activeLayer === 'wind') {
+            if (heatOverlay) map.removeLayer(heatOverlay);
+            heatOverlay = renderWindSpeed(latest);
+            if (heatOverlay) heatOverlay.addTo(map);
+          } else switchLayer(activeLayer);
+        }
+      });
+
+      document.getElementById('wind-check').addEventListener('change', e => {
+        if (!windLayer) return;
+        if (e.target.checked) windLayer.addTo(map);
+        else map.removeLayer(windLayer);
+      });
+
+      document.getElementById('arrow-check').addEventListener('change', e => {
+        if (activeLayer !== 'wind') return;
+        if (e.target.checked) {
+          if (windLayer) map.removeLayer(windLayer);
+          hideStations(map, stationMarkers);
+          renderArrowLayer(map, windGridNow);
+        } else {
+          clearArrowLayer(map);
+          showStations(map, stationMarkers);
+          const windCheck = document.getElementById('wind-check');
+          if (windLayer && windCheck && windCheck.checked && !contourMode) windLayer.addTo(map);
+        }
+      });
+
+    } catch (err) {
+      console.error('Errore caricamento dati:', err);
+      if (isPWA) {
+        // Bug preesistente (#updated-at non esiste nel markup, citato nel README): fixato
+        // solo qui, nel ramo PWA. Il ramo legacy sotto resta byte-per-byte quello di oggi.
+        const brandMeta = document.getElementById('brand-meta');
+        if (brandMeta) { brandMeta.textContent = 'Dati non disponibili'; brandMeta.classList.add('is-error'); }
+        window.hideSplash?.();
+      } else {
+        document.getElementById('updated-at').textContent = 'Errore caricamento dati';
+      }
+    }
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+  }
+
+  function lookupGrid(lat, lng, grid) {
+    const { lat_min, lat_max, lon_min, lon_max, nx, ny, values } = grid;
+    const clampLat = Math.max(lat_min, Math.min(lat_max, lat));
+    const clampLng = Math.max(lon_min, Math.min(lon_max, lng));
+    const row = (lat_max - clampLat) / (lat_max - lat_min) * (ny - 1);
+    const col = (clampLng - lon_min) / (lon_max - lon_min) * (nx - 1);
+    const r0 = Math.floor(row), r1 = Math.min(r0 + 1, ny - 1);
+    const c0 = Math.floor(col), c1 = Math.min(c0 + 1, nx - 1);
+    const dr = row - r0, dc = col - c0;
+    return values[r0*nx+c0] * (1-dr)*(1-dc) +
+           values[r0*nx+c1] * (1-dr)*dc +
+           values[r1*nx+c0] * dr*(1-dc) +
+           values[r1*nx+c1] * dr*dc;
+  }
+
+  function idwPoint(lat, lng, stations, getValue, power = 2) {
+    let num = 0, den = 0;
+    for (const st of stations) {
+      const v = getValue(st);
+      if (v === null || v === undefined || isNaN(v)) continue;
+      const d = Math.sqrt((lat - st.lat) ** 2 + (lng - st.lon) ** 2);
+      if (d < 1e-5) return v;
+      const w = 1 / d ** power;
+      num += w * v;
+      den += w;
+    }
+    return den > 0 ? num / den : null;
+  }
+
+  window.addEventListener('DOMContentLoaded', init);
+})();

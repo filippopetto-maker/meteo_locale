@@ -1,0 +1,45 @@
+name: fetch-models
+description: >
+  Scarica il bundle dei modelli indicato in models.lock dalla release privata di metek-core,
+  verifica lo sha256 e lo estrae nella radice del checkout. Se il token manca, il download
+  fallisce o lo sha256 non corrisponde, il job si ferma.
+
+inputs:
+  token:
+    description: "Fine-grained PAT con Contents: read su metek-core (secret MODELS_TOKEN)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Scarica e verifica i modelli
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: filippopetto-maker/metek-core
+      run: |
+        set -euo pipefail
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "::error::Secret MODELS_TOKEN mancante: aggiungerlo in Settings → Secrets and variables → Actions"
+          exit 1
+        fi
+        [ -f models.lock ] || { echo "::error::models.lock mancante nel repo"; exit 1; }
+        tag=$(sed -n 's/^tag=//p' models.lock)
+        file=$(sed -n 's/^file=//p' models.lock)
+        sha=$(sed -n 's/^sha256=//p' models.lock)
+        if [ -z "$tag" ] || [ -z "$file" ] || [ -z "$sha" ]; then
+          echo "::error::models.lock incompleto (servono tag, file, sha256)"
+          exit 1
+        fi
+        tmp=$(mktemp -d)
+        if ! gh release download "$tag" --repo "$REPO" --pattern "$file" --dir "$tmp"; then
+          echo "::error::Download dei modelli fallito ($tag): token scaduto o senza accesso a metek-core, oppure release assente"
+          exit 1
+        fi
+        if ! echo "$sha  $tmp/$file" | sha256sum --check --status; then
+          echo "::error::sha256 dei modelli diverso da models.lock ($tag)"
+          exit 1
+        fi
+        tar -xzf "$tmp/$file" -C "$GITHUB_WORKSPACE"
+        rm -rf "$tmp"
+        echo "Modelli $tag estratti e verificati"
