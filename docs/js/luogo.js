@@ -229,6 +229,16 @@
   .r-gust span { display: block; width: calc(100% - 4px); text-align: center; line-height: 22px; border-radius: 6px; }
   .r-dir { height: 26px; color: var(--ml-text-2); }
   .ml-curve { position: absolute; left: 0; pointer-events: none; z-index: 1; }
+  /* Avvisi (stile B): linea sottile sotto le ore interessate, etichetta sotto. Colore = livello come nella
+     scala della Protezione civile (giallo, arancione, rosso); l'icona dice il tipo. Soglie in WARN. */
+  .r-warn { position: relative; height: 26px; }
+  .ml-gutter .r-warn { height: 26px; }
+  .ml-warn { position: absolute; top: 3px; height: 21px; box-sizing: border-box; color: var(--wl); }
+  .ml-warn i { position: absolute; left: 0; right: 0; top: 0; height: 4px; border-radius: 2px; }  /* sfumata ora per ora fra i livelli */
+  .ml-warn > div { position: absolute; left: 3px; right: 0; top: 7px; display: flex; align-items: center; gap: 4px;
+    font-size: 11px; line-height: 14px; font-weight: 600; white-space: nowrap; }
+  .ml-warn svg { flex: 0 0 auto; }
+  .ml-warn.l1 { --wl: #f4d03f; } .ml-warn.l2 { --wl: #ff8a3d; } .ml-warn.l3 { --wl: #ff4d4d; }
   .r-temp > span { position: relative; z-index: 2; }
   .ml-curve .area { fill: var(--ml-temp-fill); }
   .ml-curve .line { fill: none; stroke: var(--ml-warm); stroke-width: 1.5; opacity: .55; }
@@ -804,9 +814,10 @@
       try {
         const res = await fetch(`${FC_URL}?${q}${model ? '&models=' + model : ''}`);
         if (!res.ok) return null;
-        const h = (await res.json()).hourly;
+        const j = await res.json(), h = j.hourly;
         if (!h?.time) return null;
         const m = new Map();
+        m.elev = j.elevation;   // quota del punto (DEM di Open-Meteo, ~90 m): serve alle soglie del gelo
         h.time.forEach((t, i) => m.set(Date.parse(t + 'Z'), {
           pr: h.precipitation[i], wc: h.weather_code[i], gust: h.wind_gusts_10m[i], day: h.is_day[i],
         }));
@@ -826,6 +837,7 @@
     let out = icon;
     const fill = await (icon && [...icon.values()].filter(v => v.wc == null).length < 6 ? null : get(null));
     if (!icon) out = fill;
+    if (out && out.elev == null && fill) out.elev = fill.elev;
     else if (fill) for (const [k, v] of icon) if (v.wc == null && fill.has(k)) icon.set(k, fill.get(k));
     if (out && ifs) for (const [k, v] of out) {
       const g = ifs.get(k);
@@ -845,6 +857,7 @@
       if (n === 3 && !STEP_HOURS.includes(rp.hour)) continue;
       const c = { ms, hour: rp.hour, day: rp.day, t: s.t, a: s.a, ws: s.ws, wd: s.wd,
                   wc: null, pr: null, gust: null, isDay: rp.hour >= 7 && rp.hour < 17 };
+      c.elev = nwp?.elev ?? null;
       if (nwp) {
         const h0 = nwp.get(ms);
         if (h0 && h0.day != null) c.isDay = h0.day === 1;
@@ -868,6 +881,54 @@
     return out;
   }
 
+  // ── Avvisi sulle 48 ore ──────────────────────────────────────────────────────
+  // Livelli e colori come la scala della Protezione civile: 1 giallo, 2 arancione, 3 rosso. Le soglie sono
+  // nostre, sul punto e sull'ora (non sono il bollettino di allerta). Pioggia in mm accumulati nella colonna
+  // (1 h o 3 h), raffiche in km/h (scala Beaufort: 50 vento forte, 75 burrasca forte, 90 tempesta),
+  // temperatura M2 in °C (il caldo sulla percepita, da oltre 35°).
+  const WARN_COL = [null, '#f4d03f', '#ff8a3d', '#ff4d4d'];   // giallo, arancione, rosso
+  const WARN = {
+    rain: { icon: '<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5h6.2a2.4 2.4 0 0 0 .2-4.8A3.4 3.4 0 0 0 3.8 4.6 2 2 0 0 0 4 8.5z"/><path d="M5 10.5 4.4 12.5M7.5 10.5l-.6 2M10 10.5l-.6 2"/></svg>',
+            level(c, n) {
+              const mm = c.pr ?? 0, t = n === 1 ? [4, 10, 20] : [10, 25, 40];
+              const lv = mm >= t[2] ? 3 : mm >= t[1] ? 2 : mm >= t[0] ? 1 : 0;
+              if (c.wc != null && c.wc >= 95) return [Math.max(2, lv), 'Temporale'];
+              return lv ? [lv, ['Pioggia intensa', 'Pioggia molto forte', 'Nubifragio'][lv - 1]] : null;
+            } },
+    wind: { icon: '<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5h7a2 2 0 1 0-2-2M1.5 8.5h9.5a2 2 0 1 1-2 2"/></svg>',
+            level(c) {
+              const g = c.gust ?? (c.ws != null ? c.ws * 1.5 : null);   // senza raffiche ICON: stima dal vento medio
+              const lv = g == null ? 0 : g >= 90 ? 3 : g >= 75 ? 2 : g >= 50 ? 1 : 0;
+              return lv ? [lv, ['Raffiche forti', 'Burrasca', 'Tempesta'][lv - 1]] : null;
+            } },
+    cold: { icon: '<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1.5v11M2.2 4.2l9.6 5.6M2.2 9.8l9.6-5.6M5.6 2.3 7 3.5l1.4-1.2M5.6 11.7 7 10.5l1.4 1.2"/></svg>',
+            level(c) {
+              // In quota lo zero è normale: sopra i 400 m le soglie scendono come la temperatura con
+              // l'altezza (6,5 °C ogni 1000 m). A 1000 m il giallo parte da −4°, a 1500 m da −7°.
+              const off = Math.max(0, (c.elev ?? 0) - 400) * 0.0065;
+              const lv = c.t == null ? 0 : c.t <= -8 - off ? 3 : c.t <= -4 - off ? 2 : c.t <= -off ? 1 : 0;
+              return lv ? [lv, ['Gelo', 'Gelo intenso', 'Gelo eccezionale'][lv - 1]] : null;
+            } },
+    heat: { icon: '<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2.6"/><path d="M7 1v1.6M7 11.4V13M1 7h1.6M11.4 7H13M2.8 2.8l1.1 1.1M10.1 10.1l1.1 1.1M2.8 11.2l1.1-1.1M10.1 3.9l1.1-1.1"/></svg>',
+            level(c) {
+              const v = c.a ?? c.t;   // caldo sulla percepita (afa e sole contano più del termometro)
+              const lv = v == null ? 0 : v >= 41 ? 3 : v >= 38 ? 2 : v > 35 ? 1 : 0;
+              return lv ? [lv, ['Caldo', 'Caldo intenso', 'Caldo estremo'][lv - 1]] : null;
+            } },
+  };
+  function warnSpans(cols, kind, n) {
+    const out = [];
+    cols.forEach((c, i) => {
+      const lv = WARN[kind].level(c, n);
+      c['w_' + kind] = lv;
+      if (!lv) return;
+      const last = out[out.length - 1];
+      if (last && last.end === i - 1) { last.end = i; last.lvs.push(lv[0]); if (lv[0] > last.lv[0]) last.lv = lv; }
+      else out.push({ start: i, end: i, lv, lvs: [lv[0]] });
+    });
+    return out;
+  }
+
   function renderGrid(grid, gutter, cols, hasNWP, COL) {
     const N = cols.length;
     grid.style.setProperty('--ml-col', COL + 'px');
@@ -883,11 +944,11 @@
     g0.style.height = '32px';
     gutter.appendChild(g0);
 
-    const row = (cls, label, fn) => {
+    const row = (cls, label, fn, tint) => {
       const r = document.createElement('div');
       r.className = 'ml-row';
       r.innerHTML = cols.map((c, i) =>
-        `<div class="ml-cell ${cls}${c.isDay ? '' : ' night'}${i > 0 && cols[i - 1].day !== c.day ? ' dstart' : ''}">${fn(c)}</div>`).join('');
+        `<div class="ml-cell ${cls}${c.isDay ? '' : ' night'}${i > 0 && cols[i - 1].day !== c.day ? ' dstart' : ''}${tint ? tint(c) : ''}">${fn(c)}</div>`).join('');
       grid.appendChild(r);
       const g = document.createElement('div');
       g.className = cls;
@@ -895,6 +956,8 @@
       gutter.appendChild(g);
       return r;
     };
+    const n = Math.round(COL === COL1 ? 1 : 3);
+    const spans = ['rain', 'wind', 'cold', 'heat'].map(k => [k, warnSpans(cols, k, n)]).filter(([, sp]) => sp.length);
     row('r-hour', '', c => c.hour);
     if (hasNWP) row('r-icon', '', c => `<span title="${SKY_TEXT(c.wc)}">${iconSVG(c.wc, c.isDay)}</span>`);
     const tRow = row('r-temp', '°C', c => `<span>${c.t != null ? Math.round(c.t) + '°' : '–'}</span>`);
@@ -905,6 +968,22 @@
       ? `<span style="background:${windColor(c.gust)}">${Math.round(windVal(c.gust))}</span>` : ''));
     row('r-dir', '', c => (c.wd == null ? '' :
       `<svg width="16" height="16" viewBox="0 0 16 16" style="transform:rotate(${Math.round(c.wd + 180)}deg)" role="img" aria-label="vento da ${Math.round(c.wd)} gradi"><path d="M8 1 13 13 8 10 3 13z" fill="currentColor"/></svg>`));
+
+    // Fasce di avviso: una riga per tipo, un riquadro per ogni tratto di ore consecutive
+    spans.forEach(([k, sp]) => {
+      const r = document.createElement('div');
+      r.className = 'ml-row r-warn';
+      r.innerHTML = sp.map(x => {
+        const w = (x.end - x.start + 1) * COL - 4;
+        return `<div class="ml-warn l${x.lv[0]}" style="left:${x.start * COL + 3}px;width:${w - 2}px" title="${esc(x.lv[1])}">` +
+          `<i style="background:${x.lvs.length > 1 ? `linear-gradient(90deg,${x.lvs.map((l, j) => `${WARN_COL[l]} ${Math.round((j + .5) * COL)}px`).join(',')})` : WARN_COL[x.lvs[0]]}"></i>` +
+          `<div>${WARN[k].icon}${w >= 60 ? `<span>${esc(x.lv[1])}</span>` : ''}</div></div>`;
+      }).join('');
+      grid.appendChild(r);
+      const g = document.createElement('div');
+      g.className = 'r-warn';
+      gutter.appendChild(g);
+    });
 
     // Curva della temperatura dietro i valori
     const ts = cols.map(c => c.t).filter(v => v != null);
