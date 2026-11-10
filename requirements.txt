@@ -8,6 +8,8 @@ scipy
 pyarrow            # backend parquet per pandas
 scikit-learn
 lightgbm
+omfiles            # M2 su griglia: corse ICON-2I/IFS dall'archivio Open-Meteo su AWS
+s3fs
 
 # Networking / config
 requests

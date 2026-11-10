@@ -547,8 +547,31 @@ def main() -> None:
             log.info(f"  Scritto {f48_path} ({len(f48['stations'])} stazioni, emissione {f48['issue_at']})")
         except Exception as exc:
             log.error(f"  forecast_48h.json non scritto ({exc}): resta la copia precedente")
+            f48 = None
+        if f48:
+            export_griglia_m2(f48)
 
     log.info("Export completato.")
+
+
+def export_griglia_m2(f48: dict) -> None:
+    """M2 su griglia 1–48 h (model/griglia_m2.py), agganciata all'M2 delle stazioni di forecast_48h.
+    Facoltativa: se manca il bundle o qualcosa va storto resta la copia precedente, e il sito senza
+    ore valide nel file torna a spostare la mappa +1h con le variazioni delle stazioni."""
+    if not (_PROJECT_ROOT / "model" / "griglia_m2" / "statico.npz").exists():
+        log.warning("  griglia_48h.json non calcolata: manca model/griglia_m2 (bundle dei modelli)")
+        return
+    try:
+        sys.path.insert(0, str(_PROJECT_ROOT / "model"))
+        import griglia_m2
+        st = {int(sid): dict(zip(s["valid_for"], s["t"])) for sid, s in f48["stations"].items()}
+        g = griglia_m2.calcola(st)
+        if g:
+            path = DOCS_DATA / "griglia_48h.json"
+            path.write_text(json.dumps(g, separators=(",", ":")))
+            log.info(f"  Scritto {path} ({len(g['times'])} ore, corsa ICON-2I {g['corsa_icon']})")
+    except Exception as exc:
+        log.error(f"  griglia_48h.json non scritto ({exc}): resta la copia precedente")
 
 
 def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:

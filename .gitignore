@@ -22,6 +22,7 @@ logs/
 
 # Repo pubblico (divide et impera_1): modelli e dati stanno solo in metek-core
 model/m2*/
+model/griglia_m2/
 model/*.txt
 model/*.pkl
 data/

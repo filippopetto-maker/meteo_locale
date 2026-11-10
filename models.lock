@@ -1,5 +1,5 @@
 # Modelli congelati usati dai workflow (scritto da tools/pack_models.sh, non modificare a mano
 # se non per tornare a un bundle precedente: tag, file e sha256 devono essere quelli della release).
-tag=models-20261108
-file=models-20261108.tar.gz
-sha256=ee07fda2f78e56ee8b6aa858e4b383139b4c5648ad97bebf1681f645f632ad93
+tag=models-20261110
+file=models-20261110.tar.gz
+sha256=13042e4eb184b84ae601ad623dd48a7b64d2eb3a00299fd35f76a8d751b6ca5a

@@ -97,6 +97,7 @@ jobs:
           # SST: se manca, sst.py rifà il fetch da Open-Meteo Marine.
           fetch sst_cache.json data/sst_cache.json || true
           fetch forecast_48h.json docs/data/forecast_48h.json || true
+          fetch griglia_48h.json docs/data/griglia_48h.json || true
 
           echo "static=$need_static" >> "$GITHUB_OUTPUT"
           echo "dashboard=$need_dashboard" >> "$GITHUB_OUTPUT"
@@ -109,11 +110,20 @@ jobs:
 
       - name: Install dependencies
         if: steps.restore.outputs.static == 'true' || steps.restore.outputs.dashboard == 'true'
-        run: pip install supabase pandas numpy scipy python-dotenv requests matplotlib
+        run: pip install supabase pandas numpy scipy python-dotenv requests matplotlib lightgbm omfiles s3fs
+
+      # Dal 11/2026 per l'M2 su griglia (model/griglia_m2/, griglia_48h.json). Se il download fallisce
+      # l'export va avanti lo stesso: resta la griglia ripristinata dal sito o, se scaduta, quella vecchia.
+      - name: Fetch models (M2 su griglia)
+        if: steps.restore.outputs.static == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/fetch-models
+        with:
+          token: ${{ secrets.MODELS_TOKEN }}
 
       # Dal 31/10/2026 scrive anche forecast_48h.json, dalla stessa lettura di forecasts_48h della +1h
       # (i file della mappa restano della stessa emissione). Se M2 è fermo resta la copia ripristinata.
-      - name: Export static (latest.json, wind_grid.json, forecast_48h.json)
+      - name: Export static (latest.json, wind_grid.json, forecast_48h.json, griglia_48h.json)
         if: steps.restore.outputs.static == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

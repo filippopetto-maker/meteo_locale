@@ -1348,10 +1348,57 @@
 
         let readyResolve;
         const whenReady = new Promise(r => { readyResolve = r; });  // true se le 48 ore sono caricate
+        // M2 su griglia (griglia_48h.json, dal 11/2026): la temperatura vera di ogni cella per ora;
+        // se manca, è vecchia o il browser non sa decomprimerla si torna allo spostamento con le stazioni
+        const mgP = fetch('data/griglia_48h.json', { cache: 'no-store' })
+          .then(r => (r.ok ? r.json() : null)).then(decodeM2Grid).catch(() => null);
         fetch('data/forecast_48h.json', { cache: 'no-store' })
           .then(r => (r.ok ? r.json() : null))
-          .then(j => { init(j); readyResolve(!!data && data.series.size > 0); })
-          .catch(() => { init(null); readyResolve(!!data && data.series.size > 0); });
+          .then(async j => { mg = await mgP; init(j); readyResolve(!!data && data.series.size > 0); })
+          .catch(async () => { mg = await mgP; init(null); readyResolve(!!data && data.series.size > 0); });
+
+        let mg = null;  // {times: Map ISO → k, frames: Int16Array (ore × celle, °C/passo), passo, ...}
+        async function decodeM2Grid(j) {
+          if (!j || j.versione !== 1 || typeof DecompressionStream === 'undefined') return null;
+          const g = base.t;
+          if (!g || j.nx !== g.nx || j.ny !== g.ny) return null;
+          const inflate = async b64 => {
+            const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+            const st = new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate'));
+            return new Uint8Array(await new Response(st).arrayBuffer());
+          };
+          const [b0, b1] = await Promise.all([inflate(j.b64_prima), inflate(j.b64_variazioni)]);
+          const n = j.nx * j.ny, nt = j.times.length;
+          const first = new Int16Array(b0.buffer, b0.byteOffset, n);
+          const diff = new Int8Array(b1.buffer, b1.byteOffset, n * (nt - 1));
+          const frames = new Int16Array(n * nt);
+          frames.set(first);
+          for (let k = 1; k < nt; k++) {
+            const o = k * n, p = o - n, d = (k - 1) * n;
+            for (let c = 0; c < n; c++) frames[o + c] = frames[p + c] + diff[d + c];
+          }
+          const times = new Map(j.times.map((t, k) => [new Date(t).getTime(), k]));
+          globalTMin = Math.min(globalTMin, j.t_min);
+          globalTMax = Math.max(globalTMax, j.t_max);
+          return { times, frames, passo: j.passo, n };
+        }
+
+        function m2Grid(i) {
+          if (!mg || !data) return null;
+          const k = mg.times.get(new Date(data.times[i]).getTime());
+          if (k === undefined) return null;
+          const vals = new Array(mg.n);
+          let vMin = Infinity, vMax = -Infinity;
+          for (let c = 0, o = k * mg.n; c < mg.n; c++) {
+            // +0,01 °C: i passi di 0,2 °C cadrebbero proprio sulle soglie delle isoterme (ogni 0,5 °C)
+            // e le zone piatte (il mare) si riempirebbero di puntini
+            const v = mg.frames[o + c] * mg.passo + 0.01;
+            vals[c] = v;
+            if (v < vMin) vMin = v;
+            if (v > vMax) vMax = v;
+          }
+          return { ...base.t, values: vals, t_min: vMin, t_max: vMax, v_min: vMin, v_max: vMax };
+        }
 
         // Senza 48 ore valide la barra resta, con due posizioni: Ora e la +1h di latest.json
         function initLite() {
@@ -1487,9 +1534,10 @@
         }
 
         function gridsFor(i) {
-          if (i === 0) return base;
           if (cache.has(i)) return cache.get(i);
-          const t = shifted(base.t, 't', i), h = shifted(base.h, 'rh', i);
+          const tm = m2Grid(i);
+          if (i === 0 && !tm) return base;
+          const t = tm || shifted(base.t, 't', i), h = shifted(base.h, 'rh', i);
           let ws = shifted(base.ws, 'ws', i);
           if (ws && wsRange) ws = { ...ws, ws_min: wsRange.min, ws_max: wsRange.max };
           const derive = (fn, wg) => {
