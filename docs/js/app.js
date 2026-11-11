@@ -1,6 +1,25 @@
 (function () {
   'use strict';
 
+  // Dati del modello: sempre freschi (no-store: latest.json dalla cache HTTP, fino a 10 minuti vecchio,
+  // poteva essere di un'ora diversa da forecast_48h.json e la barra restava a Ora e +1h), con un tempo
+  // massimo e altri tentativi sulle reti lente del telefono. Ritorna il JSON o null.
+  async function fetchData(path, { tries = 3, timeout = 15000 } = {}) {
+    for (let k = 0; k < tries; k++) {
+      const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctl ? setTimeout(() => ctl.abort(), timeout) : null;
+      try {
+        const r = await fetch(path, { cache: 'no-store', signal: ctl?.signal });
+        if (r.ok) return await r.json();
+        if (r.status === 404) return null;  // file che non esiste: inutile riprovare
+      } catch (e) { /* rete assente, tempo scaduto o JSON troncato: si riprova */ }
+      finally { if (timer) clearTimeout(timer); }
+      if (k < tries - 1) await new Promise(res => setTimeout(res, 1500 * (k + 1)));
+    }
+    return null;
+  }
+  let dataLoadedAt = 0, dataGeneratedAt = 0;  // per ricaricare la PWA riaperta dopo tanto
+
   function degreesToCardinal(deg) {
     const labels = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
                     'S','SSO','SO','OSO','O','ONO','NO','NNO'];
@@ -748,20 +767,24 @@
       // cold boot: il WebView può ripresentare un compositor non ancora risincronizzato con
       // il container. Stesso trattamento del boot, senza bisogno che l'utente ruoti lo schermo.
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') stabilizeMapSize(map);
+        if (document.visibilityState !== 'visible') return;
+        stabilizeMapSize(map);
+        // PWA rimasta in memoria: se i dati hanno più di un'ora (o sono stati caricati più di 30 minuti
+        // fa) si ricarica, altrimenti restavano quelli dell'apertura precedente
+        const old = Date.now() - dataGeneratedAt > 65 * 60e3 || Date.now() - dataLoadedAt > 30 * 60e3;
+        if (dataLoadedAt && old && !document.querySelector('.ml-sheet.open')) location.reload();
       });
       window.addEventListener('pageshow', () => stabilizeMapSize(map));
     }
 
     try {
-      const [latestRes, windRes] = await Promise.all([
-        fetch('data/latest.json'),
-        fetch('data/wind_grid.json'),
+      const [latest, windGrid] = await Promise.all([
+        fetchData('data/latest.json', { tries: 4 }),
+        fetchData('data/wind_grid.json'),
       ]);
-
-      if (!latestRes.ok) throw new Error('latest.json non trovato');
-      const latest   = await latestRes.json();
-      const windGrid = windRes.ok ? await windRes.json() : null;
+      if (!latest) throw new Error('latest.json non trovato');
+      dataLoadedAt = Date.now();
+      dataGeneratedAt = new Date(latest.generated_at).getTime();
       let windGridNow = windGrid;  // griglia particelle dell'ora mostrata (timeline +48 h)
 
       // Range unificato T / T+1 — scala fissa per rendere confrontabile il toggle
@@ -1353,14 +1376,17 @@
         // decomprimerlo, per quella variabile si torna alla mappa delle stazioni e allo spostamento +1h
         const M2_FILES = { t: 'griglia_48h.json', rh: 'griglia_umidita_48h.json', ws: 'griglia_vento_48h.json' };
         const mgP = Promise.all(Object.entries(M2_FILES).map(([key, f]) =>
-          fetch('data/' + f, { cache: 'no-store' })
-            .then(r => (r.ok ? r.json() : null)).then(j => decodeM2Grid(j, key)).catch(() => null)
+          fetchData('data/' + f, { timeout: 25000 })
+            .then(j => decodeM2Grid(j, key)).catch(() => null)
             .then(v => [key, v])))
           .then(Object.fromEntries);
-        fetch('data/forecast_48h.json', { cache: 'no-store' })
-          .then(r => (r.ok ? r.json() : null))
-          .then(async j => { mg = await mgP; applyOra(); init(j); readyResolve(!!data && data.series.size > 0); })
-          .catch(async () => { mg = await mgP; applyOra(); init(null); readyResolve(!!data && data.series.size > 0); });
+        fetchData('data/forecast_48h.json')
+          .then(async j => {
+            mg = await mgP;
+            try { applyOra(); } catch (e) { console.warn('mappa Ora M2 non applicata', e); }
+            try { init(j); } catch (e) { console.warn('48 ore non caricate', e); data = null; initLite(); }
+            readyResolve(!!data && data.series.size > 0);
+          });
 
         // per variabile: {times: Map ms → k, frames: Int16Array (ore × celle, in passi), passo, n, ora: k|null}
         let mg = {};
@@ -1476,7 +1502,15 @@
           if (!(ageH < 6)) { initLite(); return; }  // file vecchio: solo Ora e +1h
           const ref = stations.find(s => s.forecast?.valid_for);
           if (!ref) return;
-          const start = new Date(ref.forecast.valid_for).getTime();  // ora della +1h di latest.json
+          // ora della +1h di latest.json; se forecast_48h è di un'altra ora (file presi a cavallo
+          // dell'aggiornamento orario) si parte dalla prima ora del file non passata
+          let start = new Date(ref.forecast.valid_for).getTime();
+          const anyE = Object.values(j.stations || {})[0];
+          if (anyE && !anyE.valid_for.some(v => new Date(v).getTime() === start)) {
+            const nowH = Math.floor(Date.now() / 3.6e6) * 3.6e6;
+            const first = anyE.valid_for.map(v => new Date(v).getTime()).find(t => t > nowH);
+            if (first) start = first;
+          }
           const series = new Map();
           let times = null;
           for (const s of stations) {

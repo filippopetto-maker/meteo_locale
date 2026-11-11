@@ -1,6 +1,6 @@
 // ⚠️ INCREMENTARE CACHE_VERSION AD OGNI MODIFICA DI HTML/CSS/JS
 // altrimenti le modifiche non compaiono sui dispositivi già installati
-const CACHE_VERSION = 'meteo-v40';
+const CACHE_VERSION = 'meteo-v41';
 
 // Asset statici dell'app — cache-first
 const STATIC_ASSETS = [
@@ -72,14 +72,21 @@ async function cacheFirst(request) {
   return response;
 }
 
+// Rete prima; se la rete non risponde entro 10 s (telefono con segnale scarso) e c'è una copia in
+// cache si usa quella, mentre la risposta della rete, se arriva, aggiorna comunque la cache.
 async function networkFirst(request) {
-  try {
-    const response = await fetch(request);
-    if (response.ok) {
-      const cache = await caches.open(CACHE_VERSION);
-      cache.put(request, response.clone());
-    }
+  const cache = await caches.open(CACHE_VERSION);
+  const net = fetch(request).then((response) => {
+    if (response.ok) cache.put(request, response.clone()).catch(() => {});
     return response;
+  });
+  net.catch(() => {});  // se si è già risposto con la cache, un errore di rete dopo non va segnalato
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 10000));
+  try {
+    const first = await Promise.race([net, timeout]);
+    if (first) return first;
+    const cached = await caches.match(request);
+    return cached || (await net);
   } catch (err) {
     const cached = await caches.match(request);
     if (cached) return cached;
