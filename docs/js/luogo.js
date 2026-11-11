@@ -673,6 +673,11 @@
     const ok = await ctx.whenReady;
     const series = ok ? ctx.pointSeries(p.lat, p.lon) : null;
     if (sheet._token !== token) return;
+    // la mappa "Ora" M2 (griglia_48h.json) arriva con le 48 ore: il numero grande si rilegge da lì
+    if (!p.st || p.st.observation?.temperature == null) {
+      const t = ctx.nowTemp(p.lat, p.lon), big = sheet.querySelector('.ml-big');
+      if (t != null && big) big.textContent = Math.round(t) + '°';
+    }
     if (!series || !series.length) {
       sheet.querySelector('.ml-state').textContent = 'Le previsioni a 48 ore non sono disponibili in questo momento.';
       sheet.querySelector('.ml-say').textContent = '';

@@ -549,29 +549,28 @@ def main() -> None:
             log.error(f"  forecast_48h.json non scritto ({exc}): resta la copia precedente")
             f48 = None
         if f48:
-            export_griglia_m2(f48)
+            export_griglia_m2(f48, observations)
 
     log.info("Export completato.")
 
 
-def export_griglia_m2(f48: dict) -> None:
-    """M2 su griglia 1–48 h (model/griglia_m2.py), agganciata all'M2 delle stazioni di forecast_48h.
-    Facoltativa: se manca il bundle o qualcosa va storto resta la copia precedente, e il sito senza
-    ore valide nel file torna a spostare la mappa +1h con le variazioni delle stazioni."""
+def export_griglia_m2(f48: dict, observations: dict | None = None) -> None:
+    """M2 su griglia, ora attuale e 1–48 h (model/griglia_m2.py): temperatura, umidità e vento agganciati
+    all'M2 delle stazioni di forecast_48h e, nell'ora attuale, alle misure.
+    Facoltativa: se manca il bundle o qualcosa va storto restano le copie precedenti, e il sito senza
+    ore valide nei file torna alla mappa delle stazioni e allo spostamento +1h con le loro variazioni."""
     if not (_PROJECT_ROOT / "model" / "griglia_m2" / "statico.npz").exists():
-        log.warning("  griglia_48h.json non calcolata: manca model/griglia_m2 (bundle dei modelli)")
+        log.warning("  griglie M2 non calcolate: manca model/griglia_m2 (bundle dei modelli)")
         return
     try:
         sys.path.insert(0, str(_PROJECT_ROOT / "model"))
         import griglia_m2
-        st = {int(sid): dict(zip(s["valid_for"], s["t"])) for sid, s in f48["stations"].items()}
-        g = griglia_m2.calcola(st)
-        if g:
-            path = DOCS_DATA / "griglia_48h.json"
+        for nome, g in griglia_m2.calcola(f48, observations).items():
+            path = DOCS_DATA / nome
             path.write_text(json.dumps(g, separators=(",", ":")))
             log.info(f"  Scritto {path} ({len(g['times'])} ore, corsa ICON-2I {g['corsa_icon']})")
     except Exception as exc:
-        log.error(f"  griglia_48h.json non scritto ({exc}): resta la copia precedente")
+        log.error(f"  griglie M2 non scritte ({exc}): restano le copie precedenti")
 
 
 def fetch_dashboard_series(station_ids: list[int], days: int = 7) -> dict:

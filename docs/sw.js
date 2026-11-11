@@ -1,6 +1,6 @@
 // ⚠️ INCREMENTARE CACHE_VERSION AD OGNI MODIFICA DI HTML/CSS/JS
 // altrimenti le modifiche non compaiono sui dispositivi già installati
-const CACHE_VERSION = 'meteo-v39';
+const CACHE_VERSION = 'meteo-v40';
 
 // Asset statici dell'app — cache-first
 const STATIC_ASSETS = [
@@ -22,6 +22,8 @@ const DATA_PATHS = [
   '/data/wind_grid.json',
   '/data/forecast_48h.json',
   '/data/griglia_48h.json',
+  '/data/griglia_umidita_48h.json',
+  '/data/griglia_vento_48h.json',
   '/data/dashboard_data.json',
 ];
 

@@ -1348,18 +1348,25 @@
 
         let readyResolve;
         const whenReady = new Promise(r => { readyResolve = r; });  // true se le 48 ore sono caricate
-        // M2 su griglia (griglia_48h.json, dal 11/2026): la temperatura vera di ogni cella per ora;
-        // se manca, è vecchia o il browser non sa decomprimerla si torna allo spostamento con le stazioni
-        const mgP = fetch('data/griglia_48h.json', { cache: 'no-store' })
-          .then(r => (r.ok ? r.json() : null)).then(decodeM2Grid).catch(() => null);
+        // M2 su griglia (dal 11/2026): temperatura, umidità e vento veri di ogni cella per ora, più l'ora
+        // attuale agganciata alle misure (la mappa "Ora"); se un file manca, è vecchio o il browser non sa
+        // decomprimerlo, per quella variabile si torna alla mappa delle stazioni e allo spostamento +1h
+        const M2_FILES = { t: 'griglia_48h.json', rh: 'griglia_umidita_48h.json', ws: 'griglia_vento_48h.json' };
+        const mgP = Promise.all(Object.entries(M2_FILES).map(([key, f]) =>
+          fetch('data/' + f, { cache: 'no-store' })
+            .then(r => (r.ok ? r.json() : null)).then(j => decodeM2Grid(j, key)).catch(() => null)
+            .then(v => [key, v])))
+          .then(Object.fromEntries);
         fetch('data/forecast_48h.json', { cache: 'no-store' })
           .then(r => (r.ok ? r.json() : null))
-          .then(async j => { mg = await mgP; init(j); readyResolve(!!data && data.series.size > 0); })
-          .catch(async () => { mg = await mgP; init(null); readyResolve(!!data && data.series.size > 0); });
+          .then(async j => { mg = await mgP; applyOra(); init(j); readyResolve(!!data && data.series.size > 0); })
+          .catch(async () => { mg = await mgP; applyOra(); init(null); readyResolve(!!data && data.series.size > 0); });
 
-        let mg = null;  // {times: Map ISO → k, frames: Int16Array (ore × celle, °C/passo), passo, ...}
-        async function decodeM2Grid(j) {
+        // per variabile: {times: Map ms → k, frames: Int16Array (ore × celle, in passi), passo, n, ora: k|null}
+        let mg = {};
+        async function decodeM2Grid(j, key) {
           if (!j || j.versione !== 1 || typeof DecompressionStream === 'undefined') return null;
+          if ((j.variabile || 't') !== key) return null;
           const g = base.t;
           if (!g || j.nx !== g.nx || j.ny !== g.ny) return null;
           const inflate = async b64 => {
@@ -1378,26 +1385,81 @@
             for (let c = 0; c < n; c++) frames[o + c] = frames[p + c] + diff[d + c];
           }
           const times = new Map(j.times.map((t, k) => [new Date(t).getTime(), k]));
-          globalTMin = Math.min(globalTMin, j.t_min);
-          globalTMax = Math.max(globalTMax, j.t_max);
-          return { times, frames, passo: j.passo, n };
+          if (key === 't') { globalTMin = Math.min(globalTMin, j.t_min); globalTMax = Math.max(globalTMax, j.t_max); }
+          if (key === 'rh') { globalHMin = Math.min(globalHMin, j.t_min); globalHMax = Math.max(globalHMax, j.t_max); }
+          // l'ora attuale vale solo se il file è recente (al massimo 2 ore)
+          const ora = j.ora && Date.now() - new Date(j.ora).getTime() < 2 * 3.6e6 ? times.get(new Date(j.ora).getTime()) : null;
+          let vMax = j.t_max;
+          if (key === 'ws') {
+            // scala del vento: 99° percentile, non il massimo (le creste dell'Appennino arrivano a 90 km/h
+            // e il resto della mappa diventerebbe tutto dello stesso colore)
+            const smp = [];
+            for (let c = 0; c < frames.length; c += 101) smp.push(frames[c]);
+            smp.sort((a, b) => a - b);
+            vMax = smp[Math.floor(smp.length * 0.99)] * j.passo;
+          }
+          return { times, frames, passo: j.passo, n, ora: ora ?? null, vMin: j.t_min, vMax };
         }
 
-        function m2Grid(i) {
-          if (!mg || !data) return null;
-          const k = mg.times.get(new Date(data.times[i]).getTime());
-          if (k === undefined) return null;
-          const vals = new Array(mg.n);
+        // Griglia della variabile key dal fotogramma k del file M2
+        function m2Frame(key, k) {
+          const m = mg[key];
+          const g = key === 't' ? base.t : key === 'rh' ? base.h : base.ws;
+          if (!m || k == null || !g) return null;
+          const vals = new Array(m.n);
           let vMin = Infinity, vMax = -Infinity;
-          for (let c = 0, o = k * mg.n; c < mg.n; c++) {
-            // +0,01 °C: i passi di 0,2 °C cadrebbero proprio sulle soglie delle isoterme (ogni 0,5 °C)
+          for (let c = 0, o = k * m.n; c < m.n; c++) {
+            // +0,01: i passi (0,2 °C, 1%) cadrebbero proprio sulle soglie delle isolinee
             // e le zone piatte (il mare) si riempirebbero di puntini
-            const v = mg.frames[o + c] * mg.passo + 0.01;
+            const v = m.frames[o + c] * m.passo + 0.01;
             vals[c] = v;
             if (v < vMin) vMin = v;
             if (v > vMax) vMax = v;
           }
-          return { ...base.t, values: vals, t_min: vMin, t_max: vMax, v_min: vMin, v_max: vMax };
+          const out = { ...g, values: vals, v_min: vMin, v_max: vMax };
+          if (key === 't') { out.t_min = vMin; out.t_max = vMax; }
+          if (key === 'rh') { out.h_min = vMin; out.h_max = vMax; }
+          return out;
+        }
+
+        function m2Grid(key, i) {
+          if (!mg[key] || !data) return null;
+          return m2Frame(key, mg[key].times.get(new Date(data.times[i]).getTime()));
+        }
+
+        // Valore M2 nel punto (bilineare come lookupGrid) al fotogramma k, senza costruire la griglia
+        function m2Point(key, k, lat, lng) {
+          const m = mg[key], g = base.t;
+          if (!m || k == null || !g) return null;
+          const { lat_min, lat_max, lon_min, lon_max, nx, ny } = g;
+          const row = (lat_max - Math.max(lat_min, Math.min(lat_max, lat))) / (lat_max - lat_min) * (ny - 1);
+          const col = (Math.max(lon_min, Math.min(lon_max, lng)) - lon_min) / (lon_max - lon_min) * (nx - 1);
+          const r0 = Math.floor(row), r1 = Math.min(r0 + 1, ny - 1), c0 = Math.floor(col), c1 = Math.min(c0 + 1, nx - 1);
+          const dr = row - r0, dc = col - c0, o = k * m.n, f = m.frames;
+          return (f[o + r0 * nx + c0] * (1 - dr) * (1 - dc) + f[o + r0 * nx + c1] * (1 - dr) * dc +
+                  f[o + r1 * nx + c0] * dr * (1 - dc) + f[o + r1 * nx + c1] * dr * dc) * m.passo;
+        }
+
+        // Mappa "Ora": l'ora attuale M2 agganciata alle misure prende il posto della mappa delle stazioni
+        // sullo sfondo ERA5 (temperatura e umidità; percepita e bulbo umido si ricalcolano)
+        function applyOra() {
+          const t = m2Frame('t', mg.t?.ora), h = m2Frame('rh', mg.rh?.ora);
+          if (t) latest.temp_grid_observed = t;
+          if (h) latest.humidity_grid_observed = h;
+          if (!t && !h) return;
+          const tg = latest.temp_grid_observed, hg = latest.humidity_grid_observed, wg = base.ws;
+          if (!tg?.values || !hg?.values || tg.values.length !== hg.values.length) return;
+          const derive = fn => {
+            const vals = tg.values.map((tv, c) => fn(tv, hg.values[c], wg?.values?.[c] ?? null));
+            let vMin = Infinity, vMax = -Infinity;
+            for (const v of vals) if (v != null && isFinite(v)) { if (v < vMin) vMin = v; if (v > vMax) vMax = v; }
+            return { ...tg, values: vals, v_min: vMin, v_max: vMax };
+          };
+          apparentGridObs = derive(apparentTemp);
+          wetBulbGridObs = derive((tv, hv) => wetBulbStull(tv, hv));
+          globalAMin = Math.min(globalAMin, apparentGridObs.v_min); globalAMax = Math.max(globalAMax, apparentGridObs.v_max);
+          globalWMin = Math.min(globalWMin, wetBulbGridObs.v_min); globalWMax = Math.max(globalWMax, wetBulbGridObs.v_max);
+          if (activeTime === 'observed' && (activeLayer === 'temperature' || activeLayer === 'humidity')) switchTime('observed');
         }
 
         // Senza 48 ore valide la barra resta, con due posizioni: Ora e la +1h di latest.json
@@ -1437,6 +1499,7 @@
           data = { times, series, land };
           // Scala colori fissa su tutte le 48 ore, così lo scorrimento resta confrontabile
           let wsMin = base.ws ? base.ws.ws_min : Infinity, wsMax = base.ws ? base.ws.ws_max : -Infinity;
+          if (mg.ws) { wsMin = Math.min(wsMin, mg.ws.vMin); wsMax = Math.max(wsMax, mg.ws.vMax); }
           for (const ser of series.values()) {
             for (const v of ser.t)  if (v != null) { globalTMin = Math.min(globalTMin, v); globalTMax = Math.max(globalTMax, v); }
             for (const v of ser.rh) if (v != null) { globalHMin = Math.min(globalHMin, v); globalHMax = Math.max(globalHMax, v); }
@@ -1535,10 +1598,10 @@
 
         function gridsFor(i) {
           if (cache.has(i)) return cache.get(i);
-          const tm = m2Grid(i);
-          if (i === 0 && !tm) return base;
-          const t = tm || shifted(base.t, 't', i), h = shifted(base.h, 'rh', i);
-          let ws = shifted(base.ws, 'ws', i);
+          const tm = m2Grid('t', i), hm = m2Grid('rh', i), wm = m2Grid('ws', i);
+          if (i === 0 && !tm && !hm && !wm) return base;
+          const t = tm || shifted(base.t, 't', i), h = hm || shifted(base.h, 'rh', i);
+          let ws = wm || shifted(base.ws, 'ws', i);
           if (ws && wsRange) ws = { ...ws, ws_min: wsRange.min, ws_max: wsRange.max };
           const derive = (fn, wg) => {
             if (!t?.values || !h?.values) return null;
@@ -1669,6 +1732,7 @@
         // valore della griglia +1h nel punto + IDW della variazione delle stazioni (stessi pesi di
         // buildWeights, stesso peso terra di shifted); direzione del vento con l'IDW di windGridFor.
         // Usa sempre `base`, non le griglie dell'ora mostrata in quel momento dalla timeline.
+        // Con l'M2 su griglia (griglia_*_48h.json) temperatura, umidità e vento sono quelli della cella.
         function pointSeries(lat, lng) {
           if (!data) return null;
           const pts = stations.filter(s => data.series.has(s.id));
@@ -1688,14 +1752,17 @@
           }
           const at = grid => (grid?.values ? lookupGrid(lat, lng, grid) : null);
           const t0 = at(base.t), h0 = at(base.h), w0 = at(base.ws);
+          // M2 su griglia: il valore della cella dell'ora, come la mappa; senza, griglia +1h + variazioni
+          const m2 = (key, time) => (mg[key] ? m2Point(key, mg[key].times.get(new Date(time).getTime()), lat, lng) : null);
           return data.times.map((time, i) => {
             const delta = key => pts.reduce((acc, s, j) => {
               const v = data.series.get(s.id)[key];
               return acc + ((v[i] != null && v[0] != null) ? w[j] * (v[i] - v[0]) : 0);
             }, 0);
-            const t  = t0 != null ? t0 + delta('t') * land : null;
-            const rh = h0 != null ? Math.min(100, Math.max(0, h0 + delta('rh') * land)) : null;
-            const ws = w0 != null ? Math.max(0, w0 + delta('ws')) : null;
+            const tM = m2('t', time), hM = m2('rh', time), wM = m2('ws', time);
+            const t  = tM != null ? tM : t0 != null ? t0 + delta('t') * land : null;
+            const rh = hM != null ? Math.min(100, Math.max(0, hM)) : h0 != null ? Math.min(100, Math.max(0, h0 + delta('rh') * land)) : null;
+            const ws = wM != null ? Math.max(0, wM) : w0 != null ? Math.max(0, w0 + delta('ws')) : null;
             let su = 0, sv = 0, sw = 0;
             for (const s of pts) {
               const ser = data.series.get(s.id);
@@ -1776,7 +1843,8 @@
         bounds: tObs ? [[tObs.lat_min, tObs.lon_min], [tObs.lat_max, tObs.lon_max]] : null,
         pointSeries: (lat, lng) => fc48Ctl.pointSeries(lat, lng),
         whenReady: fc48Ctl.whenReady,
-        nowTemp: (lat, lng) => (tObs?.values ? lookupGrid(lat, lng, tObs) : null),
+        // letta a ogni apertura: la mappa "Ora" M2 arriva dopo (griglia_48h.json)
+        nowTemp: (lat, lng) => (latest.temp_grid_observed?.values ? lookupGrid(lat, lng, latest.temp_grid_observed) : null),
         windUnit: () => windUnit,
         localityName: getLocalityName,
       });

@@ -98,6 +98,8 @@ jobs:
           fetch sst_cache.json data/sst_cache.json || true
           fetch forecast_48h.json docs/data/forecast_48h.json || true
           fetch griglia_48h.json docs/data/griglia_48h.json || true
+          fetch griglia_umidita_48h.json docs/data/griglia_umidita_48h.json || true
+          fetch griglia_vento_48h.json docs/data/griglia_vento_48h.json || true
 
           echo "static=$need_static" >> "$GITHUB_OUTPUT"
           echo "dashboard=$need_dashboard" >> "$GITHUB_OUTPUT"
