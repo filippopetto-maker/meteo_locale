@@ -1424,7 +1424,23 @@
             smp.sort((a, b) => a - b);
             vMax = smp[Math.floor(smp.length * 0.99)] * j.passo;
           }
-          return { times, frames, passo: j.passo, n, ora: ora ?? null, vMin: j.t_min, vMax };
+          // vento: direzione di ogni cella (da dove arriva) a passi di 2°, variazioni sul giro più corto
+          let dir = null;
+          // (un pixel ogni 2: dir_nx × dir_ny)
+          if (key === 'ws' && j.b64_dir_prima && j.b64_dir_variazioni && j.dir_nx) {
+            const [d0, d1] = await Promise.all([inflate(j.b64_dir_prima), inflate(j.b64_dir_variazioni)]);
+            const m = j.dir_nx * j.dir_ny;
+            const f0 = new Int16Array(d0.buffer, d0.byteOffset, m), dd = new Int8Array(d1.buffer, d1.byteOffset, m * (nt - 1));
+            const nd = 360 / j.passo_dir;
+            const v = new Int16Array(m * nt);
+            v.set(f0);
+            for (let k = 1; k < nt; k++) {
+              const o = k * m, p = o - m, d = (k - 1) * m;
+              for (let c = 0; c < m; c++) v[o + c] = ((v[p + c] + dd[d + c]) % nd + nd) % nd;
+            }
+            dir = { v, nx: j.dir_nx, ny: j.dir_ny, m, passo: j.passo_dir };
+          }
+          return { times, frames, passo: j.passo, n, ora: ora ?? null, vMin: j.t_min, vMax, dir };
         }
 
         // Griglia della variabile key dal fotogramma k del file M2
@@ -1684,7 +1700,34 @@
 
         // Particelle dell'ora i: stessa interpolazione del server (export_static.build_wind_grid_json,
         // IDW potenza 2 in gradi) sul vento delle stazioni; alla +1h resta la griglia del server
+        // Particelle e frecce dalla griglia M2 del vento (velocità M2, direzione ICON-2I agganciata alle
+        // stazioni): una cella ogni 2 pixel (~2 km), così si vedono valli e canalizzazioni
+        function windGridM2(i) {
+          const m = mg.ws, g = base.t;
+          if (!m?.dir || !g || !data) return null;
+          const k = m.times.get(new Date(data.times[i]).getTime());
+          if (k === undefined) return null;
+          const step = 2, nx = m.dir.nx, ny = m.dir.ny;
+          const u = new Array(nx * ny), v = new Array(nx * ny), o = k * m.n, od = k * m.dir.m;
+          for (let r = 0; r < ny; r++) {
+            for (let c = 0; c < nx; c++) {
+              const cell = (r * step) * g.nx + c * step;
+              const ms = m.frames[o + cell] * m.passo / 3.6, rad = m.dir.v[od + r * nx + c] * m.dir.passo * Math.PI / 180;
+              u[r * nx + c] = Math.round(-ms * Math.sin(rad) * 1e3) / 1e3;
+              v[r * nx + c] = Math.round(-ms * Math.cos(rad) * 1e3) / 1e3;
+            }
+          }
+          const lo2 = g.lon_min + (nx - 1) * step * (g.lon_max - g.lon_min) / (g.nx - 1);
+          const la2 = g.lat_max - (ny - 1) * step * (g.lat_max - g.lat_min) / (g.ny - 1);
+          const h = { ...(windGrid?.[0]?.header || {}), la1: g.lat_max, la2, lo1: g.lon_min, lo2, nx, ny,
+                      dx: (lo2 - g.lon_min) / (nx - 1), dy: (g.lat_max - la2) / (ny - 1) };
+          return [{ header: { ...h, parameterCategory: 2, parameterNumber: 2 }, data: u },
+                  { header: { ...h, parameterCategory: 2, parameterNumber: 3 }, data: v }];
+        }
+
         function windGridFor(i) {
+          const wm = windGridM2(i);
+          if (wm) return wm;
           if (i === 0 || !windGrid?.[0]?.data?.length) return windGrid;
           const { nx, ny, la1, la2, lo1, lo2 } = windGrid[0].header;
           const pts = [];
@@ -1807,6 +1850,15 @@
             }
             let wd = null;
             if (sw > 0) { wd = Math.atan2(-su, -sv) * 180 / Math.PI; if (wd < 0) wd += 360; }
+            // direzione della griglia M2 nella cella più vicina, se c'è
+            const kd = mg.ws?.dir ? mg.ws.times.get(new Date(time).getTime()) : undefined;
+            if (kd !== undefined) {
+              const g = base.t;
+              const D = mg.ws.dir;
+              const r = Math.min(D.ny - 1, Math.round((g.lat_max - Math.max(g.lat_min, Math.min(g.lat_max, lat))) / (g.lat_max - g.lat_min) * (g.ny - 1) / 2));
+              const c = Math.min(D.nx - 1, Math.round((Math.max(g.lon_min, Math.min(g.lon_max, lng)) - g.lon_min) / (g.lon_max - g.lon_min) * (g.nx - 1) / 2));
+              wd = D.v[kd * D.m + r * D.nx + c] * D.passo;
+            }
             return { time, t, rh, ws, wd, a: (t != null && rh != null) ? apparentTemp(t, rh, ws) : null };
           });
         }

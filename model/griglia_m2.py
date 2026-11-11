@@ -12,7 +12,8 @@ Dal 11/2026 (temperatura; umidità e vento dal 12/11/2026). Ogni ora, nell'expor
        temperatura  175 stazioni, 19 mesi, più le corse vere a 48 h
        umidità      ICON-2I portata alla quota del pixel per punto di rugiada + correzione (181 stazioni)
        vento 10 m   taratura del vento di ICON-2I sui 7 aeroporti METAR (senza terreno: 7 punti in pianura
-                    non bastano) più le corse vere; la direzione resta quella di ICON-2I
+                    non bastano) più le corse vere; la direzione è quella di ICON-2I, ruotata entro ~6 km
+                    verso l'M2 delle stazioni (dal 12/11/2026, in griglia_vento_48h.json a passi di 2°)
   4. aggancio alle stazioni: lo scarto stazione − griglia nel punto si spande entro ~6 km e a quote simili
      (±300 m; vento 15 km e ±500 m, a 6 km lasciava buchi); una stazione lontana sia dalla griglia sia da
      ICON (> 2,5 °C, 15 punti %, fattore 2 nel vento) non si aggancia.
@@ -51,6 +52,8 @@ LAPSE_TD = 0.0018  # punto di rugiada, °C/m
 ANCHOR_R_KM, ANCHOR_DZ, ANCHOR_MAX = 6.0, 300.0, 2.5
 ANCHOR_R_KM_W, ANCHOR_DZ_W = 15.0, 500.0
 ANCHOR_MAX_RH, ANCHOR_MAX_LOGW = 15.0, 0.7
+ANCHOR_MAX_DIR, ANCHOR_MIN_WS = 90.0, 3.0  # direzione: rotazione entro ~6 km; niente se > 90° o vento < 3 km/h
+PASSO_DIR = 2.0  # gradi
 OBS_MAX_MIN = 90  # minuti: misure più vecchie non agganciano l'ora attuale
 ORE = 48
 PASSO = 0.2  # °C, quantizzazione del file della temperatura
@@ -225,7 +228,8 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
     # valori delle stazioni per ora: M2 (forecast_48h) e misure dell'ora attuale
     st48 = {}
     for sid, s48 in (f48 or {}).get("stations", {}).items():
-        st48[int(sid)] = {vf: (s48["t"][n], s48["rh"][n], s48["ws"][n]) for n, vf in enumerate(s48["valid_for"])}
+        wd48 = s48.get("wd") or [None] * len(s48["valid_for"])
+        st48[int(sid)] = {vf: (s48["t"][n], s48["rh"][n], s48["ws"][n], wd48[n]) for n, vf in enumerate(s48["valid_for"])}
     adesso = ora.replace(minute=0, second=0, microsecond=0)
     obs = {}
     for sid, o in (osservazioni or {}).items():
@@ -237,7 +241,7 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
             obs[int(sid)] = (o.get("temperature"), o.get("humidity"))
 
     def st_vals(key: str, k_var: int) -> np.ndarray:
-        return np.array([(st48.get(int(s), {}).get(key) or (np.nan,) * 3)[k_var] for s in st_id], dtype=float)
+        return np.array([(st48.get(int(s), {}).get(key) or (np.nan,) * 4)[k_var] for s in st_id], dtype=float)
 
     def aggancia(grid, at_st, val, fg_st, lim, Wm):
         delta = val - at_st
@@ -250,6 +254,7 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
     h3 = np.arange(fc["temperature_2m"].shape[2]) * SRC["ifs"]["step_h"]
     times, n_agg = [], []
     out = {k: [] for k in VARIABILI}
+    out_dir = []
     for k in range(ORE + 1):  # k = 0: ora attuale
         valid = adesso + timedelta(hours=k)
         li = int((valid - ti).total_seconds() // 3600)
@@ -329,6 +334,17 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
                                 ANCHOR_MAX_LOGW, Ww)
             out["ws"].append(np.expm1(np.clip(lw_f, 0, None)))
             na.append(nw)
+            # direzione di ICON-2I (da dove arriva, °), ruotata vicino alle stazioni verso l'M2 di stazione:
+            # agli aeroporti mai visti ICON-2I sbaglia 31°, l'M2 di stazione 36° e le correzioni LightGBM
+            # 33° (prova 11/11), quindi lontano dalle stazioni resta ICON-2I
+            wd_g = np.degrees(np.arctan2(X.u.to_numpy(), X.v.to_numpy())) % 360
+            wd_s = np.degrees(np.arctan2(Xs.u.to_numpy(), Xs.v.to_numpy())) % 360
+            wd_st = st_vals(key1 if k == 0 else key, 3)
+            ws_st = val_w
+            rot = (wd_st - wd_s + 180) % 360 - 180
+            ok = np.isfinite(rot) & (np.abs(rot) <= ANCHOR_MAX_DIR) & (np.nan_to_num(ws_st) >= ANCHOR_MIN_WS)
+            r = np.where(ok, rot, 0.0).astype(np.float32)
+            out_dir.append((wd_g + (W[:, ok] @ r[ok]) / np.maximum(W[:, ok].sum(1), 1.0)) % 360)
         times.append(key)
         n_agg.append(na)
 
@@ -348,6 +364,18 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
             continue
         log.info(f"{nome}: {len(times)} ore, {arr.min():.1f}…{arr.max():.1f} {unita}, stazioni agganciate "
                  f"{n_agg[:, n].min()}–{n_agg[:, n].max()} su {len(st_id)}, {(len(b0) + len(b1)) / 1e6:.2f} MB")
+        extra = {}
+        if var == "ws" and len(out_dir) == len(times):
+            # direzione a passi di 2° (0…179) su un pixel ogni 2 (~2 km, quanto usano particelle e frecce):
+            # prima ora int16, poi variazioni int8 prese sul giro più corto
+            dirs = np.stack(out_dir).reshape(len(times), ny, nx)[:, ::2, ::2]
+            q = np.round(dirs / PASSO_DIR).astype(np.int32) % 180
+            dq = (np.diff(q, axis=0) + 90) % 180 - 90
+            d0 = zlib.compress(q[0].astype("<i2").tobytes(), 9)
+            d1 = zlib.compress(dq.astype(np.int8).tobytes(), 9)
+            extra = {"passo_dir": PASSO_DIR, "dir_nx": int(dirs.shape[2]), "dir_ny": int(dirs.shape[1]), "b64_dir_prima": base64.b64encode(d0).decode(),
+                     "b64_dir_variazioni": base64.b64encode(d1).decode()}
+            log.info(f"  direzione: {(len(d0) + len(d1)) / 1e6:.2f} MB")
         files[nome] = {
             "versione": 1,
             "variabile": var,
@@ -362,6 +390,7 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
             "codifica": f"righe da nord, {unita}/passo; prima ora int16 LE, poi variazioni orarie int8; deflate (zlib), base64",
             "b64_prima": base64.b64encode(b0).decode(),
             "b64_variazioni": base64.b64encode(b1).decode(),
+            **extra,
         }
     log.info(f"griglia M2: {time.time() - tic:.0f} s")
     return files
