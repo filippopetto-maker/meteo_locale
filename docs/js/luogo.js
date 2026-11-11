@@ -442,6 +442,7 @@
       map.setView([p.lat, p.lon], zoom, { animate: false });
     }
     openSheet(p, state);
+    window.Metek3D?.vaiA(p);   // in vista 3D si vola anche lì
   }
 
   // Senza posizione (permesso negato, http in rete locale…) si parte dall'ultimo luogo cercato

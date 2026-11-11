@@ -929,13 +929,31 @@
           `</div>` +
           `</div>` +
           `<div id="info-radar" style="display:none"></div>` +
-          `</div></div>` +
+          `</div>` +
+          // vista 3D (dal 12/11/2026): switch accanto al nome, il modulo si carica alla prima pressione
+          `<button class="vista-sw" id="vista-sw" type="button" aria-label="Vista 2D o 3D"><span class="on">2D</span><span>3D</span></button>` +
+          `</div>` +
           `<span class="top-time">${formatTime(latest.generated_at)}</span>` +
           `<button class="top-btn" id="top-search" type="button" aria-label="Cerca un luogo">` +
           `<svg width="19" height="19" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m12.2 12.2 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` +
           `<button class="top-btn" id="prefs-btn" type="button" aria-label="Impostazioni">${ICON_SLIDERS}</button>`;
         document.body.appendChild(brand);
         brand.querySelector('#top-search').addEventListener('click', () => window.MeteoLuogo?.openSearch());
+        const vsw = brand.querySelector('#vista-sw');
+        const segnaVista = on3d => { vsw.children[0].classList.toggle('on', !on3d); vsw.children[1].classList.toggle('on', on3d); };
+        vsw.addEventListener('click', async e => {
+          e.stopPropagation();   // un tocco sul logo ricarica l'app: lo switch no
+          const va3d = !window.Metek3D?.attivo;
+          segnaVista(va3d);
+          if (!va3d) { window.Metek3D.disattiva(); return; }
+          try {
+            if (!window.Metek3D) await new Promise((ok, ko) => {
+              const sc = document.createElement('script'); sc.src = 'js/vista3d.js'; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc);
+            });
+            await window.Metek3D.attiva();
+            segnaVista(window.Metek3D.attivo);
+          } catch { segnaVista(false); }
+        });
 
         // ─── Gesto diagnostico nascosto: 5 tap rapidi sul logo → runDiagBadge() ───
         // Permanente: innocuo perché richiede un'azione esplicita dell'utente.

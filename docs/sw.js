@@ -1,6 +1,6 @@
 // ⚠️ INCREMENTARE CACHE_VERSION AD OGNI MODIFICA DI HTML/CSS/JS
 // altrimenti le modifiche non compaiono sui dispositivi già installati
-const CACHE_VERSION = 'meteo-v42';
+const CACHE_VERSION = 'meteo-v43';
 
 // Asset statici dell'app — cache-first
 const STATIC_ASSETS = [
@@ -11,6 +11,7 @@ const STATIC_ASSETS = [
   './js/app.js',
   './js/radar.js',
   './js/luogo.js',
+  './js/vista3d.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',
