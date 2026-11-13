@@ -1,4 +1,4 @@
-// vista3d.js — Metek 3D (dal 12/11/2026, solo app e telefono): il vento al suolo dell'M2 su griglia sopra il rilievo.
+// vista3d.js — Metek 3D (dal 12/11/2026 in app e telefono, dal 13/11 anche da PC): il vento al suolo dell'M2 su griglia sopra il rilievo.
 //
 // Si carica solo quando si preme "3D" nella barra in alto (MapLibre ~800 kB non pesa sul 2D).
 //   vento     data/griglia_vento_48h.json, lo stesso file della mappa 2D: velocità M2 a ~1 km, direzione ICON-2I
@@ -81,7 +81,11 @@
 
   // ── interfaccia ───────────────────────────────────────────────────────────
   const CSS = `
+  /* stessi colori dell'app anche da PC, dove i token .is-pwa non ci sono */
+  html.vista-3d { --glass: rgba(20, 22, 34, .86); --border: rgba(255, 255, 255, .12); --text: #e9e9ed; --text-3: rgba(233, 233, 237, .55);
+    --text-off: rgba(233, 233, 237, .52); --accent: #9184d9; --accent-on: #14121f; }
   #map3d { position: fixed; inset: 0; z-index: 500; background: #0b0f17; display: none; }
+  html.vista-3d #control-panel .layer-toggle, html.vista-3d #fc48-timeline, html.vista-3d #radar-timeline { display: none !important; }
   html.vista-3d #map3d { display: block; }
   html.vista-3d #map, html.vista-3d #dock, html.vista-3d .temp-legend, html.vista-3d #legend-ctl { visibility: hidden !important; }
   html.vista-3d #contour-toggle, html.vista-3d #wind-toggle, html.vista-3d #arrow-toggle,
@@ -100,7 +104,17 @@
   @media (min-width: 700px) { html.vista-3d #dock3d { left: 50%; right: auto; width: 560px; margin-left: -280px; } }
   body.ml-sheet-open #dock3d { transform: translateY(calc(100% + 40px)); opacity: 0; pointer-events: none; }
   #dock3d .riga3d { display: flex; align-items: center; gap: 10px; }
-  #dock3d .radar-play-btn { width: 34px; height: 34px; flex: 0 0 auto; }
+  #dock3d .radar-play-btn { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 50%; border: none; background: var(--accent); color: var(--accent-on);
+    font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  #dock3d .radar-track-wrap { position: relative; flex: 1; height: 18px; display: flex; align-items: center; }
+  #dock3d .radar-slider { -webkit-appearance: none; appearance: none; width: 100%; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .25); outline: none; cursor: pointer; margin: 0; }
+  #dock3d .radar-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 2px solid var(--accent); cursor: pointer; }
+  #dock3d .radar-slider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 2px solid var(--accent); cursor: pointer; }
+  #dock3d .fc48-now { flex: 0 0 88px; width: 88px; text-align: right; white-space: nowrap; font-weight: 600; font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+  #dock3d .rail-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: transparent; border: none;
+    cursor: pointer; color: var(--text-off); font-family: inherit; }
+  #dock3d .rail-item svg { width: 20px; height: 20px; }
+  #dock3d .rail-item span { font-weight: 500; }
   #dock3d .leg3d { display: flex; align-items: center; gap: 8px; margin-top: -3px; }
   #dock3d .leg3d i { flex: 1; height: 5px; border-radius: 3px; background: linear-gradient(90deg,#5c6e8f,#b3c7e0 25%,#f2f5fa 50%,#ffc46b 75%,#ff6b5e); }
   #dock3d .leg3d span { font: 400 10px ui-monospace, "SF Mono", monospace; color: rgba(233, 233, 237, .7); white-space: nowrap; }
@@ -166,7 +180,7 @@
     const dem = new URL('3d/dem/{z}/{x}/{y}.webp', location.href).href.replace(/%7B/g, '{').replace(/%7D/g, '}');
 
     const map = new maplibregl.Map({
-      container: 'map3d', attributionControl: { compact: true }, center: [12.72, 41.98], zoom: 7.7, pitch: 58, bearing: -10, maxPitch: 80,
+      container: 'map3d', attributionControl: { compact: true }, center: [12.72, 41.98], zoom: innerWidth > 700 ? 8.4 : 7.7, pitch: 58, bearing: -10,   // da PC il Lazio riempie lo schermo maxPitch: 80,
       style: {
         version: 8, glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
         sources: {

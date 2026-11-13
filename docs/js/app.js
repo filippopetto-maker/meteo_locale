@@ -231,6 +231,12 @@
   function renderGridLayer(gridData, vMin, vMax, palette, alpha = 127, contour) {
     if (contourMode && contour) return renderContours(gridData, vMin, vMax, palette, contour.step, contour.major, contour.fmt);
     const { nx, ny, lat_min, lat_max, lon_min, lon_max, values } = gridData;
+    const bounds = [[lat_min, lon_min], [lat_max, lon_max]];
+    // Scorrendo le 48 h la stessa ora torna più volte: l'immagine già codificata si riusa (le griglie
+    // dell'ora sono in cache, quindi stesso oggetto = stessi valori)
+    const chiave = `${vMin}|${vMax}|${alpha}|${palette.length}|${palette[0]}`;
+    const memo = IMG_MEMO.get(gridData);
+    if (memo && memo.chiave === chiave) return L.imageOverlay(memo.url, bounds, { opacity: 1.0 });
     const canvas = document.createElement('canvas');
     canvas.width = nx; canvas.height = ny;
     const ctx = canvas.getContext('2d');
@@ -243,9 +249,11 @@
       imgData.data[i * 4 + 3] = alpha;
     }
     ctx.putImageData(imgData, 0, 0);
-    const bounds = [[lat_min, lon_min], [lat_max, lon_max]];
-    return L.imageOverlay(canvas.toDataURL(), bounds, { opacity: 1.0 });
+    const url = canvas.toDataURL();
+    IMG_MEMO.set(gridData, { chiave, url });
+    return L.imageOverlay(url, bounds, { opacity: 1.0 });
   }
+  const IMG_MEMO = new WeakMap();
 
   function ensureMinSpan(vMin, vMax, minSpan) {
     const span = vMax - vMin;
@@ -905,6 +913,25 @@
         `</g><circle cx="126" cy="96" r="9" fill="#f4a93f"></circle>` +
         `</svg>`;
 
+      // Switch 2D | 3D (app, telefono e PC): la vista 3D (js/vista3d.js) si carica alla prima pressione
+      const VISTA_SW = `<button class="vista-sw" id="vista-sw" type="button" aria-label="Vista 2D o 3D" title="Vista 2D o 3D"><span class="on">2D</span><span>3D</span></button>`;
+      function agganciaVista(vsw) {
+        const segna = on3d => { vsw.children[0].classList.toggle('on', !on3d); vsw.children[1].classList.toggle('on', on3d); };
+        vsw.addEventListener('click', async e => {
+          e.stopPropagation();   // un tocco sul logo ricarica l'app: lo switch no
+          const va3d = !window.Metek3D?.attivo;
+          segna(va3d);
+          if (!va3d) { window.Metek3D.disattiva(); return; }
+          try {
+            if (!window.Metek3D) await new Promise((ok, ko) => {
+              const sc = document.createElement('script'); sc.src = 'js/vista3d.js'; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc);
+            });
+            await window.Metek3D.attiva();
+            segna(window.Metek3D.attivo);
+          } catch { segna(false); }
+        });
+      }
+
       if (isPWA) {
         const railIconSvg = inner =>
           `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">${inner}</svg>`;
@@ -931,7 +958,7 @@
           `<div id="info-radar" style="display:none"></div>` +
           `</div>` +
           // vista 3D (dal 12/11/2026): switch accanto al nome, il modulo si carica alla prima pressione
-          `<button class="vista-sw" id="vista-sw" type="button" aria-label="Vista 2D o 3D"><span class="on">2D</span><span>3D</span></button>` +
+          VISTA_SW +
           `</div>` +
           `<span class="top-time">${formatTime(latest.generated_at)}</span>` +
           `<button class="top-btn" id="top-search" type="button" aria-label="Cerca un luogo">` +
@@ -939,21 +966,7 @@
           `<button class="top-btn" id="prefs-btn" type="button" aria-label="Impostazioni">${ICON_SLIDERS}</button>`;
         document.body.appendChild(brand);
         brand.querySelector('#top-search').addEventListener('click', () => window.MeteoLuogo?.openSearch());
-        const vsw = brand.querySelector('#vista-sw');
-        const segnaVista = on3d => { vsw.children[0].classList.toggle('on', !on3d); vsw.children[1].classList.toggle('on', on3d); };
-        vsw.addEventListener('click', async e => {
-          e.stopPropagation();   // un tocco sul logo ricarica l'app: lo switch no
-          const va3d = !window.Metek3D?.attivo;
-          segnaVista(va3d);
-          if (!va3d) { window.Metek3D.disattiva(); return; }
-          try {
-            if (!window.Metek3D) await new Promise((ok, ko) => {
-              const sc = document.createElement('script'); sc.src = 'js/vista3d.js'; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc);
-            });
-            await window.Metek3D.attiva();
-            segnaVista(window.Metek3D.attivo);
-          } catch { segnaVista(false); }
-        });
+        agganciaVista(brand.querySelector('#vista-sw'));
 
         // ─── Gesto diagnostico nascosto: 5 tap rapidi sul logo → runDiagBadge() ───
         // Permanente: innocuo perché richiede un'azione esplicita dell'utente.
@@ -1035,6 +1048,7 @@
           `<div class="panel-head">` +
           `<div class="head-row">` +
           `<button class="info-title" id="brand-reload" type="button" title="Ricarica">${BRAND_MARK_SVG}<span class="brand-word">Metek</span></button>` +
+          VISTA_SW +
           `<button class="head-btn" id="head-search" type="button" aria-label="Cerca un luogo" title="Cerca un luogo">` +
           `<svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m12.2 12.2 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` +
           `<button class="head-btn" id="head-prefs" type="button" aria-label="Impostazioni" aria-expanded="false" aria-controls="panel-settings" title="Impostazioni">${ICON_SLIDERS_SM}</button>` +
@@ -1071,6 +1085,7 @@
 
         // Logo e scritta ricaricano la pagina (come Cmd+R); lente → ricerca; ingranaggio → impostazioni
         document.getElementById('brand-reload').addEventListener('click', () => location.reload());
+        agganciaVista(document.getElementById('vista-sw'));
         document.getElementById('head-search').addEventListener('click', () => window.MeteoLuogo?.openSearch());
         const headPrefs = document.getElementById('head-prefs');
         headPrefs.addEventListener('click', () => {
@@ -1592,7 +1607,14 @@
         function setupControls() {
           slider.max = String(data.times.length);
           el.querySelector('#fc48-end').textContent = `+${data.times.length}h`;
-          slider.addEventListener('input', e => { pause(); setPos(parseInt(e.target.value, 10)); });
+          // Trascinando, il cursore manda decine di eventi al secondo: si disegna al massimo un'ora per fotogramma
+          // (l'ultima), e le parti secondarie (particelle, pillole, popup) aspettano che il cursore si fermi
+          let posAttesa = null;
+          slider.addEventListener('input', e => {
+            pause();
+            if (posAttesa === null) requestAnimationFrame(() => { const p = posAttesa; posAttesa = null; scorre = true; setPos(p); });
+            posAttesa = parseInt(e.target.value, 10);
+          });
           playBtn.addEventListener('click', () => (timer ? pause() : play()));
           setPos(0, true);
           refresh();
@@ -1606,6 +1628,7 @@
         // Il vento non ha un "Ora" osservato su griglia: lì la barra parte dalla +1h
         const minPos = () => (activeLayer === 'wind' ? 1 : 0);
 
+        let scorre = false, timerSecondarie = null;
         function setPos(p, silent) {
           p = Math.max(minPos(), Math.min(data.times.length, p));
           pos = p;
@@ -1700,20 +1723,24 @@
           currentWsMin = g.ws ? g.ws.ws_min : WIND_SPEED_MIN;
           currentWsMax = g.ws ? g.ws.ws_max : WIND_SPEED_MAX;
           windGridNow = windGridFor(i);
-          if (windLayer) windLayer.setData(windGridNow);
+          const secondarie = () => {
+            if (windLayer) windLayer.setData(windGridNow);
+            if (!silent) updateStationPopups(stationMarkers, stations);
+            if (!silent && activeLayer === 'wind' && document.getElementById('arrow-check')?.checked) renderArrowLayer(map, windGridNow);
+          };
+          clearTimeout(timerSecondarie);
+          if (scorre) { scorre = false; timerSecondarie = setTimeout(secondarie, 150); } else secondarie();
           el.querySelector('#fc48-now').textContent = isPWA
             ? (pos === 0 ? `Ora ${formatTime(latest.generated_at)}` : fmt(data.times[i]))
             : (pos === 0 ? `Ora · ${fmt(latest.generated_at)}` : `+${i + 1}h · ${fmt(data.times[i])}`);
           updateValidLabel();
           if (silent) return;
-          updateStationPopups(stationMarkers, stations);
           if (activeLayer !== 'wind') { switchTime(activeTime); return; }
           // Scheda Vento: si ridisegnano solo sfondo, legenda ed eventuali frecce
           if (heatOverlay) map.removeLayer(heatOverlay);
           heatOverlay = renderWindSpeed(latest);
           if (heatOverlay) heatOverlay.addTo(map);
           updateWindLegend();
-          if (document.getElementById('arrow-check')?.checked) renderArrowLayer(map, windGridNow);
         }
 
         // Particelle dell'ora i: stessa interpolazione del server (export_static.build_wind_grid_json,
@@ -1743,7 +1770,15 @@
                   { header: { ...h, parameterCategory: 2, parameterNumber: 3 }, data: v }];
         }
 
+        const cacheVento = new Map();
         function windGridFor(i) {
+          // solo la griglia M2 si tiene in memoria (il ripiego sulle stazioni dipende dall'ora già impostata)
+          if (cacheVento.has(i)) return cacheVento.get(i);
+          const g = windGridM2(i);
+          if (g) { cacheVento.set(i, g); return g; }
+          return windGridForCalc(i);
+        }
+        function windGridForCalc(i) {
           const wm = windGridM2(i);
           if (wm) return wm;
           if (i === 0 || !windGrid?.[0]?.data?.length) return windGrid;
