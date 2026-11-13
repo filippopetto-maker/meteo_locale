@@ -2008,8 +2008,24 @@
           return -(s / 3.6) * Math.cos(rad);
         });
 
-        const speed = Math.sqrt(windU ** 2 + windV ** 2) * 3.6;
-        let dir = Math.atan2(-windU, -windV) * 180 / Math.PI;
+        // Vento del punto dalla stessa griglia dell'ora mostrata che colora la mappa e muove le particelle
+        // (velocità M2, direzione della griglia u/v). Prima era la media pesata delle stazioni alla +1 h:
+        // a +39 h dava 11 km/h dove la mappa era rossa (13/11/2026). Le stazioni restano fuori dalla griglia.
+        const dentro = g => g && lat >= g.lat_min && lat <= g.lat_max && lng >= g.lon_min && lng <= g.lon_max;
+        const uvGriglia = (() => {
+          const h = windGridNow?.[0]?.header;
+          if (!h || !windGridNow[1]) return null;
+          const fy = (h.la1 - lat) / h.dy, fx = (lng - h.lo1) / h.dx;
+          if (fx < 0 || fy < 0 || fx > h.nx - 1 || fy > h.ny - 1) return null;
+          const x = Math.min(h.nx - 2, Math.floor(fx)), y = Math.min(h.ny - 2, Math.floor(fy)), ax = fx - x, ay = fy - y;
+          const bil = d => (d[y * h.nx + x] * (1 - ax) + d[y * h.nx + x + 1] * ax) * (1 - ay) +
+                           (d[(y + 1) * h.nx + x] * (1 - ax) + d[(y + 1) * h.nx + x + 1] * ax) * ay;
+          return [bil(windGridNow[0].data), bil(windGridNow[1].data)];
+        })();
+        const wsG = dentro(latest.wind_speed_grid) ? lookupGrid(lat, lng, latest.wind_speed_grid) : null;
+        const speed = wsG ?? (uvGriglia ? Math.hypot(uvGriglia[0], uvGriglia[1]) * 3.6 : Math.sqrt(windU ** 2 + windV ** 2) * 3.6);
+        const [du, dv] = uvGriglia || [windU, windV];
+        let dir = Math.atan2(-du, -dv) * 180 / Math.PI;
         if (dir < 0) dir += 360;
 
         const hgActive = activeTime === 'forecast'
