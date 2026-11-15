@@ -1,6 +1,11 @@
 """
 shadow_m2.py — Prova in ombra 1–48 h: IFS grezzo, opzione E, modello attuale, M2
 
+SPENTA dal 15/11/2026 (non gira più in shadow-m2.yml): M2c e H1b in produzione dal 09/11, la dashboard
+legge forecasts_verifica. Il file resta perché shadow_m2b.py e produce_m2.py ne importano le funzioni
+(prefetch, load_bias, ifs_run_time, ...). Le tabelle forecasts_shadow e forecasts_shadow_m2hb restano
+con i dati fino al 15/11.
+
 Un'emissione per esecuzione (issue_at = ora UTC corrente troncata all'ora),
 stesso input ECMWF IFS (Forecast API, past_days=2, forecast_days=4) per le
 quattro varianti, scritte in forecasts_shadow. Non tocca forecasts né la mappa.
