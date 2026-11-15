@@ -28,3 +28,5 @@ model/*.pkl
 data/
 docs/data/*.json
 *.tar.gz
+
+model/pioggia_oraria/

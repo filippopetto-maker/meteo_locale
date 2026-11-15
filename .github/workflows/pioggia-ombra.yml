@@ -1,0 +1,68 @@
+name: Pioggia oraria in ombra (U-Net, 1–48 h)
+
+# Dopo ogni corsa ICON-2I (00Z, 12Z; su AWS ~2 h dopo) la U-Net oraria (insieme di 6 reti, scripts/rete_ombra.py)
+# prevede la probabilità di ≥ 0,2 / 1 / 4 mm/h da +1 a +48 h su tutte le celle 0,05° del Lazio. Le previsioni
+# vanno come asset nella release del mese pioggia-ombra-AAAA-MM di metek-core: nessun effetto sul sito.
+# I modelli si scaricano dalla release modelli-pioggia-oraria (model/pioggia_oraria/, rete_ombra.py --impacchetta).
+# Trigger esterno: cron-job.org alle 03:30 e 15:30 UTC, body {"ref":"main"}. A mano: "corsa" = AAAA-MM-GGTHH.
+on:
+  workflow_dispatch:
+    inputs:
+      corsa:
+        description: "Corsa ICON-2I (AAAA-MM-GGTHH), vuoto = l'ultima su AWS"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pioggia-ombra
+  cancel-in-progress: false
+
+jobs:
+  ombra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/rete_ombra.py
+            scripts/rete_dataset.py
+            scripts/rete_unet.py
+            scripts/rete_unet_orario.py
+            scripts/griglia_lazio.py
+            scripts/griglia_lazio_test.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dipendenze
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "numpy<2.3" pandas pyarrow scikit-learn lightgbm scipy omfiles==1.2.0 requests
+
+      - name: Modelli
+        env:
+          GH_TOKEN: ${{ secrets.ARCHIVE_TOKEN }}
+          GH_REPO: filippopetto-maker/metek-core
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Secret ARCHIVE_TOKEN mancante"; exit 1; }
+          mkdir -p model/pioggia_oraria
+          gh release download modelli-pioggia-oraria --dir model/pioggia_oraria
+          ls -la model/pioggia_oraria
+
+      - name: Previsione e caricamento
+        env:
+          GH_TOKEN: ${{ secrets.ARCHIVE_TOKEN }}
+          GH_REPO: filippopetto-maker/metek-core
+          CORSA: ${{ inputs.corsa }}
+        run: |
+          f=$(python scripts/rete_ombra.py --uscita ombra ${CORSA:+--corsa "$CORSA"} | tail -1)
+          n=$(basename "$f"); m=$(echo "$n" | sed -E 's/pioggia_([0-9]{4})([0-9]{2}).*/\1-\2/')
+          gh release view "pioggia-ombra-$m" > /dev/null 2>&1 || \
+            gh release create "pioggia-ombra-$m" --title "Pioggia oraria in ombra $m" \
+              --notes "Probabilità orarie di pioggia (U-Net, scripts/rete_ombra.py). Ingressi: ICON-2I e GFS da Open-Meteo (CC-BY 4.0)." --latest=false
+          gh release upload "pioggia-ombra-$m" "$f" --clobber
