@@ -18,7 +18,8 @@ normalizzazione, taratura, statici e celle): in Actions si scaricano dalla relea
     python scripts/rete_ombra.py --impacchetta insieme       # una volta, sul Mac
     python scripts/rete_ombra.py [--corsa 2026-11-14T12] [--uscita ombra/]
 
-Uscita: <uscita>/pioggia_AAAAMMGGHH.npz con p (ore × 3 soglie × 48 × 64, tarata), p_grezza, tempi (inizio dell'ora
+Uscita: <uscita>/pioggia_AAAAMMGGHH.npz con p (ore × 3 soglie × 48 × 64, tarata), p_grezza, mm (mm attesi
+nell'ora, rete_mm.py, se nel pacchetto c'è mm.json), tempi (inizio dell'ora
 prevista, UTC), lead_h, soglie, corsa.
 """
 
@@ -66,6 +67,8 @@ def impacchetta(nome: str):
     meta = json.loads((o.DATI / "cache" / "meta.json").read_text())
     (MOD / "normalizza.json").write_text(json.dumps({k: meta[k] for k in ("canali", "media", "sd")}))
     shutil.copy(sorg / "taratura.json", MOD / "taratura.json")
+    if (sorg / "mm" / "mm.json").exists():                                    # rete_mm.py
+        shutil.copy(sorg / "mm" / "mm.json", MOD / "mm.json")
     shutil.copy(o.DATI / "statici.npz", MOD / "statici.npz")
     for f in ("descrittori_celle.parquet", "punti_nwp.parquet"):
         shutil.copy(g.LOCALE / f, MOD / f)
@@ -192,7 +195,22 @@ def prevedi(x: np.ndarray, tempi: pd.DatetimeIndex, t0: pd.Timestamp, canali: li
     fuori = st[-1] != 1
     tarata[:, :, fuori] = np.nan
     grezza[:, :, fuori] = np.nan
-    return {"p": tarata.astype("float16"), "p_grezza": grezza.astype("float16"),
+    extra_out = {}
+    if (MOD / "mm.json").exists():
+        # mm attesi (rete_mm.py): a(p0,2 − p1) + b(p1 − p4) + c·p4, coefficienti per lead e terra / mare
+        coef = json.loads((MOD / "mm.json").read_text())["lead"]
+        pm = np.minimum.accumulate(np.clip(tarata, 0, 1), axis=1)
+        q = np.stack([pm[:, 0] - pm[:, 1], pm[:, 1] - pm[:, 2], pm[:, 2]], axis=1)
+        terra = rd.distanza_costa(st, nomi) >= 0
+        mm = np.empty((len(q), *q.shape[2:]), "float32")
+        for kk in (1, 2):
+            m = k == kk
+            c = coef[str(kk)]
+            blocco = np.einsum("nkhw,k->nhw", q[m], np.asarray(c["mare"], "float32"))
+            blocco[:, terra] = np.einsum("nkp,k->np", q[m][:, :, terra], np.asarray(c["terra"], "float32"))
+            mm[m] = blocco
+        extra_out["mm"] = mm.astype("float16")
+    return {"p": tarata.astype("float16"), "p_grezza": grezza.astype("float16"), **extra_out,
             "tempi": tempi.values.astype("datetime64[m]"), "lead_h": lead_h.astype("int16"),
             "soglie": np.array(o.SOGLIE), "corsa": np.datetime64(t0, "m"), "reti": len(p)}
 
