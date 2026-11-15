@@ -4,10 +4,10 @@ griglia_m2.py — M2 su griglia: temperatura, umidità e vento M2 su tutte le ce
 Dal 11/2026 (temperatura; umidità e vento dal 12/11/2026). Ogni ora, nell'export:
   1. ultima corsa ICON-2I (2,2 km) e IFS 0,25° dall'archivio Open-Meteo su AWS (s3://openmeteo/data_run,
      anonimo, niente quota), letta solo sul riquadro del Lazio
-  2. celle di ~5 km: campi del modello e quota media della cella, temperatura riportata a quella quota
-     (−0,65 °C/100 m dalla quota del modello)
-  3. pixel della mappa (250×220, ~1 km): campi delle celle interpolati e riportati alla quota del pixel,
-     variabili di terreno del pixel (DEM Copernicus 90 m, WorldCover), correzioni LightGBM
+  2. (fino al 15/11/2026 c'erano celle intermedie di 5 km, che toglievano il dettaglio di ICON-2I)
+  3. pixel della mappa (250×220, ~1 km): ICON-2I a 2,2 km e IFS letti direttamente nel pixel (bilineare),
+     come nello storico di addestramento, temperatura riportata dalla quota del modello (HSURF nel pixel)
+     a quella del pixel (−0,65 °C/100 m), variabili di terreno del pixel (DEM Copernicus 90 m, WorldCover), correzioni LightGBM
      (spente fra 1.600 e 2.100 m; nessuna correzione in mare):
        temperatura  175 stazioni, 19 mesi, più le corse vere a 48 h
        umidità      ICON-2I portata alla quota del pixel per punto di rugiada + correzione (181 stazioni)
@@ -22,7 +22,7 @@ Dal 11/2026 (temperatura; umidità e vento dal 12/11/2026). Ogni ora, nell'expor
      riparati e misurano meno del vento a 10 m).
 
 File (bundle dei modelli, models.lock): model/griglia_m2/{modello,modello_umidita,modello_vento}.txt.gz,
-model/griglia_m2/statico.npz (terreno di pixel, celle e stazioni; lo costruisce scripts/griglia_m2_statico.py).
+model/griglia_m2/statico.npz (terreno di pixel e stazioni; lo costruisce scripts/griglia_m2_statico.py).
 
 Uscita: un dict {nome file: contenuto} per docs/data/: griglia_48h.json (temperatura, passi di 0,2 °C),
 griglia_umidita_48h.json (passi dell'1%), griglia_vento_48h.json (passi di 1 km/h). Stesso formato per
@@ -118,6 +118,15 @@ async def _ultima(fs, src: dict, ora: datetime, box, sem):
     raise RuntimeError(f"nessuna corsa completa per {src['path']}")
 
 
+async def _quota(fs, src: dict, d: dict) -> np.ndarray:
+    """Quota del terreno del modello (HSURF, m) sullo stesso riquadro della corsa letta in d."""
+    import omfiles
+    ny, nx = d[src["vars"][0]].shape[:2]
+    r = await omfiles.OmFileReaderAsync.from_fsspec(fs, src["path"].replace("data_run", "data") + "/static/HSURF.om")
+    h = np.asarray(await r.read_array((slice(d["_i0"], d["_i0"] + ny), slice(d["_j0"], d["_j0"] + nx))), dtype=np.float32)
+    return np.where(h < -100, 0.0, h)
+
+
 async def _corse(ora: datetime, box):
     import s3fs
     fs = s3fs.S3FileSystem(anon=True, asynchronous=True)
@@ -126,6 +135,7 @@ async def _corse(ora: datetime, box):
     try:
         (ti, ic), (tf, fc) = await asyncio.gather(_ultima(fs, SRC["icon"], ora, box, sem),
                                                   _ultima(fs, SRC["ifs"], ora, box, sem))
+        ic["_hsurf"], fc["_hsurf"] = await asyncio.gather(_quota(fs, SRC["icon"], ic), _quota(fs, SRC["ifs"], fc))
     finally:
         await session.close()
     return ti, ic, tf, fc
@@ -181,7 +191,6 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
     osservazioni: {id: {recorded_at, temperature, humidity}} (ultime misure; facoltative).
     Ritorna {nome file: dict} (vuoto se nessuna ora è calcolabile)."""
     import pandas as pd
-    from scipy.ndimage import map_coordinates
 
     tic = time.time()
     S = np.load(DIR / "statico.npz")
@@ -190,15 +199,15 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
         raise FileNotFoundError(DIR / VARIABILI["t"][1])
     g = {k: float(S["griglia"][n]) for n, k in enumerate(["lat_min", "lat_max", "lon_min", "lon_max"])}
     ny, nx = S["z"].shape
-    clat, clon = S["cell_lat"], S["cell_lon"]
-    CLA, CLO = np.meshgrid(clat, clon, indexing="ij")
-    box = (clat[0] - 0.05, clat[-1] + 0.05, clon[0] - 0.05, clon[-1] + 0.05)
+    st_id, st_lat, st_lon = S["st_id"], S["st_lat"], S["st_lon"]
+    box = (min(g["lat_min"], st_lat.min()) - 0.05, max(g["lat_max"], st_lat.max()) + 0.05,
+           min(g["lon_min"], st_lon.min()) - 0.05, max(g["lon_max"], st_lon.max()) + 0.05)
 
     ora = ora or datetime.now(timezone.utc)
     ti, ic, tf, fc = asyncio.run(_corse(ora, box))
     log.info(f"corse ICON-2I {ti:%d/%m %H} UTC, IFS {tf:%d/%m %H} UTC ({time.time() - tic:.0f} s)")
 
-    # pixel e stazioni: coordinate nella griglia delle celle
+    # pixel e stazioni
     plat = np.linspace(g["lat_max"], g["lat_min"], ny)
     plon = np.linspace(g["lon_min"], g["lon_max"], nx)
     PLA, PLO = np.meshgrid(plat, plon, indexing="ij")
@@ -206,12 +215,11 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
                  "urb1", "urb3", "water3"]
     pix = {k: S[k].ravel().astype(np.float64) for k in ter_names}
     sta = {k: S[f"st_{k}"].astype(np.float64) for k in ter_names}
-    st_id, st_lat, st_lon = S["st_id"], S["st_lat"], S["st_lon"]
-    dlat, dlon = clat[1] - clat[0], clon[1] - clon[0]
-
-    def cell_ij(lat, lon):
-        return [(np.ravel(lat) - clat[0]) / dlat, (np.ravel(lon) - clon[0]) / dlon]
-    pij, sij = cell_ij(PLA, PLO), cell_ij(st_lat, st_lon)
+    # ICON-2I (2,2 km) e IFS letti direttamente nel punto (bilineare), come nello storico di addestramento
+    # (storico_griglia.py, storico_umvento.py): niente celle intermedie
+    punti = {"pix": (PLA.ravel(), PLO.ravel()), "sta": (st_lat, st_lon)}
+    quota = {n: {m: _interp(d["_hsurf"], SRC[m], d["_i0"], d["_j0"], *ll) for m, d in (("icon", ic), ("ifs", fc))}
+             for n, ll in punti.items()}
     sea = pix["z"] <= 0
     fade = np.clip((FADE_Z1 - pix["z"]) / (FADE_Z1 - FADE_Z0), 0, 1)
     fz = np.clip((FADE_Z1 - sta["z"]) / (FADE_Z1 - FADE_Z0), 0, 1)
@@ -249,7 +257,6 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
         d = np.where(ok, delta, 0.0).astype(np.float32)
         return grid + (Wm[:, ok] @ d[ok]) / np.maximum(Wm[:, ok].sum(1), 1.0), int(ok.sum())
 
-    ih_c, fh_c, zc = S["icon_hsurf_c"], S["ifs_hsurf_c"], S["zc"]
     nt_icon = ic["temperature_2m"].shape[2]
     h3 = np.arange(fc["temperature_2m"].shape[2]) * SRC["ifs"]["step_h"]
     times, n_agg = [], []
@@ -264,33 +271,33 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
         if li < 0 or lf < 0:
             continue
 
-        def icv(v):
-            return _interp(ic[v][:, :, li], SRC["icon"], ic["_i0"], ic["_j0"], CLA, CLO).reshape(CLA.shape)
+        # campi dell'ora sulla griglia nativa (ICON-2I 2,2 km, IFS 0,25° interpolato nel tempo)
+        m3 = min(int(lf // 3), len(h3) - 2)
+        w3 = (lf - h3[m3]) / 3
+        ws_n, wd_n = ic["wind_speed_10m"][:, :, li] * 3.6, np.radians(ic["wind_direction_10m"][:, :, li])
+        nat = {  # nome: (sorgente, campo 2D)
+            **{n: ("icon", ic[v][:, :, li]) for n, v in (("t_icon", "temperature_2m"), ("t850", "temperature_850hPa"),
+                                                        ("t700", "temperature_700hPa"), ("rh_icon", "relative_humidity_2m"))},
+            "ws_icon": ("icon", ws_n), "ws850": ("icon", ic["wind_speed_850hPa"][:, :, li] * 3.6),
+            # direzione: si interpolano le componenti (un angolo non si media)
+            "u": ("icon", ws_n * np.sin(wd_n)), "v": ("icon", ws_n * np.cos(wd_n)),
+            **{n: ("ifs", fc[v][:, :, m3] * (1 - w3) + fc[v][:, :, m3 + 1] * w3)
+               for n, v in (("t_ifs", "temperature_2m"), ("rh", "relative_humidity_2m"), ("cloud", "cloud_cover"),
+                            ("sw", "shortwave_radiation"), ("u_ifs", "wind_u_component_10m"),
+                            ("v_ifs", "wind_v_component_10m"))},
+        }
+        orig = {"icon": ic, "ifs": fc}
 
-        def ifv(v):
-            a = fc[v]
-            m = min(int(lf // 3), len(h3) - 2)
-            w = (lf - h3[m]) / 3
-            return _interp(a[:, :, m] * (1 - w) + a[:, :, m + 1] * w, SRC["ifs"], fc["_i0"], fc["_j0"],
-                           CLA, CLO).reshape(CLA.shape)
-        ws_i, wd_i = icv("wind_speed_10m") * 3.6, np.radians(icv("wind_direction_10m"))
-        # direzione: si interpolano le componenti (un angolo non si media)
-        cells = {"t_icon": icv("temperature_2m") + LAPSE * (ih_c - zc),
-                 "t_ifs": ifv("temperature_2m") + LAPSE * (fh_c - zc),
-                 "t850": icv("temperature_850hPa"), "t700": icv("temperature_700hPa"),
-                 "rh": ifv("relative_humidity_2m"), "cloud": ifv("cloud_cover"),
-                 "sw": ifv("shortwave_radiation"),
-                 "ws": np.hypot(ifv("wind_u_component_10m"), ifv("wind_v_component_10m")) * 3.6,
-                 "rh_icon": icv("relative_humidity_2m"), "ws_icon": ws_i, "ws850": icv("wind_speed_850hPa") * 3.6,
-                 "u": ws_i * np.sin(wd_i), "v": ws_i * np.cos(wd_i), "ih": ih_c, "zc": zc}
-
-        def frame(ij, ter):
-            v = {n: map_coordinates(a, ij, order=1, mode="nearest") for n, a in cells.items()}
-            dz = v.pop("zc") - ter["z"]
-            v["t_icon"] = v["t_icon"] + LAPSE * dz
-            v["t_ifs"] = v["t_ifs"] + LAPSE * dz
+        def frame(nome, ter):
+            lat, lon = punti[nome]
+            v = {n: _interp(a, SRC[m], orig[m]["_i0"], orig[m]["_j0"], lat, lon) for n, (m, a) in nat.items()}
+            hi, hf = quota[nome]["icon"], quota[nome]["ifs"]
+            # temperatura del modello riportata dalla quota del modello a quella del punto
+            v["t_icon"] = v["t_icon"] + LAPSE * (hi - ter["z"])
+            v["t_ifs"] = v["t_ifs"] + LAPSE * (hf - ter["z"])
+            v["ws"] = np.hypot(v.pop("u_ifs"), v.pop("v_ifs")) * 3.6
             X = pd.DataFrame({**v, **ter})
-            X["dz_icon"] = X.pop("ih") - X.z
+            X["dz_icon"] = hi - X.z
             X["fg"] = X.t_icon
             X["d_ifs_icon"] = X.t_ifs - X.t_icon
             X["dt_850"] = X.fg - X.t850
@@ -304,7 +311,7 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
             wd = np.arctan2(X.u, X.v)
             X["wd_sin"], X["wd_cos"] = np.sin(wd), np.cos(wd)
             return X
-        X, Xs = frame(pij, pix), frame(sij, sta)
+        X, Xs = frame("pix", pix), frame("sta", sta)
         key = valid.strftime("%Y-%m-%dT%H:00:00+00:00")
         key1 = (adesso + timedelta(hours=1)).strftime("%Y-%m-%dT%H:00:00+00:00")
         if k == 0:
