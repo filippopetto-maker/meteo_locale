@@ -62,6 +62,10 @@ VARIABILI = {  # chiave, file, modello, passo, unità
     "rh": ("griglia_umidita_48h.json", "modello_umidita.txt.gz", 1.0, "%"),
     "ws": ("griglia_vento_48h.json", "modello_vento.txt.gz", 1.0, "km/h"),
 }
+# vento sul mare: correzione tarata sul satellite ASCAT (scripts/griglia_mare.py) con la temperatura del mare
+# di Open-Meteo Marine negli stessi 5 punti di sst.py; senza il file, in mare resta ICON-2I
+MARE_MODELLO = "modello_vento_mare.txt.gz"
+SST_PUNTI = [(42.05, 11.72), (41.75, 12.10), (41.43, 12.55), (41.22, 12.95), (41.15, 13.45)]
 SRC = {
     "icon": dict(path="openmeteo/data_run/italia_meteo_arpae_icon_2i", lat0=33.7, dlat=0.02, lon0=3.0,
                  dlon=0.025, step_h=1, ogni_h=3,
@@ -168,6 +172,28 @@ def _rh(t, td):
     return np.clip(100 * np.exp(a * td / (b + td) - a * t / (b + t)), 1, 100)
 
 
+def _sst(t0: datetime, t1: datetime, lat: np.ndarray, lon: np.ndarray) -> dict:
+    """Temperatura del mare oraria nei punti (pesi 1/d² dai 5 punti di sst.py), {ora ISO: array}; {} se manca."""
+    import requests
+    try:
+        r = requests.get("https://marine-api.open-meteo.com/v1/marine", timeout=30, params={
+            "latitude": ",".join(f"{a:.2f}" for a, _ in SST_PUNTI), "longitude": ",".join(f"{b:.2f}" for _, b in SST_PUNTI),
+            "hourly": "sea_surface_temperature", "start_date": f"{t0:%Y-%m-%d}", "end_date": f"{t1:%Y-%m-%d}",
+            "timezone": "UTC"})
+        r.raise_for_status()
+        j = r.json()
+    except Exception as exc:
+        log.warning(f"temperatura del mare non disponibile: {exc}")
+        return {}
+    tempi = j[0]["hourly"]["time"]
+    sst = np.array([x["hourly"]["sea_surface_temperature"] for x in j], dtype=float).T  # (tempo, 5)
+    pl = np.array(SST_PUNTI)
+    d2 = (lat[:, None] - pl[None, :, 0]) ** 2 + ((lon[:, None] - pl[None, :, 1]) * np.cos(np.radians(42))) ** 2
+    w = 1 / np.maximum(d2, 1e-6)
+    w /= w.sum(1, keepdims=True)
+    return {f"{t}:00+00:00": w @ v for t, v in zip(tempi, sst) if np.isfinite(v).all()}
+
+
 def _booster(nome: str):
     import lightgbm as lgb
     p = DIR / nome
@@ -195,6 +221,7 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
     tic = time.time()
     S = np.load(DIR / "statico.npz")
     mdl = {k: _booster(v[1]) for k, v in VARIABILI.items()}
+    mdl_mare = _booster(MARE_MODELLO)
     if mdl["t"] is None:
         raise FileNotFoundError(DIR / VARIABILI["t"][1])
     g = {k: float(S["griglia"][n]) for n, k in enumerate(["lat_min", "lat_max", "lon_min", "lon_max"])}
@@ -221,6 +248,8 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
     quota = {n: {m: _interp(d["_hsurf"], SRC[m], d["_i0"], d["_j0"], *ll) for m, d in (("icon", ic), ("ifs", fc))}
              for n, ll in punti.items()}
     sea = pix["z"] <= 0
+    sst = (_sst(ora - timedelta(days=1), ora + timedelta(days=3), PLA.ravel()[sea], PLO.ravel()[sea])
+           if mdl_mare is not None else {})
     fade = np.clip((FADE_Z1 - pix["z"]) / (FADE_Z1 - FADE_Z0), 0, 1)
     fz = np.clip((FADE_Z1 - sta["z"]) / (FADE_Z1 - FADE_Z0), 0, 1)
 
@@ -335,7 +364,16 @@ def calcola(f48: dict, osservazioni: dict | None = None, ora: datetime | None = 
             out["rh"].append(np.clip(h_f, 1, 100))
             na.append(nh)
         if mdl["ws"] is not None:
-            lw_g = np.log1p(X.ws_icon.to_numpy()) + np.where(sea, 0, predici(mdl["ws"], X, fade))
+            corr_w = predici(mdl["ws"], X, fade)
+            sst_k = sst.get(key)
+            if mdl_mare is not None and sst_k is not None:
+                # in mare: correzione tarata su ASCAT; stabilità = temperatura 2 m di ICON-2I − mare
+                Xm = X[sea].copy()
+                Xm["dt_mare"] = (Xm.t_icon - LAPSE * Xm.dz_icon).to_numpy() - sst_k
+                corr_w[sea] = mdl_mare.predict(Xm[mdl_mare.feature_name()])
+            else:
+                corr_w[sea] = 0
+            lw_g = np.log1p(X.ws_icon.to_numpy()) + corr_w
             lw_s = np.log1p(Xs.ws_icon.to_numpy()) + predici(mdl["ws"], Xs, fz)
             lw_f, nw = aggancia(lw_g, lw_s, np.log1p(np.clip(val_w, 0, None)), np.log1p(Xs.ws_icon.to_numpy()),
                                 ANCHOR_MAX_LOGW, Ww)
