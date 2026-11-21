@@ -3,8 +3,9 @@
 // Si carica solo quando si preme "3D" nella barra in alto (MapLibre ~800 kB non pesa sul 2D).
 //   vento     data/griglia_vento_48h.json, lo stesso file della mappa 2D: velocità M2 a ~1 km, direzione ICON-2I
 //             agganciata alle stazioni a ~2 km. Scie a nastro a pochi metri dal rilievo disegnato.
-//   rilievo   3d/dem/{z}/{x}/{y}.webp (Copernicus GLO-90, terrarium, z6–11, ×2) e 3d/quota.bin (~550 m, per le
-//             zone di avviso e il velo marroncino delle montagne)
+//   rilievo   3d/dem/{z}/{x}/{y}.webp (Copernicus GLO-90, terrarium, z6–11, ×1,5) e 3d/quota.bin (~550 m, per le
+//             zone di avviso e il velo marroncino delle montagne); ombre da 3d/rilievo/ (cotte una volta sola
+//             da tools/rilievo_cotto.py: più luci, occlusione ambientale, ombre portate; bluastre, al massimo −46%)
 //   stazioni  pillole col vento M2 di ogni stazione ora per ora (forecast_48h.json; per l'ora attuale latest.json)
 //   tocco     sulla mappa apre il vento del punto all'ora mostrata (velocità M2 ~1 km, direzione delle scie), come nel 2D
 //   Evento    cerca nelle prossime ore il tratto con raffiche stimate (1,5 × vento medio M2, la regola della scheda
@@ -15,7 +16,7 @@
   'use strict';
 
   const ML = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl';
-  const EXAG = 2, PIVOT = 300 * EXAG;
+  const EXAG = 1.5, PIVOT = 300 * EXAG;
   const KTS = 0.539957;
   let pronto = null, V = null, attivo = false;
 
@@ -228,24 +229,24 @@
           base: { type: 'vector', url: 'https://tiles.openfreemap.org/planet',
             attribution: '© OpenStreetMap · OpenFreeMap · rilievo Copernicus · vento M2 Metek' },
           dem: { type: 'raster-dem', tiles: [dem], encoding: 'terrarium', tileSize: 256, minzoom: 6, maxzoom: 11, bounds: [11.3, 41.0, 14.7, 43.0] },
-          ombra: { type: 'raster-dem', tiles: [dem], encoding: 'terrarium', tileSize: 256, minzoom: 6, maxzoom: 11, bounds: [11.3, 41.0, 14.7, 43.0] }
+          // rilievo cotto (tools/rilievo_cotto.py): più luci, occlusione ambientale, ombre portate morbide
+          rilievo: { type: 'raster', tiles: [dem.replace('/dem/', '/rilievo/')], tileSize: 256, minzoom: 6, maxzoom: 11, bounds: [11.3, 41.0, 14.7, 43.0] }
         },
         layers: [
-          { id: 'terra', type: 'background', paint: { 'background-color': '#1b2520' } },
+          { id: 'terra', type: 'background', paint: { 'background-color': '#2b3a32' } },
           { id: 'abitati', type: 'fill', source: 'base', 'source-layer': 'landuse', filter: ['in', ['get', 'class'], ['literal', ['residential', 'suburb', 'neighbourhood', 'industrial', 'commercial']]],
             paint: { 'fill-color': '#2a3242', 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 7, .5, 11, .9] } },
           { id: 'mare', type: 'fill', source: 'base', 'source-layer': 'water', paint: { 'fill-color': '#0e2448' } },
           { id: 'fiumi', type: 'line', source: 'base', 'source-layer': 'waterway', filter: ['==', ['get', 'class'], 'river'],
             paint: { 'line-color': '#1d3f70', 'line-width': ['interpolate', ['linear'], ['zoom'], 8, .6, 12, 1.6] } },
-          { id: 'shade', type: 'hillshade', source: 'ombra', paint: { 'hillshade-exaggeration': .45, 'hillshade-shadow-color': '#000000',
-            'hillshade-highlight-color': '#66789a', 'hillshade-accent-color': '#1b2436', 'hillshade-illumination-direction': 315 } },
+          { id: 'rilievo', type: 'raster', source: 'rilievo', paint: { 'raster-fade-duration': 0, 'raster-resampling': 'linear', 'raster-opacity': .6 } },   // .6 col vento, piena sui veli
           { id: 'strade', type: 'line', source: 'base', 'source-layer': 'transportation', filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk']]],
             paint: { 'line-color': '#3b4558', 'line-width': ['interpolate', ['linear'], ['zoom'], 8, .5, 12, 1.4] } },
           { id: 'confini', type: 'line', source: 'base', 'source-layer': 'boundary', filter: ['all', ['<=', ['get', 'admin_level'], 4], ['!=', ['get', 'maritime'], 1]],
             paint: { 'line-color': '#59647a', 'line-width': .8, 'line-dasharray': [3, 2] } }
         ],
         terrain: { source: 'dem', exaggeration: EXAG },
-        sky: { 'sky-color': '#0b1220', 'horizon-color': '#1d2a44', 'fog-color': '#0b0f17', 'sky-horizon-blend': .6, 'horizon-fog-blend': .5, 'fog-ground-blend': .7 }
+        sky: { 'sky-color': '#0a1424', 'horizon-color': '#2a3a58', 'fog-color': '#121a2a', 'sky-horizon-blend': .7, 'horizon-fog-blend': .6, 'fog-ground-blend': .45 }
       }
     });
     // centro della vista a quota fissa (sul prototipo: i gesti lavorano su una copia della camera)
@@ -313,7 +314,7 @@
       }
     }
     // colori: vento debole tenue, medio bianco, forte ambra, molto forte corallo (fondo scala 60 km/h)
-    const RAMP = [[0, [.36, .43, .56], .38], [.25, [.7, .78, .88], .65], [.5, [.95, .96, .98], .85], [.75, [1, .77, .42], .95], [1, [1, .42, .37], 1]];
+    const RAMP = [[0, [.58, .66, .8], .6], [.25, [.84, .9, .97], .82], [.5, [.97, .98, 1], .92], [.75, [1, .77, .42], .97], [1, [1, .42, .37], 1]];
     function ramp(s) {
       for (let j = 1; j < RAMP.length; j++) if (s <= RAMP[j][0]) { const [a, ca, aa] = RAMP[j - 1], [b, cb, ab] = RAMP[j], f = (s - a) / (b - a);
         return [...ca.map((c, k) => c + (cb[k] - c) * f), aa + (ab - aa) * f]; }
@@ -471,10 +472,10 @@
           im.data[o] = 96; im.data[o + 1] = 76; im.data[o + 2] = 52; im.data[o + 3] = a * a * (3 - 2 * a) * 92; }
         g.putImageData(im, 0, 0);
         map.addSource('montagne', { type: 'image', url: c.toDataURL(), coordinates: angoli(qm) });
-        map.addLayer({ id: 'montagne', type: 'raster', source: 'montagne', paint: { 'raster-fade-duration': 0 } }, 'shade'); }
+        map.addLayer({ id: 'montagne', type: 'raster', source: 'montagne', paint: { 'raster-fade-duration': 0 } }, 'rilievo'); }
       map.addSource('clima', { type: 'image', url: cv.toDataURL(), coordinates: [[11.4, 42.85], [14.05, 42.85], [14.05, 41.18], [11.4, 41.18]] });
       map.addLayer({ id: 'clima', type: 'raster', source: 'clima', layout: { visibility: VAR === 'ws' ? 'none' : 'visible' },   // scelta fatta prima del load
-        paint: { 'raster-fade-duration': 0, 'raster-opacity': .78, 'raster-resampling': 'linear' } }, 'shade');
+        paint: { 'raster-fade-duration': 0, 'raster-opacity': .7, 'raster-resampling': 'linear', 'raster-saturation': -.12 } }, 'rilievo');
       map.addSource('avvisi', { type: 'image', url: avvisiImg(), coordinates: angoli(G) });
       map.addLayer({ id: 'avvisi', type: 'raster', source: 'avvisi', paint: { 'raster-fade-duration': 0 } }, 'paesi');
       map.addLayer(layer, 'paesi');
@@ -537,6 +538,7 @@
       document.querySelectorAll('#dock3d .rail-item[data-var]').forEach(b => b.classList.toggle('active', b.dataset.var === key));
       const vis = key === 'ws' ? 'none' : 'visible';
       if (map.getLayer('clima')) { map.setLayoutProperty('clima', 'visibility', vis); map.setLayoutProperty('montagne', 'visibility', key === 'ws' ? 'visible' : 'none'); }
+      if (map.getLayer('rilievo')) map.setPaintProperty('rilievo', 'raster-opacity', key === 'ws' ? .6 : 1);
       climaOra(); legenda(); oraPunto = -1; aggiornaPunto();
     }
     document.querySelectorAll('#dock3d .rail-item[data-var]').forEach(b => b.addEventListener('click', () => { if (b.dataset.var !== VAR) { stop(); scegli(b.dataset.var); } }));
