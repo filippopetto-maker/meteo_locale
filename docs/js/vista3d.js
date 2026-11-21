@@ -6,6 +6,7 @@
 //   rilievo   3d/dem/{z}/{x}/{y}.webp (Copernicus GLO-90, terrarium, z6–11, ×2) e 3d/quota.bin (~550 m, per le
 //             zone di avviso e il velo marroncino delle montagne)
 //   stazioni  pillole col vento M2 di ogni stazione ora per ora (forecast_48h.json; per l'ora attuale latest.json)
+//   tocco     sulla mappa apre il vento del punto all'ora mostrata (velocità M2 ~1 km, direzione delle scie), come nel 2D
 //   Evento    cerca nelle prossime ore il tratto con raffiche stimate (1,5 × vento medio M2, la regola della scheda
 //             48 h) ≥ 50 km/h su una zona del Lazio a terra e sotto i 1000 m, lo inquadra e fa scorrere le ore
 //   Il centro della vista resta a 300 m (× rilievo) invece di appoggiarsi al terreno: in pianura le scie non "volano".
@@ -43,6 +44,7 @@
     const adesso = Date.now() - 3.6e6;
     let k0 = j.times.findIndex(t => Date.parse(t) >= adesso); if (k0 < 0) k0 = 0;
     const NT = ntt - k0, U = new Float32Array(NT * m), W = new Float32Array(NT * m);
+    const S = new Int16Array(NT * n);   // velocità M2 a piena risoluzione (~1 km), per il valore al tocco
     const sp = Int16Array.from(s0), di = Int16Array.from(r0);
     for (let k = 0; k < ntt; k++) {
       if (k > 0) {
@@ -50,6 +52,7 @@
         for (let c = 0; c < m; c++) di[c] = ((di[c] + rd[(k - 1) * m + c]) % nd + nd) % nd;
       }
       if (k < k0) continue;
+      S.set(sp, (k - k0) * n);
       const o = (k - k0) * m;
       for (let r = 0; r < j.dir_ny; r++) for (let c = 0; c < j.dir_nx; c++) {
         const ms = sp[(r * 2) * j.nx + c * 2] * j.passo / 3.6, a = di[r * j.dir_nx + c] * j.passo_dir * Math.PI / 180, i = o + r * j.dir_nx + c;
@@ -58,8 +61,24 @@
     }
     const G = { lat0: j.lat_max, dlat: -2 * (j.lat_max - j.lat_min) / (j.ny - 1), lon0: j.lon_min, dlon: 2 * (j.lon_max - j.lon_min) / (j.nx - 1),
                 nx: j.dir_nx, ny: j.dir_ny };
-    return { G, U, W, NT, times: j.times.slice(k0) };
+    const G1 = { lat0: j.lat_max, dlat: -(j.lat_max - j.lat_min) / (j.ny - 1), lon0: j.lon_min, dlon: (j.lon_max - j.lon_min) / (j.nx - 1),
+                 nx: j.nx, ny: j.ny, passo: j.passo };
+    return { G, U, W, S, G1, NT, times: j.times.slice(k0) };
   }
+  async function griglia(key) {
+    const j = await (await fetch(FILE_VAR[key])).json();
+    if (j.versione !== 1) throw new Error('griglia ' + key);
+    const [b0, b1] = await Promise.all([j.b64_prima, j.b64_variazioni].map(inflate));
+    const n = j.nx * j.ny, nt = j.times.length, F = new Int16Array(n * nt);
+    F.set(new Int16Array(b0.buffer, b0.byteOffset, n));
+    const d = new Int8Array(b1.buffer, b1.byteOffset, n * (nt - 1));
+    for (let k = 1; k < nt; k++) { const o = k * n, p = o - n, q = (k - 1) * n; for (let c = 0; c < n; c++) F[o + c] = F[p + c] + d[q + c]; }
+    let lo = j.t_min, hi = j.t_max;
+    if (key === 't' && hi - lo < 15) { const m = (lo + hi) / 2; lo = m - 7.5; hi = m + 7.5; }   // come ensureMinSpan del 2D
+    return { F, n, passo: j.passo, lo, hi, ore: new Map(j.times.map((t, k) => [Date.parse(t), k])),
+      g: { lat0: j.lat_max, dlat: -(j.lat_max - j.lat_min) / (j.ny - 1), lon0: j.lon_min, dlon: (j.lon_max - j.lon_min) / (j.nx - 1), nx: j.nx, ny: j.ny } };
+  }
+
   async function quote() {
     const r = await fetch('3d/quota.bin');
     const b = new Uint8Array(await new Response(r.body.pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
@@ -91,6 +110,15 @@
   html.vista-3d #contour-toggle, html.vista-3d #wind-toggle, html.vista-3d #arrow-toggle,
   html.vista-3d #popup-style-group, html.vista-3d #prefs-popover .prefs-label { display: none !important; }
   #map3d .maplibregl-ctrl-attrib { font-size: 10px; }
+  #map3d .maplibregl-popup-content { background: var(--glass); color: var(--text); border: .5px solid var(--border); border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .5); padding: 8px 12px; font-size: 12px; line-height: 1.5;
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+  #map3d .maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--glass); }
+  #map3d .maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--glass); }
+  #map3d .punto3d .k { color: var(--text-3); }
+  #map3d .punto3d b { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+  #map3d .punto3d small { display: block; color: var(--text-3); }
+  #map3d .punto3d i { color: var(--text-off); }
   #map3d .maplibregl-ctrl-bottom-right { bottom: calc(176px + env(safe-area-inset-bottom, 0px)); }
   #dock3d { display: none; }
   html.vista-3d #dock3d {
@@ -141,7 +169,17 @@
   #map3d.lontano .st-pin { display: none !important; }
   .casa3d { width: 14px; height: 14px; border-radius: 50%; background: #f2f5fa; box-shadow: 0 0 0 5px rgba(242,245,250,.25), 0 0 14px rgba(242,245,250,.6); }
   `;
-  const ICON_EVENTO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M3 8h11a3 3 0 100-6"></path><path d="M3 12h15a3.5 3.5 0 110 7"></path><path d="M3 16h7a2.5 2.5 0 110 5"></path></svg>';
+  const icona = inner => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">${inner}</svg>`;
+  const ICON_VENTO = icona('<path d="M3 8h11a3 3 0 100-6"></path><path d="M3 12h15a3.5 3.5 0 110 7"></path><path d="M3 16h7a2.5 2.5 0 110 5"></path>');
+  const ICON_TEMP = icona('<path d="M14 14.8V5a2 2 0 10-4 0v9.8a4 4 0 104 0z"></path>');
+  const ICON_GOCCIA = icona('<path d="M12 3s6 6.4 6 10.4A6 6 0 016 13.4C6 9.4 12 3 12 3z"></path>');
+  const ICON_EVENTO = icona('<path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3"></path><circle cx="12" cy="12" r="2.6"></circle>');
+  // palette e scale della mappa 2D (app.js), per avere gli stessi colori
+  const PAL = {
+    t: [[0, 0x2c, 0x3e, 0x95], [.125, 0x3a, 0x6f, 0xc4], [.25, 0x4f, 0xb8, 0xc4], [.375, 0x6f, 0xc4, 0x6a], [.5, 0xd4, 0xd2, 0x4a],
+        [.625, 0xf4, 0xa9, 0x3f], [.75, 0xe8, 0x54, 0x2f], [.875, 0xa5, 0x00, 0x26], [1, 0x67, 0x00, 0x1f]],
+    rh: [[0, 0xd9, 0x6f, 0x27], [.3, 0xfe, 0xe0, 0x80], [.5, 0xb0, 0xe0, 0x90], [.75, 0x31, 0x7e, 0xc8], [1, 0x08, 0x30, 0x6b]] };
+  const FILE_VAR = { t: 'data/griglia_48h.json', rh: 'data/griglia_umidita_48h.json' };
   function interfaccia() {
     const st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
     document.body.insertAdjacentHTML('beforeend', `
@@ -163,7 +201,10 @@
           <div class="radar-track-wrap"><input type="range" id="ora3d-slider" class="radar-slider" min="0" max="1" step="0.02" value="0" aria-label="Ora mostrata"></div>
           <span class="fc48-now" id="ora3d"></span></div>
         <div class="leg3d"><span>0</span><i></i><span id="leg3d-max"></span></div>
-        <div class="rail3d"><button class="rail-item" id="evento3d" type="button">${ICON_EVENTO}<span>Evento</span></button></div>
+        <div class="rail3d"><button class="rail-item active" data-var="ws" type="button">${ICON_VENTO}<span>Vento</span></button>
+          <button class="rail-item" data-var="t" type="button">${ICON_TEMP}<span>Temp.</span></button>
+          <button class="rail-item" data-var="rh" type="button">${ICON_GOCCIA}<span>Umidità</span></button>
+          <button class="rail-item" id="evento3d" type="button">${ICON_EVENTO}<span>Evento</span></button></div>
       </div>`);
   }
 
@@ -172,7 +213,7 @@
     await maplibre();
     const [VM, QQ, ST] = await Promise.all([vento(), quote(), stazioni()]);
     interfaccia();
-    const { G, U, W, NT } = VM, { qm, Q } = QQ, GN = G.nx * G.ny;
+    const { G, U, W, S, G1, NT } = VM, { qm, Q } = QQ, GN = G.nx * G.ny;
     const $ = id => document.getElementById(id);
     const unitaKts = () => !!document.querySelector('input[name="wind-unit"][value="kts"]')?.checked;
     const vU = kmh => Math.round(unitaKts() ? kmh * KTS : kmh), nomeU = () => (unitaKts() ? 'nodi' : 'km/h');
@@ -216,7 +257,7 @@
     map.setMaxZoom(12.5);
 
     // campo di vento: bilineare nello spazio, lineare nel tempo
-    let T = 0;
+    let T = 0, VAR = 'ws', TENUE = 1;   // variabile mostrata: ws (scie), t o rh (velo colorato, scie tenui)
     function field(lon, lat) {
       const fx = (lon - G.lon0) / G.dlon, fy = (lat - G.lat0) / G.dlat;
       if (fx < 0 || fy < 0 || fx > G.nx - 1 || fy > G.ny - 1) return null;
@@ -310,7 +351,7 @@
         let o = 0;
         for (let i = 0; i < NP; i++) {
           const f = P.fill[i]; if (f < 2) continue;
-          const c = ramp(P.spd[i] / 60), life = Math.min(1, P.age[i] / 10, (P.life[i] - P.age[i]) / 15) * c[3];
+          const c = ramp(P.spd[i] / 60), life = Math.min(1, P.age[i] / 10, (P.life[i] - P.age[i]) / 15) * c[3] * TENUE;
           for (let s = 0; s < f - 1; s++) {
             const ka = (P.head[i] - s + TRAIL) % TRAIL, kb = (ka - 1 + TRAIL) % TRAIL, pa = (i * TRAIL + ka) * 3, pb = (i * TRAIL + kb) * 3;
             inst[o++] = P.tr[pa]; inst[o++] = P.tr[pa + 1]; inst[o++] = P.tr[pa + 2];
@@ -431,6 +472,9 @@
         g.putImageData(im, 0, 0);
         map.addSource('montagne', { type: 'image', url: c.toDataURL(), coordinates: angoli(qm) });
         map.addLayer({ id: 'montagne', type: 'raster', source: 'montagne', paint: { 'raster-fade-duration': 0 } }, 'shade'); }
+      map.addSource('clima', { type: 'image', url: cv.toDataURL(), coordinates: [[11.4, 42.85], [14.05, 42.85], [14.05, 41.18], [11.4, 41.18]] });
+      map.addLayer({ id: 'clima', type: 'raster', source: 'clima', layout: { visibility: VAR === 'ws' ? 'none' : 'visible' },   // scelta fatta prima del load
+        paint: { 'raster-fade-duration': 0, 'raster-opacity': .78, 'raster-resampling': 'linear' } }, 'shade');
       map.addSource('avvisi', { type: 'image', url: avvisiImg(), coordinates: angoli(G) });
       map.addLayer({ id: 'avvisi', type: 'raster', source: 'avvisi', paint: { 'raster-fade-duration': 0 } }, 'paesi');
       map.addLayer(layer, 'paesi');
@@ -440,27 +484,115 @@
       const lontano = () => map.getContainer().classList.toggle('lontano', map.getZoom() < 9.2);
       map.on('zoom', lontano); lontano();
       pillole(); pilloleOra(true);
+      if (VAR !== 'ws') { map.setLayoutProperty('montagne', 'visibility', 'none'); oraClima = null; climaOra(); }
       map.getContainer().querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');   // crediti chiusi, si aprono con la (i)
     });
 
     // barra oraria (stessa card della mappa 2D) e legenda nell'unità scelta
     const ti = $('ora3d-slider'), PB = $('play3d'); ti.max = NT - 1;
-    const legenda = () => { $('leg3d-max').textContent = `${vU(60)}+ ${unitaKts() ? 'kts' : 'km/h'}`; };
+    const LEG_VENTO = getComputedStyle(document.querySelector('#dock3d .leg3d i')).backgroundImage;
+    const legenda = () => {
+      const D = DATI[VAR], [a, b] = document.querySelectorAll('#dock3d .leg3d span'), bar = document.querySelector('#dock3d .leg3d i');
+      if (VAR === 'ws' || !D) { a.textContent = '0'; b.textContent = `${vU(60)}+ ${unitaKts() ? 'kts' : 'km/h'}`; bar.style.backgroundImage = LEG_VENTO; return; }
+      const f = v => VAR === 't' ? v.toFixed(0) + '°' : Math.round(v) + '%';
+      a.textContent = f(D.lo); b.textContent = f(D.hi);
+      bar.style.backgroundImage = `linear-gradient(90deg,${PAL[VAR].map(([t, r, g, bb]) => `rgb(${r},${g},${bb}) ${t * 100}%`).join(',')})`;
+    };
+    let aggiornaPunto = () => {};   // il popup del punto segue l'ora (definito sotto)
+
+    // temperatura e umidità: stessi file del 2D (già nella cache del browser), un'immagine per ora tenuta in memoria
+    const DATI = {}, IMG = new Map(), cvc = document.createElement('canvas');
+    // bordi sfumati (~12 km) invece del taglio netto del riquadro dei dati
+    let BORDO = null;
+    const bordo = g => BORDO || (BORDO = Uint8Array.from({ length: g.nx * g.ny }, (_, c) => {
+      const x = c % g.nx, y = (c / g.nx) | 0, d = Math.min(x, y, g.nx - 1 - x, g.ny - 1 - y) / 12, e = Math.min(1, d);
+      return 255 * e * e * (3 - 2 * e); }));
+    let oraClima = null;
+    function climaImg(key, t) {
+      const D = DATI[key], k = D.ore.get(Date.parse(VM.times[t]));
+      const chiave = key + k; if (IMG.has(chiave)) return IMG.get(chiave);
+      cvc.width = D.g.nx; cvc.height = D.g.ny;
+      const g = cvc.getContext('2d'), im = g.createImageData(D.g.nx, D.g.ny), P = PAL[key];
+      bordo(D.g);
+      if (k != null) for (let c = 0, o = k * D.n; c < D.n; c++) {
+        const x = Math.max(0, Math.min(1, (D.F[o + c] * D.passo - D.lo) / (D.hi - D.lo || 1)));
+        let j = 1; while (j < P.length - 1 && x > P[j][0]) j++;
+        const A = P[j - 1], B = P[j], f = (x - A[0]) / (B[0] - A[0] || 1), q = c * 4;
+        im.data[q] = A[1] + (B[1] - A[1]) * f; im.data[q + 1] = A[2] + (B[2] - A[2]) * f; im.data[q + 2] = A[3] + (B[3] - A[3]) * f; im.data[q + 3] = BORDO[c];
+      }
+      g.putImageData(im, 0, 0);
+      const url = cvc.toDataURL(); IMG.set(chiave, url); return url;
+    }
+    function climaOra() {
+      if (VAR === 'ws' || !DATI[VAR]) return;
+      const t = Math.min(NT - 1, Math.round(T)), ch = VAR + t;
+      if (ch === oraClima) return; oraClima = ch;
+      map.getSource('clima')?.updateImage({ url: climaImg(VAR, t) });
+    }
+    async function scegli(key) {
+      if (key !== 'ws' && !DATI[key]) {
+        try { DATI[key] = await griglia(key); } catch (e) { console.warn('griglia 3D non caricata', key, e); return; }
+      }
+      VAR = key; TENUE = key === 'ws' ? 1 : .35; oraClima = null;
+      document.querySelectorAll('#dock3d .rail-item[data-var]').forEach(b => b.classList.toggle('active', b.dataset.var === key));
+      const vis = key === 'ws' ? 'none' : 'visible';
+      if (map.getLayer('clima')) { map.setLayoutProperty('clima', 'visibility', vis); map.setLayoutProperty('montagne', 'visibility', key === 'ws' ? 'visible' : 'none'); }
+      climaOra(); legenda(); oraPunto = -1; aggiornaPunto();
+    }
+    document.querySelectorAll('#dock3d .rail-item[data-var]').forEach(b => b.addEventListener('click', () => { if (b.dataset.var !== VAR) { stop(); scegli(b.dataset.var); } }));
     const showT = () => {
       $('ora3d').textContent = new Date(VM.times[Math.min(NT - 1, Math.round(T))]).toLocaleString('it-IT', { timeZone: 'Europe/Rome', weekday: 'short', hour: '2-digit', minute: '2-digit' });
-      pilloleOra(); avvisiOra();
+      pilloleOra(); avvisiOra(); climaOra(); aggiornaPunto();
     };
     let gira = false, tPrec = 0;
     const pausa = () => { gira = false; PB.textContent = '▶'; };
-    ti.addEventListener('input', () => { pausa(); T = +ti.value; showT(); });
-    PB.addEventListener('click', () => { if (gira) return pausa(); gira = true; PB.textContent = '❚❚'; tPrec = performance.now();
+    ti.addEventListener('input', () => { if (TPRIMA != null) stop(false); pausa(); T = +ti.value; showT(); });   // la barra toccata ferma l'Evento lì
+    PB.addEventListener('click', () => { if (TPRIMA != null) return stop(); if (gira) return pausa(); gira = true; PB.textContent = '❚❚'; tPrec = performance.now();
       const f = now => { if (!gira) return; T += (now - tPrec) / 1000 * 1.2; tPrec = now; if (T > NT - 1) T = 0; ti.value = T; showT(); requestAnimationFrame(f); };
       requestAnimationFrame(f); });
     const setT = t => { T = Math.max(0, Math.min(NT - 1, t)); ti.value = T; showT(); };
     // impostazioni del sito
     document.getElementById('stations-check')?.addEventListener('change', pillole);
-    document.querySelectorAll('input[name="wind-unit"]').forEach(r => r.addEventListener('change', () => { legenda(); pilloleOra(true); }));
+    document.querySelectorAll('input[name="wind-unit"]').forEach(r => r.addEventListener('change', () => { legenda(); pilloleOra(true); oraPunto = -1; aggiornaPunto(); }));
     legenda(); showT();
+
+    // tocco sulla mappa: vento del punto all'ora mostrata, come il popup del 2D (velocità M2 a ~1 km, direzione delle scie)
+    const SETTORI = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSO', 'SO', 'OSO', 'O', 'ONO', 'NO', 'NNO'];
+    const NOMI = { N: 'Tramontana', NNE: 'Bora', NE: 'Grecale', ENE: 'Schiavo', E: 'Levante', ESE: 'Solano', SE: 'Scirocco', SSE: 'Africo',
+      S: 'Ostro', SSO: 'Cauro', SO: 'Libeccio', OSO: 'Etesia', O: 'Ponente', ONO: 'Traversone', NO: 'Maestrale', NNO: 'Zefiro' };
+    function velocita(lon, lat, t) {
+      const fx = (lon - G1.lon0) / G1.dlon, fy = (lat - G1.lat0) / G1.dlat;
+      if (fx < 0 || fy < 0 || fx > G1.nx - 1 || fy > G1.ny - 1) return null;
+      const x = Math.min(G1.nx - 2, fx | 0), y = Math.min(G1.ny - 2, fy | 0), ax = fx - x, ay = fy - y, b = t * G1.nx * G1.ny;
+      const v = (r, c) => S[b + r * G1.nx + c];
+      return ((v(y, x) * (1 - ax) + v(y, x + 1) * ax) * (1 - ay) + (v(y + 1, x) * (1 - ax) + v(y + 1, x + 1) * ax) * ay) * G1.passo;
+    }
+    const punto = new maplibregl.Popup({ closeButton: false, className: 'punto3d', offset: 6, maxWidth: '240px' });
+    function scriviPunto() {
+      if (!punto.isOpen()) return;
+      const { lng, lat } = punto.getLngLat(), t = Math.min(NT - 1, Math.round(T)), Tp = T;
+      T = t; const uv = field(lng, lat); T = Tp;
+      const kmh = velocita(lng, lat, t);
+      if (!uv || kmh == null) return punto.remove();
+      let dir = Math.atan2(-uv[0], -uv[1]) * 180 / Math.PI; if (dir < 0) dir += 360;
+      const sett = SETTORI[Math.round(dir / 22.5) % 16], nome = sett.length <= 2 ? NOMI[sett] : `${NOMI[sett[0]]} - ${NOMI[sett]}`;
+      const ora = new Date(VM.times[t]).toLocaleString('it-IT', { timeZone: 'Europe/Rome', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+      const D = DATI[VAR], k = D && D.ore.get(Date.parse(VM.times[t]));
+      const val = VAR === 'ws' || k == null ? null : (() => { const g = D.g, fx = (lng - g.lon0) / g.dlon, fy = (lat - g.lat0) / g.dlat;
+        if (fx < 0 || fy < 0 || fx > g.nx - 1 || fy > g.ny - 1) return null;
+        const x = Math.min(g.nx - 2, fx | 0), y = Math.min(g.ny - 2, fy | 0), ax = fx - x, ay = fy - y, v = (r, c) => D.F[k * D.n + r * g.nx + c];
+        return ((v(y, x) * (1 - ax) + v(y, x + 1) * ax) * (1 - ay) + (v(y + 1, x) * (1 - ax) + v(y + 1, x + 1) * ax) * ay) * D.passo; })();
+      const vento = `<span class="k">Vento</span> <b>${vU(kmh)} ${nomeU()}</b> <span class="k">${sett}</span>`;
+      punto.setHTML(val == null ? `${vento}<small><i>${nome}</i></small><small>${ora}</small>`
+        : `<span class="k">${VAR === 't' ? 'Temperatura' : 'Umidità'}</span> <b>${VAR === 't' ? val.toFixed(1) + '°C' : Math.round(val) + '%'}</b>` +
+          `<small>vento ${vU(kmh)} ${nomeU()} ${sett}</small><small>${ora}</small>`);
+    }
+    let oraPunto = -1;
+    map.on('click', e => {
+      if (e.originalEvent?.target?.closest?.('.maplibregl-marker, .maplibregl-popup')) return;
+      punto.setLngLat(e.lngLat).addTo(map); oraPunto = -1; scriviPunto();
+    });
+    aggiornaPunto = () => { const t = Math.round(T); if (t !== oraPunto) { oraPunto = t; scriviPunto(); } };
 
     // bussola e inclinazione
     const segnaNav = () => { $('ago3d').setAttribute('transform', `rotate(${-map.getBearing()} 29 29)`);
@@ -483,7 +615,10 @@
     const barraAlta = () => (document.getElementById('brand-lockup')?.getBoundingClientRect().bottom || 60);
     const mostra = html => { did.innerHTML = html; did.hidden = false; did.style.top = (barraAlta() + 8) + 'px'; };
     let VOLO = 0;
-    function stop() { VOLO++; did.hidden = true; EVB.classList.remove('active'); if (EV_ON) { EV_ON = false; avvisiOra(); } }
+    // durante l'Evento il player sembra in riproduzione; alla fine (o se lo si ferma) si torna all'ora di prima
+    let TPRIMA = null;
+    function stop(ripristina = true) { VOLO++; did.hidden = true; EVB.classList.remove('active'); if (EV_ON) { EV_ON = false; avvisiOra(); }
+      if (TPRIMA != null) { const t = TPRIMA; TPRIMA = null; PB.textContent = '▶'; if (ripristina) setT(t); } }
     for (const ev of ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart']) map.on(ev, e => { if (e.originalEvent) stop(); });
     const attesa = (ms, id) => new Promise(r => setTimeout(() => r(VOLO === id), ms));
     function vola(cam, ms, t0, t1, id) {
@@ -511,6 +646,7 @@
     }
     async function evento() {
       const id = ++VOLO; EVB.classList.add('active'); EV_ON = true; avvisiOra();
+      pausa(); if (TPRIMA == null) TPRIMA = T; PB.textContent = '❚❚';
       const E = trovaEvento();
       if (!E.best) {
         mostra(`<b>${iconaVento(0)}Nessuna raffica oltre ${vU(50)} ${nomeU()}</b><span>nelle prossime ${NT} ore in Lazio · massimo ${vU(E.top.mx)} ${nomeU()} ${quando(E.top.t)}</span>`);
@@ -539,12 +675,12 @@
         if (k < 1) requestAnimationFrame(f); else res(); }; f(); });
       if (await attesa(3000, id)) stop();
     }
-    EVB.addEventListener('click', () => (EVB.classList.contains('active') ? stop() : evento()));
+    EVB.addEventListener('click', async () => { if (EVB.classList.contains('active')) return stop(); if (VAR !== 'ws') await scegli('ws'); evento(); });
 
     // luogo scelto con la lente: si vola lì (la scheda 48 h del sito copre la parte bassa)
     let casa = null;
     async function vaiA(p) {
-      const id = ++VOLO; EVB.classList.remove('active'); did.hidden = true; if (EV_ON) { EV_ON = false; avvisiOra(); }
+      stop(); const id = ++VOLO;
       if (!field(p.lon, p.lat)) return;
       if (casa) casa.remove();
       const el = document.createElement('div'); el.className = 'casa3d';
@@ -556,12 +692,13 @@
     return {
       mostra() { tickOn = true; map.resize(); tick(); },
       nascondi() { tickOn = false; pausa(); stop(); },
-      vaiA,
+      vaiA, map,
     };
   }
 
   window.Metek3D = {
     get attivo() { return attivo; },
+    get _map() { return V && V.map; },   // per le prove dalla console
     async attiva() {
       attivo = true;
       document.documentElement.classList.add('vista-3d');
