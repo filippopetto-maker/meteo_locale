@@ -4,6 +4,7 @@ name: Pioggia oraria in ombra (U-Net, 1–48 h)
 # prevede la probabilità di ≥ 0,2 / 1 / 4 mm/h da +1 a +48 h su tutte le celle 0,05° del Lazio. Le previsioni
 # vanno come asset nella release del mese pioggia-ombra-AAAA-MM di metek-core: nessun effetto sul sito.
 # I modelli si scaricano dalla release modelli-pioggia-oraria (model/pioggia_oraria/, rete_ombra.py --impacchetta).
+# Dal 21/11 le probabilità si correggono con l'errore dei giorni appena verificati (rete_correzione.py).
 # Trigger esterno: cron-job.org alle 03:30 e 15:30 UTC, body {"ref":"main"}. A mano: "corsa" = AAAA-MM-GGTHH.
 on:
   workflow_dispatch:
@@ -33,6 +34,8 @@ jobs:
             scripts/rete_unet_orario.py
             scripts/griglia_lazio.py
             scripts/griglia_lazio_test.py
+            scripts/rete_correzione.py
+            scripts/verifica_pioggia_ombra.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-python@v5
@@ -51,8 +54,28 @@ jobs:
         run: |
           [ -n "$GH_TOKEN" ] || { echo "::error::Secret ARCHIVE_TOKEN mancante"; exit 1; }
           mkdir -p model/pioggia_oraria
-          gh release download modelli-pioggia-oraria --dir model/pioggia_oraria
+          for t in 1 2 3; do gh release download modelli-pioggia-oraria --dir model/pioggia_oraria --clobber && break; sleep 30; done
           ls -la model/pioggia_oraria
+
+      # Storia per la correzione (rete_correzione.py): le corse in ombra e il radar DPC degli ultimi 30 giorni.
+      - name: Storia degli ultimi 30 giorni
+        env:
+          GH_TOKEN: ${{ secrets.ARCHIVE_TOKEN }}
+          GH_REPO: filippopetto-maker/metek-core
+        run: |
+          mkdir -p storia/ombra storia/radar
+          dal=$(date -u -d '-30 days' +%Y%m%d)
+          for m in $(date -u -d '-1 month' +%Y-%m) $(date -u +%Y-%m); do
+            for tipo in "pioggia-ombra:ombra:pioggia_" "radar:radar:sri_italia_"; do
+              IFS=: read tag dir pref <<< "$tipo"
+              for n in $(gh release view "$tag-$m" --json assets -q '.assets[].name' 2>/dev/null); do
+                d=$(echo "$n" | sed -E "s/^${pref}([0-9]{8}).*/\1/")
+                [ "$d" \< "$dal" ] && continue
+                for t in 1 2 3; do gh release download "$tag-$m" -p "$n" --dir "storia/$dir" --clobber && break; sleep 10; done
+              done
+            done
+          done
+          ls storia/ombra | wc -l; ls storia/radar | wc -l
 
       - name: Previsione e caricamento
         env:
@@ -60,7 +83,7 @@ jobs:
           GH_REPO: filippopetto-maker/metek-core
           CORSA: ${{ inputs.corsa }}
         run: |
-          f=$(python scripts/rete_ombra.py --uscita ombra ${CORSA:+--corsa "$CORSA"} | tail -1)
+          f=$(python scripts/rete_ombra.py --uscita ombra --storia storia ${CORSA:+--corsa "$CORSA"} | tail -1)
           n=$(basename "$f"); m=$(echo "$n" | sed -E 's/pioggia_([0-9]{4})([0-9]{2}).*/\1-\2/')
           gh release view "pioggia-ombra-$m" > /dev/null 2>&1 || \
             gh release create "pioggia-ombra-$m" --title "Pioggia oraria in ombra $m" \
