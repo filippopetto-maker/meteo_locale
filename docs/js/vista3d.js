@@ -7,6 +7,10 @@
 //             zone di avviso e il velo marroncino delle montagne); ombre da 3d/rilievo/ (cotte una volta sola
 //             da tools/rilievo_cotto.py: più luci, occlusione ambientale, ombre portate; bluastre, al massimo −46%)
 //   stazioni  pillole col vento M2 di ogni stazione ora per ora (forecast_48h.json; per l'ora attuale latest.json)
+//   isolinee  interruttore accanto alla legenda (solo Temp./Umidità): linee ogni 1 °C / 10 % calcolate in un Web Worker
+//             dalla stessa griglia del velo (marching squares); due livelli si danno il cambio (l'ora dopo già caricata),
+//             il velo a fasce cambia solo quando le linee dell'ora sono pronte: stesso fotogramma; etichette da fermi
+//   prestazioni  ?perf=1 accende il pannello di misura (js/prestazioni.js); velo su sorgente canvas, scie a 60 passi/s
 //   tocco     sulla mappa apre il vento del punto all'ora mostrata (velocità M2 ~1 km, direzione delle scie), come nel 2D
 //   Evento    cerca nelle prossime ore il tratto con raffiche stimate (1,5 × vento medio M2, la regola della scheda
 //             48 h) ≥ 50 km/h su una zona del Lazio a terra e sotto i 1000 m, lo inquadra e fa scorrere le ore
@@ -66,6 +70,79 @@
                  nx: j.nx, ny: j.ny, passo: j.passo };
     return { G, U, W, S, G1, NT, times: j.times.slice(k0) };
   }
+  // isolinee: funzioni pure, usate sia nella pagina sia nel Web Worker che prepara tutte le ore (nel worker arrivano col toString)
+  function lisciaPura(F, o, n, passo, nx, ny, passate) {   // medie 3×3: le linee e le fasce non seguono i gradini della griglia
+    let V = new Float32Array(n); for (let c = 0; c < n; c++) V[c] = F[o + c] * passo;
+    for (let p = 0; p < passate; p++) { const W = new Float32Array(n);
+      for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) { let s = 0, m = 0;
+        for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) { const xx = x + i, yy = y + j; if (xx >= 0 && yy >= 0 && xx < nx && yy < ny) { s += V[yy * nx + xx]; m++; } }
+        W[y * nx + x] = s / m; }
+      V = W; }
+    return V;
+  }
+  function chaikinPura(c, chiusa) {   // due passate arrotondano gli spigoli lasciati dalle celle
+    for (let p = 0; p < 2; p++) { const n = [];
+      if (!chiusa) n.push(c[0]);
+      for (let i = 0; i < c.length - 1; i++) { const a = c[i], b = c[i + 1];
+        n.push([.75 * a[0] + .25 * b[0], .75 * a[1] + .25 * b[1]], [.25 * a[0] + .75 * b[0], .25 * a[1] + .75 * b[1]]); }
+      if (chiusa) n.push(n[0]); else n.push(c[c.length - 1]);
+      c = n; }
+    return c;
+  }
+  function semplificaPura(c, tol) {   // via i punti più vicini di tol al precedente tenuto (gli estremi restano)
+    const o = [c[0]]; let p = c[0];
+    for (let i = 1; i < c.length - 1; i++) { const q = c[i]; if (Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]) >= tol) { o.push(q); p = q; } }
+    o.push(c[c.length - 1]); return o;
+  }
+  function lineePure(V, g, pa, mg, isT) {   // marching squares su ogni livello, segmenti uniti in linee
+    const { nx, ny, lat0, dlat, lon0, dlon } = g;
+    let lo = Infinity, hi = -Infinity; for (const v of V) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    const M = 6, feats = [];   // M: margine dentro la sfumatura del bordo
+    for (let L = Math.ceil(lo / pa) * pa; L <= hi; L += pa) {
+      const pt = new Map(), seg = new Map();   // punto su ogni lato attraversato, e i lati collegati
+      const lato = (x, y, oriz) => { const id = (y * nx + x) * 2 + (oriz ? 0 : 1);
+        if (!pt.has(id)) { const a = V[y * nx + x], b = oriz ? V[y * nx + x + 1] : V[(y + 1) * nx + x], f = (L - a) / (b - a);
+          pt.set(id, oriz ? [lon0 + (x + f) * dlon, lat0 + y * dlat] : [lon0 + x * dlon, lat0 + (y + f) * dlat]); }
+        return id; };
+      const unisci = (a, b) => { (seg.get(a) || seg.set(a, []).get(a)).push(b); (seg.get(b) || seg.set(b, []).get(b)).push(a); };
+      for (let y = M; y < ny - 1 - M; y++) for (let x = M; x < nx - 1 - M; x++) {
+        const a = V[y * nx + x], b = V[y * nx + x + 1], c = V[(y + 1) * nx + x + 1], d = V[(y + 1) * nx + x];
+        const cas = (a >= L) | (b >= L) << 1 | (c >= L) << 2 | (d >= L) << 3;
+        if (cas === 0 || cas === 15) continue;
+        const N = () => lato(x, y, true), E = () => lato(x + 1, y, false), S = () => lato(x, y + 1, true), O = () => lato(x, y, false);
+        switch (cas) {
+          case 1: case 14: unisci(O(), N()); break;  case 2: case 13: unisci(N(), E()); break;
+          case 3: case 12: unisci(O(), E()); break;  case 4: case 11: unisci(E(), S()); break;
+          case 6: case 9: unisci(N(), S()); break;   case 7: case 8: unisci(O(), S()); break;
+          case 5: case 10: { const cen = (a + b + c + d) / 4 >= L;   // sella: decide il centro della cella
+            if ((cas === 5) === cen) { unisci(O(), S()); unisci(N(), E()); } else { unisci(O(), N()); unisci(E(), S()); } } }
+      }
+      const fatto = new Set(), catena = s0 => { const c = [pt.get(s0)]; fatto.add(s0); let cur = s0;
+        for (;;) { const q = (seg.get(cur) || []).find(z => !fatto.has(z)); if (q == null) break; fatto.add(q); c.push(pt.get(q)); cur = q; }
+        return c; };
+      const linee = [];   // dai capi aperti prima, poi gli anelli (niente anellini di rumore)
+      const tol = Math.abs(dlon) * .35;   // ~350 m fra un punto e l'altro: Chaikin arrotonda, poi si sfoltisce
+      for (const [id, v] of seg) if (v.length === 1 && !fatto.has(id)) { const c = catena(id); if (c.length > 4) linee.push(semplificaPura(chaikinPura(c, false), tol)); }
+      for (const id of seg.keys()) if (!fatto.has(id)) { const c = catena(id); if (c.length > 14) { c.push(c[0]); linee.push(semplificaPura(chaikinPura(c, true), tol)); } }
+      const e = isT ? `${Math.round(L)}°` : `${Math.round(L)}%`, mag = Math.abs(L / mg - Math.round(L / mg)) < 1e-6;
+      for (const c of linee) if (c.length > 3) feats.push({ type: 'Feature', properties: { e, m: mag ? 1 : 0 }, geometry: { type: 'LineString', coordinates: c } });
+    }
+    return feats;
+  }
+  // il worker calcola tutte le ore una volta e le tiene compatte (Float32); la pagina chiede solo l'ora che le serve
+  const ISO_WORKER = [lisciaPura, chaikinPura, semplificaPura, lineePure].map(f => f.toString()).join('\n') + `
+const ORE = new Map();
+self.onmessage = e => { const d = e.data;
+  if (d.tipo === 'calcola') {
+    for (const k of d.ks) { const V = lisciaPura(d.F, k * d.n, d.n, d.passo, d.g.nx, d.g.ny, d.passate);
+      ORE.set(k, lineePure(V, d.g, d.pa, d.mg, d.isT).map(x => ({ e: x.properties.e, m: x.properties.m, c: Float32Array.from(x.geometry.coordinates.flat()) }))); }
+    self.postMessage({ tipo: 'pronto' });
+  } else if (d.tipo === 'ora') {
+    const features = (ORE.get(d.k) || []).map(x => { const co = []; for (let i = 0; i < x.c.length; i += 2) co.push([x.c[i], x.c[i + 1]]);
+      return { type: 'Feature', properties: { e: x.e, m: x.m }, geometry: { type: 'LineString', coordinates: co } }; });
+    self.postMessage({ tipo: 'ora', id: d.id, fc: { type: 'FeatureCollection', features } });
+  } };`;
+
   async function griglia(key) {
     const j = await (await fetch(FILE_VAR[key])).json();
     if (j.versione !== 1) throw new Error('griglia ' + key);
@@ -147,6 +224,11 @@
   #dock3d .leg3d { display: flex; align-items: center; gap: 8px; margin-top: -3px; }
   #dock3d .leg3d i { flex: 1; height: 5px; border-radius: 3px; background: linear-gradient(90deg,#5c6e8f,#b3c7e0 25%,#f2f5fa 50%,#ffc46b 75%,#ff6b5e); }
   #dock3d .leg3d span { font: 400 10px ui-monospace, "SF Mono", monospace; color: rgba(233, 233, 237, .7); white-space: nowrap; }
+  #dock3d .iso3d { flex: 0 0 auto; height: 22px; padding: 0 9px; border-radius: 11px; border: .5px solid rgba(255,255,255,.22); background: rgba(0,0,0,.28);
+    color: rgba(233,233,237,.85); font: 600 10.5px Inter, -apple-system, sans-serif; cursor: pointer; display: flex; align-items: center; gap: 5px; }
+  #dock3d .iso3d[hidden] { display: none; }
+  #dock3d .iso3d.active { background: var(--accent); color: var(--accent-on); border-color: transparent; }
+  #dock3d .iso3d svg { width: 13px; height: 13px; }
   #dock3d .rail3d { display: flex; padding: 3px; border-radius: 14px; background: rgba(0, 0, 0, .28); }
   #dock3d .rail3d .rail-item { flex: 1; width: auto; height: 50px; border-radius: 11px; }
   #dock3d .rail3d .rail-item.active { background: var(--accent); color: var(--accent-on); }
@@ -201,7 +283,7 @@
         <div class="riga3d"><button class="radar-play-btn" id="play3d" type="button" title="Play/Pausa">▶</button>
           <div class="radar-track-wrap"><input type="range" id="ora3d-slider" class="radar-slider" min="0" max="1" step="0.02" value="0" aria-label="Ora mostrata"></div>
           <span class="fc48-now" id="ora3d"></span></div>
-        <div class="leg3d"><span>0</span><i></i><span id="leg3d-max"></span></div>
+        <div class="leg3d"><span>0</span><i></i><span id="leg3d-max"></span><button class="iso3d" id="iso3d" type="button" hidden aria-pressed="false" title="Isolinee"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 11c3-4 5 1 8-2s4-4 6-3"/><path d="M1 6c3-3 5 1 8-1.5S13 1 15 2"/><path d="M1 15c3-3 6 0 9-1.5s3.5-1.5 5-1.5"/></svg>Isolinee</button></div>
         <div class="rail3d"><button class="rail-item active" data-var="ws" type="button">${ICON_VENTO}<span>Vento</span></button>
           <button class="rail-item" data-var="t" type="button">${ICON_TEMP}<span>Temp.</span></button>
           <button class="rail-item" data-var="rh" type="button">${ICON_GOCCIA}<span>Umidità</span></button>
@@ -221,8 +303,11 @@
     const stazioniOn = () => document.getElementById('stations-check')?.checked !== false;
     const dem = new URL('3d/dem/{z}/{x}/{y}.webp', location.href).href.replace(/%7B/g, '{').replace(/%7D/g, '}');
 
+    // densità di pixel della mappa: al massimo 1,5× (sugli schermi a 2–3× il rilievo 3D ridisegnato a ogni ora faceva scattare;
+    // a 1,5× sul Mac 59 fps e nessuno scatto, 21/11/2026). ?pr=2 per provare la piena densità
+    const PR = Math.min(devicePixelRatio || 1, +new URLSearchParams(location.search).get('pr') || 1.5);
     const map = new maplibregl.Map({
-      container: 'map3d', attributionControl: { compact: true }, center: [12.72, 41.98], zoom: innerWidth > 700 ? 8.4 : 7.7, pitch: 58, bearing: -10,   // da PC il Lazio riempie lo schermo maxPitch: 80,
+      container: 'map3d', attributionControl: { compact: true }, pixelRatio: PR, center: [12.72, 41.98], zoom: innerWidth > 700 ? 8.4 : 7.7, pitch: 58, bearing: -10,   // da PC il Lazio riempie lo schermo maxPitch: 80,
       style: {
         version: 8, glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
         sources: {
@@ -412,8 +497,10 @@
       const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height); g.filter = `blur(${UP * .9}px)`; g.drawImage(cv0, 0, 0, cv.width, cv.height); g.filter = 'none';
       oraAvv = t; return cv.toDataURL();
     }
-    const avvisiOra = () => { const src = map.getSource('avvisi');
-      if (src && (Math.round(T) !== oraAvv || avvisiOra.on !== EV_ON)) { avvisiOra.on = EV_ON; src.updateImage({ url: avvisiImg() }); } };
+    // zone di avviso: si ridisegnano solo durante l'Evento (prima anche da spente, a ogni ora: una tela sfocata + PNG per niente)
+    const avvisiOra = () => { const src = map.getSource('avvisi'); if (!src) return;
+      if (avvisiOra.on !== EV_ON) { avvisiOra.on = EV_ON; oraAvv = -1; map.setLayoutProperty('avvisi', 'visibility', EV_ON ? 'visible' : 'none'); }
+      if (EV_ON && Math.round(T) !== oraAvv) src.updateImage({ url: avvisiImg() }); };
     const angoli = g => { const la = [g.lat0, g.lat0 + g.dlat * (g.ny - 1)], lo = [g.lon0, g.lon0 + g.dlon * (g.nx - 1)];
       const N = Math.max(...la) + Math.abs(g.dlat) / 2, S = Math.min(...la) - Math.abs(g.dlat) / 2, Wl = Math.min(...lo) - Math.abs(g.dlon) / 2, E = Math.max(...lo) + Math.abs(g.dlon) / 2;
       return [[Wl, N], [E, N], [E, S], [Wl, S]]; };
@@ -447,8 +534,22 @@
       ['Monte Cavo 949 m', 12.708, 41.751, 5], ['Monte Semprevisa 1536 m', 13.116, 41.580, 5], ['Gran Sasso 2912 m', 13.566, 42.469, 5]];
 
     let tickOn = false;
-    const tick = () => { if (!tickOn) return; step(); map.triggerRepaint(); requestAnimationFrame(tick); };
-    map.on('load', () => {
+    // scie a tempo, non a fotogramma: un passo ogni 1/60 s (prima su uno schermo a 120 Hz andavano al doppio e la mappa
+    // si ridisegnava 120 volte al secondo); fotogrammi al massimo FPS (?fps=30 per provare), i passi persi si recuperano
+    const FPS = Math.max(15, Math.min(120, +new URLSearchParams(location.search).get('fps') || 60));
+    let ultimo = 0;
+    const tick = (now = performance.now()) => {
+      if (!tickOn) return; requestAnimationFrame(tick);
+      if (ultimo && now - ultimo < 1000 / FPS - 2) return;
+      const passi = ultimo ? Math.max(1, Math.min(4, Math.round((now - ultimo) / (1000 / 60)))) : 1; ultimo = now;
+      for (let i = 0; i < passi; i++) step();
+      map.triggerRepaint(); };
+    // i nostri strati appena lo stile è pronto: 'load' aspetta anche l'ultima tessera, e se una richiesta resta appesa
+    // (Brave, rete lenta) nomi, scie e veli non arrivavano mai
+    const T0 = performance.now(); window.Metek3D_t = { stile: null, carica: null };
+    map.once('load', () => { window.Metek3D_t.carica = Math.round(performance.now() - T0); });
+    map.once('style.load', () => { window.Metek3D_t.stile = Math.round(performance.now() - T0); });
+    map.once('style.load', () => {
       map.addSource('luoghi', { type: 'geojson', data: { type: 'FeatureCollection', features: LUOGHI.map(([n, lo, la, k]) => ({ type: 'Feature', properties: { n, k }, geometry: { type: 'Point', coordinates: [lo, la] } })) } });
       map.addLayer({ id: 'luoghi', type: 'symbol', source: 'luoghi',
         filter: ['any', ['<=', ['get', 'k'], 1], ['all', ['==', ['get', 'k'], 2], ['>=', ['zoom'], 7.6]], ['all', ['>=', ['get', 'k'], 3], ['>=', ['zoom'], 8.8]]],
@@ -473,9 +574,19 @@
         g.putImageData(im, 0, 0);
         map.addSource('montagne', { type: 'image', url: c.toDataURL(), coordinates: angoli(qm) });
         map.addLayer({ id: 'montagne', type: 'raster', source: 'montagne', paint: { 'raster-fade-duration': 0 } }, 'rilievo'); }
-      map.addSource('clima', { type: 'image', url: cv.toDataURL(), coordinates: [[11.4, 42.85], [14.05, 42.85], [14.05, 41.18], [11.4, 41.18]] });
+      map.addSource('clima', { type: 'canvas', canvas: cvc, animate: false, coordinates: [[11.4, 42.85], [14.05, 42.85], [14.05, 41.18], [11.4, 41.18]] });
       map.addLayer({ id: 'clima', type: 'raster', source: 'clima', layout: { visibility: VAR === 'ws' ? 'none' : 'visible' },   // scelta fatta prima del load
         paint: { 'raster-fade-duration': 0, 'raster-opacity': .7, 'raster-resampling': 'linear', 'raster-saturation': -.12 } }, 'rilievo');
+      for (const id of ['isoA', 'isoB']) {
+        map.addSource(id, { type: 'geojson', data: VUOTO, tolerance: .4 });
+        map.addLayer({ id, type: 'line', source: id, layout: { 'line-join': 'round' },
+          paint: { 'line-color': ['case', ['==', ['get', 'm'], 1], 'rgba(246,243,236,.95)', 'rgba(246,243,236,.5)'], 'line-opacity': 0,
+            'line-width': ['interpolate', ['linear'], ['zoom'], 7, ['case', ['==', ['get', 'm'], 1], 1.1, .5], 11, ['case', ['==', ['get', 'm'], 1], 2, 1]] } }, 'strade'); }
+      map.addSource('iso', { type: 'geojson', data: VUOTO, tolerance: .6 });
+      map.addLayer({ id: 'iso-e', type: 'symbol', source: 'iso', filter: ['==', ['get', 'm'], 1],
+        layout: { visibility: 'none', 'symbol-placement': 'line', 'symbol-spacing': 260, 'text-field': ['get', 'e'], 'text-font': ['literal', ['Noto Sans Medium']],
+          'text-size': 11, 'text-keep-upright': true, 'text-max-angle': 35 },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(8,11,18,.8)', 'text-halo-width': 1.3 } }, 'paesi');
       map.addSource('avvisi', { type: 'image', url: avvisiImg(), coordinates: angoli(G) });
       map.addLayer({ id: 'avvisi', type: 'raster', source: 'avvisi', paint: { 'raster-fade-duration': 0 } }, 'paesi');
       map.addLayer(layer, 'paesi');
@@ -485,7 +596,7 @@
       const lontano = () => map.getContainer().classList.toggle('lontano', map.getZoom() < 9.2);
       map.on('zoom', lontano); lontano();
       pillole(); pilloleOra(true);
-      if (VAR !== 'ws') { map.setLayoutProperty('montagne', 'visibility', 'none'); oraClima = null; climaOra(); }
+      if (VAR !== 'ws') { map.setLayoutProperty('montagne', 'visibility', 'none'); oraClima = null; climaOra(); oraIso = null; isoOra(); }
       map.getContainer().querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');   // crediti chiusi, si aprono con la (i)
     });
 
@@ -502,33 +613,140 @@
     let aggiornaPunto = () => {};   // il popup del punto segue l'ora (definito sotto)
 
     // temperatura e umidità: stessi file del 2D (già nella cache del browser), un'immagine per ora tenuta in memoria
-    const DATI = {}, IMG = new Map(), cvc = document.createElement('canvas');
+    const DATI = {}, cvc = document.createElement('canvas'); cvc.width = cvc.height = 1;
     // bordi sfumati (~12 km) invece del taglio netto del riquadro dei dati
     let BORDO = null;
     const bordo = g => BORDO || (BORDO = Uint8Array.from({ length: g.nx * g.ny }, (_, c) => {
       const x = c % g.nx, y = (c / g.nx) | 0, d = Math.min(x, y, g.nx - 1 - x, g.ny - 1 - y) / 12, e = Math.min(1, d);
       return 255 * e * e * (3 - 2 * e); }));
     let oraClima = null;
-    function climaImg(key, t) {
-      const D = DATI[key], k = D.ore.get(Date.parse(VM.times[t]));
-      const chiave = key + k; if (IMG.has(chiave)) return IMG.get(chiave);
-      cvc.width = D.g.nx; cvc.height = D.g.ny;
-      const g = cvc.getContext('2d'), im = g.createImageData(D.g.nx, D.g.ny), P = PAL[key];
-      bordo(D.g);
-      if (k != null) for (let c = 0, o = k * D.n; c < D.n; c++) {
-        const x = Math.max(0, Math.min(1, (D.F[o + c] * D.passo - D.lo) / (D.hi - D.lo || 1)));
-        let j = 1; while (j < P.length - 1 && x > P[j][0]) j++;
-        const A = P[j - 1], B = P[j], f = (x - A[0]) / (B[0] - A[0] || 1), q = c * 4;
-        im.data[q] = A[1] + (B[1] - A[1]) * f; im.data[q + 1] = A[2] + (B[2] - A[2]) * f; im.data[q + 2] = A[3] + (B[3] - A[3]) * f; im.data[q + 3] = BORDO[c];
-      }
-      g.putImageData(im, 0, 0);
-      const url = cvc.toDataURL(); IMG.set(chiave, url); return url;
+    // isolinee (opzione): ogni 1 °C / 10 %, principali ogni 5 °C / 20 % con l'etichetta
+    let ISO = false; try { ISO = localStorage.getItem('metek3d-iso') === '1'; } catch (e) {}
+    const PASSO_ISO = { t: 1, rh: 10 }, MAGG_ISO = { t: 5, rh: 20 }, LISCIA = { t: 1, rh: 2 }, VUOTO = { type: 'FeatureCollection', features: [] };
+    // campo lisciato con medie 3×3 (1 passata la temperatura, 2 l'umidità, più rumorosa): le linee e le fasce non seguono i gradini della griglia
+    const CAMPI = new Map();
+    function campo(key, k) {
+      const ch = key + k; if (CAMPI.has(ch)) return CAMPI.get(ch);
+      const D = DATI[key], V = lisciaPura(D.F, k * D.n, D.n, D.passo, D.g.nx, D.g.ny, LISCIA[key]);
+      if (CAMPI.size > 8) CAMPI.delete(CAMPI.keys().next().value);
+      CAMPI.set(ch, V); return V;
     }
+    let oraIso = null;
+    // le etichette (simboli MapLibre, aggiornati a parte) solo da fermi: col play sarebbero in ritardo sulle linee
+    // linee: due livelli che si danno il cambio. Uno mostra l'ora, l'altro ha già caricato la successiva; al cambio d'ora
+    // si scambia l'opacità (costante: immediata, nello stesso fotogramma del velo; a 0 MapLibre non disegna il livello)
+    // e nel livello rimasto libero si carica l'ora dopo. Le linee di tutte le ore le calcola prima un Web Worker.
+    const ISO_PRONTE = {}, BUF = { isoA: null, isoB: null }; let davanti = 'isoA', timerEt = 0;
+    const dietro = () => davanti === 'isoA' ? 'isoB' : 'isoA';
+    const caricaIn = (id, key, k) => { const b = BUF[id] = { ch: key + k, pronto: false };
+      chiedi(key, k).then(fc => { if (b !== BUF[id]) return; b.fc = fc; map.getSource(id).setData(fc); attendi(); });
+      const attendi = () => {
+      // pronta quando le sue tessere sono rifatte (o dopo 400 ms, se nessuna è in vista)
+      const ok = () => { if (b.pronto) return; b.pronto = true; map.off('sourcedata', f); if (b === BUF[id]) { climaOra(); isoOra(); } };
+      const f = e => { if (e.sourceId === id && e.tile && map.isSourceLoaded(id)) ok(); };
+      map.on('sourcedata', f); setTimeout(ok, 400); }; };
+    // colori e linee della stessa ora: il velo cambia solo quando le linee dell'ora sono pronte (stesso fotogramma)
+    const lineePronte = (key, k) => { const v = key + k; return BUF[davanti]?.ch === v && BUF[davanti].pronto || BUF[dietro()]?.ch === v && BUF[dietro()].pronto; };
+    const ISO_W = {}, ATTESE = new Map(); let richiesta = 0;
+    function preparaIso(key) {   // tutte le ore in un Web Worker che resta acceso: la pagina resta libera
+      if (ISO_PRONTE[key]) return;
+      ISO_PRONTE[key] = 'in corso';
+      const D = DATI[key], ks = [...new Set(D.ore.values())].sort((a, b) => a - b);
+      let w;
+      try { w = new Worker(URL.createObjectURL(new Blob([ISO_WORKER], { type: 'text/javascript' }))); }
+      catch (e) { console.warn('isolinee: worker non disponibile', e); ISO_PRONTE[key] = false; return; }
+      w.onerror = e => { console.warn('isolinee: errore nel worker', e.message); ISO_PRONTE[key] = false; };
+      w.onmessage = e => {
+        const d = e.data;
+        if (d.tipo === 'pronto') { ISO_W[key] = w; ISO_PRONTE[key] = true; oraClima = null; climaOra(); isoOra(); }
+        else if (d.tipo === 'ora') { const f = ATTESE.get(d.id); ATTESE.delete(d.id); if (f) f(d.fc); }
+      };
+      w.postMessage({ tipo: 'calcola', F: D.F, n: D.n, passo: D.passo, g: D.g, ks, passate: LISCIA[key], pa: PASSO_ISO[key], mg: MAGG_ISO[key], isT: key === 't' });
+    }
+    const chiedi = (key, k) => new Promise(res => { const id = ++richiesta; ATTESE.set(id, res); ISO_W[key].postMessage({ tipo: 'ora', k, id }); });
+    function isoOra() {
+      const vis = ISO && VAR !== 'ws' && DATI[VAR];
+      const on = vis && !gira && TPRIMA == null;
+      if (map.getLayer('iso-e')) map.setLayoutProperty('iso-e', 'visibility', on ? 'visible' : 'none');
+      let voglio = null;
+      if (vis) {
+        const t = Math.min(NT - 1, Math.round(T)), k = DATI[VAR].ore.get(Date.parse(VM.times[t]));
+        if (ISO_PRONTE[VAR] === true) voglio = VAR + k; else preparaIso(VAR);
+        if (voglio && map.getSource('isoA')) {
+          const kd = DATI[VAR].ore.get(Date.parse(VM.times[(t + 1) % NT]));
+          if (BUF[davanti]?.ch !== voglio) {
+            const d = BUF[dietro()];
+            if (d?.ch === voglio && d.pronto) {   // l'ora era già pronta dietro: scambio
+              map.setPaintProperty(davanti, 'line-opacity', 0); davanti = dietro(); map.setPaintProperty(davanti, 'line-opacity', 1);
+            } else if (d?.ch !== voglio) caricaIn(dietro(), VAR, k);   // salto del cursore: si mostra appena caricata
+          } else map.setPaintProperty(davanti, 'line-opacity', 1);
+          if (BUF[davanti]?.ch === voglio && BUF[dietro()]?.ch !== VAR + kd) caricaIn(dietro(), VAR, kd);   // l'ora dopo, in anticipo
+        }
+        const ch = VAR + t, v = VAR;
+        // etichette: quando il cursore si ferma (trascinandolo sarebbero lavoro buttato), dalle linee già pronte
+        if (on && ch !== oraIso) { clearTimeout(timerEt); timerEt = setTimeout(() => { if (VAR !== v || oraIso === ch) return; oraIso = ch;
+          const b = [BUF.isoA, BUF.isoB].find(x => x?.ch === v + k && x.fc); if (b) map.getSource('iso')?.setData(b.fc); else oraIso = null; }, 250); }
+      }
+      if (!voglio && map.getLayer('isoA')) { map.setPaintProperty('isoA', 'line-opacity', 0); map.setPaintProperty('isoB', 'line-opacity', 0); BUF.isoA = BUF.isoB = null; }
+    }
+    // velo: una tela letta direttamente dalla mappa (sorgente canvas), niente PNG da codificare e decodificare a ogni ora.
+    // Colori da una tabella di 256 tinte; in memoria i pixel delle ultime 12 ore.
+    const PIX = new Map(), LUT = {};
+    const lut = key => LUT[key] || (LUT[key] = (() => { const P = PAL[key], L = new Uint8Array(768);
+      for (let i = 0; i < 256; i++) { const x = i / 255; let j = 1; while (j < P.length - 1 && x > P[j][0]) j++;
+        const A = P[j - 1], B = P[j], f = (x - A[0]) / (B[0] - A[0] || 1);
+        for (let q = 0; q < 3; q++) L[i * 3 + q] = A[q + 1] + (B[q + 1] - A[q + 1]) * f; }
+      return L; })());
+    const R_ISO = 2;   // con le isolinee: 2 pixel per cella, fasce che seguono le linee
+    function veloDati(key, k) {
+      const iso = ISO, ch = key + k + (iso ? 'f' : '');
+      if (PIX.has(ch)) { const v = PIX.get(ch); PIX.delete(ch); PIX.set(ch, v); return v; }
+      const D = DATI[key], { nx, ny } = D.g, L = lut(key), lo = D.lo, sc = 255 / (D.hi - D.lo || 1);
+      bordo(D.g);
+      let im;
+      if (k == null) im = new ImageData(nx, ny);
+      else if (!iso) {
+        im = new ImageData(nx, ny); const d = im.data;
+        for (let c = 0, o = k * D.n; c < D.n; c++) {
+          const i = Math.max(0, Math.min(255, Math.round((D.F[o + c] * D.passo - lo) * sc))) * 3, q = c * 4;
+          d[q] = L[i]; d[q + 1] = L[i + 1]; d[q + 2] = L[i + 2]; d[q + 3] = BORDO[c]; }
+      } else {
+        const V = campo(key, k), pa = PASSO_ISO[key], R = R_ISO, W = nx * R, H = ny * R;
+        im = new ImageData(W, H); const d = im.data;
+        const xi = new Int32Array(W), xu = new Float32Array(W);
+        for (let X = 0; X < W; X++) { const f = Math.min(nx - 1.001, X / R); xi[X] = f | 0; xu[X] = f - (f | 0); }
+        for (let Y = 0; Y < H; Y++) {
+          const fy = Math.min(ny - 1.001, Y / R), y = fy | 0, w = fy - y, r0 = y * nx, r1 = r0 + nx;
+          for (let X = 0, q = Y * W * 4; X < W; X++, q += 4) {
+            const x = xi[X], u = xu[X];
+            const v = (V[r0 + x] * (1 - u) + V[r0 + x + 1] * u) * (1 - w) + (V[r1 + x] * (1 - u) + V[r1 + x + 1] * u) * w;
+            const i = Math.max(0, Math.min(255, Math.round(((Math.floor(v / pa) + .5) * pa - lo) * sc))) * 3;
+            d[q] = L[i]; d[q + 1] = L[i + 1]; d[q + 2] = L[i + 2]; d[q + 3] = BORDO[r0 + x]; } }
+      }
+      PIX.set(ch, im); if (PIX.size > 12) PIX.delete(PIX.keys().next().value);
+      return im;
+    }
+    const gVelo = cvc.getContext('2d', { willReadFrequently: true });   // solo putImageData: tela in memoria, caricata così com'è sulla GPU
+    function disegnaVelo(key, k) {
+      const t0 = performance.now(), im = veloDati(key, k), t1 = performance.now();
+      if (cvc.width !== im.width || cvc.height !== im.height) { cvc.width = im.width; cvc.height = im.height; }
+      const g = gVelo; g.putImageData(im, 0, 0);
+      const t2 = performance.now(), M = window.Metek3D_t || {};
+      M.calcolo = Math.round(t1 - t0); M.disegno = Math.round(t2 - t1);
+      const src = map.getSource('clima');   // la tela si ricarica sulla GPU solo per il fotogramma dopo il disegno
+      if (src) { src.play(); map.triggerRepaint(); map.once('render', () => { src.pause(); M.fotogramma = Math.round(performance.now() - t2); }); }
+    }
+    const oraFile = (key, t) => DATI[key].ore.get(Date.parse(VM.times[t]));
     function climaOra() {
       if (VAR === 'ws' || !DATI[VAR]) return;
-      const t = Math.min(NT - 1, Math.round(T)), ch = VAR + t;
-      if (ch === oraClima) return; oraClima = ch;
-      map.getSource('clima')?.updateImage({ url: climaImg(VAR, t) });
+      const t = Math.min(NT - 1, Math.round(T)), ch = VAR + t + (ISO ? 'f' : '');
+      if (ch === oraClima) return;
+      if (ISO && ISO_PRONTE[VAR] === true && map.getSource('isoA') && !lineePronte(VAR, oraFile(VAR, t))) { isoOra(); return; }   // si aspetta le linee
+      oraClima = ch;
+      disegnaVelo(VAR, oraFile(VAR, t));
+      // l'ora dopo si prepara nei momenti liberi: col play è già pronta
+      const v = VAR, k1 = oraFile(v, (t + 1) % NT), idle = f => window.requestIdleCallback ? requestIdleCallback(f, { timeout: 400 }) : setTimeout(f, 50);
+      if (k1 != null) idle(() => { if (VAR === v) veloDati(v, k1); });
     }
     async function scegli(key) {
       if (key !== 'ws' && !DATI[key]) {
@@ -539,17 +757,23 @@
       const vis = key === 'ws' ? 'none' : 'visible';
       if (map.getLayer('clima')) { map.setLayoutProperty('clima', 'visibility', vis); map.setLayoutProperty('montagne', 'visibility', key === 'ws' ? 'visible' : 'none'); }
       if (map.getLayer('rilievo')) map.setPaintProperty('rilievo', 'raster-opacity', key === 'ws' ? .6 : 1);
-      climaOra(); legenda(); oraPunto = -1; aggiornaPunto();
+      $('iso3d').hidden = key === 'ws';
+      climaOra(); oraIso = null; isoOra(); legenda(); oraPunto = -1; aggiornaPunto();
     }
+    const isoBtn = $('iso3d');
+    const isoStato = () => { isoBtn.classList.toggle('active', ISO); isoBtn.setAttribute('aria-pressed', ISO); };
+    isoBtn.addEventListener('click', () => { ISO = !ISO; isoStato(); try { localStorage.setItem('metek3d-iso', ISO ? '1' : '0'); } catch (e) {}
+      oraClima = null; climaOra(); oraIso = null; isoOra(); });
+    isoStato();
     document.querySelectorAll('#dock3d .rail-item[data-var]').forEach(b => b.addEventListener('click', () => { if (b.dataset.var !== VAR) { stop(); scegli(b.dataset.var); } }));
     const showT = () => {
       $('ora3d').textContent = new Date(VM.times[Math.min(NT - 1, Math.round(T))]).toLocaleString('it-IT', { timeZone: 'Europe/Rome', weekday: 'short', hour: '2-digit', minute: '2-digit' });
-      pilloleOra(); avvisiOra(); climaOra(); aggiornaPunto();
+      pilloleOra(); avvisiOra(); climaOra(); isoOra(); aggiornaPunto();
     };
-    let gira = false, tPrec = 0;
-    const pausa = () => { gira = false; PB.textContent = '▶'; };
+    let gira = false, tPrec = 0, TPRIMA = null;   // TPRIMA: ora da riprendere a fine Evento
+    const pausa = () => { gira = false; PB.textContent = '▶'; isoOra(); };
     ti.addEventListener('input', () => { if (TPRIMA != null) stop(false); pausa(); T = +ti.value; showT(); });   // la barra toccata ferma l'Evento lì
-    PB.addEventListener('click', () => { if (TPRIMA != null) return stop(); if (gira) return pausa(); gira = true; PB.textContent = '❚❚'; tPrec = performance.now();
+    PB.addEventListener('click', () => { if (TPRIMA != null) return stop(); if (gira) return pausa(); gira = true; PB.textContent = '❚❚'; isoOra(); tPrec = performance.now();
       const f = now => { if (!gira) return; T += (now - tPrec) / 1000 * 1.2; tPrec = now; if (T > NT - 1) T = 0; ti.value = T; showT(); requestAnimationFrame(f); };
       requestAnimationFrame(f); });
     const setT = t => { T = Math.max(0, Math.min(NT - 1, t)); ti.value = T; showT(); };
@@ -618,7 +842,6 @@
     const mostra = html => { did.innerHTML = html; did.hidden = false; did.style.top = (barraAlta() + 8) + 'px'; };
     let VOLO = 0;
     // durante l'Evento il player sembra in riproduzione; alla fine (o se lo si ferma) si torna all'ora di prima
-    let TPRIMA = null;
     function stop(ripristina = true) { VOLO++; did.hidden = true; EVB.classList.remove('active'); if (EV_ON) { EV_ON = false; avvisiOra(); }
       if (TPRIMA != null) { const t = TPRIMA; TPRIMA = null; PB.textContent = '▶'; if (ripristina) setT(t); } }
     for (const ev of ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart']) map.on(ev, e => { if (e.originalEvent) stop(); });
@@ -692,7 +915,7 @@
     }
 
     return {
-      mostra() { tickOn = true; map.resize(); tick(); },
+      mostra() { if (!tickOn) { tickOn = true; ultimo = 0; map.resize(); tick(); } },
       nascondi() { tickOn = false; pausa(); stop(); },
       vaiA, map,
     };

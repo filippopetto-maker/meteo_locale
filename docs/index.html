@@ -842,5 +842,11 @@
   <script src="js/radar.js"></script>
   <script src="js/luogo.js"></script>
   <script src="js/app.js"></script>
+  <script>
+    // pannello prestazioni: ?perf=1 lo accende (e lo ricorda, anche nell'app installata), ?perf=0 lo spegne
+    (() => { let on = false; const q = new URLSearchParams(location.search).get('perf');
+      try { if (q === '1') localStorage.setItem('metek-perf', '1'); if (q === '0') localStorage.removeItem('metek-perf'); on = localStorage.getItem('metek-perf') === '1'; } catch (e) { on = q === '1'; }
+      if (on) { const s = document.createElement('script'); s.src = 'js/prestazioni.js'; document.body.appendChild(s); } })();
+  </script>
 </body>
 </html>
