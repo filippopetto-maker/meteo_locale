@@ -17,6 +17,16 @@ sul clima del giorno da 0,044 a 0,116 (0,2 mm), da 0,023 a 0,093 (1 mm), da 0,01
 negativo a positivo su tutte e tre. Scegliere ogni giorno la memoria migliore fin lì o correggere solo lo
 scostamento rendeva meno.
 
+Fiducia (22/11, rete_prova_prudenza.py): con pochi giorni la correzione piena sbaglia molto (6/10: p 0,15 → 0,49,
+osservato 0,15). Ogni giorno passato verificato si corregge come si sarebbe fatto allora (storia fino a 2 giorni
+prima) e si guarda se la correzione ha aiutato; logit q = logit p + β·(logit c − logit p) con β separato dove la
+correzione alza o abbassa la p e per soglia, dalla massima verosimiglianza su quei giorni, ristretto con l'incertezza
+(jackknife sui giorni pesati con i casi di pioggia osservati: un giorno secco non è una prova, un grande evento vale un
+giorno; β·β²/(β²+se²), con se² gonfiato a ν/(ν−2) per i pochi gradi di libertà ν = giorni equivalenti − 1: fino a
+3 giorni piovosi equivalenti l'errore non si conosce e β = 0, cioè la grezza). Nessuna soglia di giorni o di casi.
+Ottobre–novembre e ombra: mai sotto la grezza; 6/10 a 0,144.
+
+Base: la probabilità grezza (dal 22/11; prima la tarata).
 Verità come in verifica_pioggia_ombra.py: radar DPC orario × fattore dei pluviometri MeteoNetwork.
 """
 
@@ -38,6 +48,8 @@ import verifica_pioggia_ombra as vo  # noqa: E402
 MEMORIE = (3, 5, 7, 10, 15, 25)                    # giorni; si mediano tutte, nessuna è scelta
 MIN_PIOGGIA = 50                                   # casi di pioggia sotto cui una logistica non si adatta
 CAMPIONI = 150_000
+BETA = np.round(np.arange(-0.5, 2.0001, 0.02), 2)  # griglia su cui cercare il β migliore (solo il modo di cercarlo)
+PER_GIORNO = 40_000                                # campioni per giorno per le curve di β (solo velocità)
 logger = logging.getLogger("rete_correzione")
 
 
@@ -61,7 +73,7 @@ def storia(t0: pd.Timestamp, cartella_ombra: Path, cartella_radar: Path, celle: 
         if not inizio - pd.Timedelta(days=2) <= corsa < t0:
             continue
         d = np.load(f)
-        p = d["p_tarata"] if "p_tarata" in d else d["p"]                  # sempre la p prima della correzione
+        p = d["p_grezza"]                                                  # la base della correzione
         for n, t in enumerate(pd.DatetimeIndex(d["tempi"])):
             if t not in oss:
                 continue
@@ -109,15 +121,79 @@ def applica(p: np.ndarray, modelli: dict) -> np.ndarray:
     return out
 
 
+def curve(st: dict, soglie: list[float], rng) -> dict:
+    """{giorno: (L, E)} per i giorni con una storia fino a 2 giorni prima: L (2 direzioni, soglie, BETA) log-loss del
+    giorno per ogni β dove la correzione di allora abbassa (0) o alza (1) la p; E (2, soglie) casi di pioggia osservati."""
+    out = {}
+    for d in sorted(st):
+        prima = {g_: v for g_, v in st.items() if g_ <= d - pd.Timedelta(days=2)}
+        if not prima:
+            continue
+        p, y = st[d]
+        i = rng.choice(len(y), min(len(y), PER_GIORNO), replace=False)
+        c = applica(p[i], adatta(prima, soglie, rng))
+        L, E = np.zeros((2, len(soglie), len(BETA))), np.zeros((2, len(soglie)))
+        for k, s in enumerate(soglie):
+            lp, lc, ob = logit(p[i, k]), logit(c[:, k]), y[i] >= s
+            q = np.clip(1 / (1 + np.exp(-(lp[None] + BETA[:, None] * (lc - lp)[None]))), 1e-6, 1 - 1e-6)
+            ll = -np.where(ob[None], np.log(q), np.log(1 - q)) * len(y) / len(i)
+            for v, parte in enumerate((lc <= lp, lc > lp)):
+                L[v, k] = ll[:, parte].sum(1)
+                E[v, k] = ob[parte].sum() * len(y) / len(i)
+        out[d] = (L, E)
+    return out
+
+
+def fiducia(C: dict) -> dict:
+    """β (2 direzioni × soglie) dalle curve dei giorni verificati, con stima, errore e giorni piovosi equivalenti."""
+    n_s = next(iter(C.values()))[0].shape[1] if C else 0
+    r = {k: np.zeros((2, n_s)) for k in ("stima", "usato", "neff")}
+    r["se"] = np.full((2, n_s), np.nan)
+    if not C:
+        return r
+    M = np.stack([L for L, _ in C.values()])                   # (giorni, 2, soglie, β)
+    E = np.stack([e for _, e in C.values()])
+    tot = M.sum(0)
+    for v in range(2):
+        for k in range(n_s):
+            e = E[:, v, k]
+            if (e > 0).sum() < 2:
+                continue
+            w = e / e.sum()
+            neff = 1 / (w ** 2).sum()
+            b = BETA[tot[v, k].argmin()]
+            jk = BETA[(tot[v, k][None] - M[:, v, k]).argmin(1)]
+            s2 = (neff - 1) * (w * (jk - (w * jk).sum()) ** 2).sum()
+            nu = neff - 1                                      # gradi di libertà della stima dell'errore
+            s2 = s2 * nu / (nu - 2) if nu > 2 else np.inf      # varianza attesa (chi² inverso): con 2 giorni non si sa
+            r["stima"][v, k], r["se"][v, k], r["neff"][v, k] = b, np.sqrt(s2), neff
+            r["usato"][v, k] = b ** 3 / (b ** 2 + s2 + 1e-12) if b > 0 else 0.0
+    return r
+
+
 def correggi(p: np.ndarray, t0: pd.Timestamp, cartella: Path, celle: pd.DataFrame, fattore: pd.DataFrame,
              zona: np.ndarray, soglie: list[float]) -> tuple[np.ndarray, dict]:
-    """Corregge p (tarata) con la storia in cartella/ombra e cartella/radar; info per il file d'uscita."""
+    """Corregge p (grezza) con la storia in cartella/ombra e cartella/radar, pesata con la fiducia; info per il file."""
+    rng = np.random.default_rng(0)
     st = storia(t0, cartella / "ombra", cartella / "radar", celle, fattore, zona)
-    modelli = adatta(st, soglie)
-    info = {"giorni_verificati": len(st), "ultimo_giorno": str(max(st).date()) if st else None,
+    modelli = adatta(st, soglie, rng)
+    fd = fiducia(curve(st, soglie, rng))
+    piena = applica(p, modelli)
+    out = np.array(p, dtype="float32", copy=True)
+    dentro = np.isfinite(out[:, 0])
+    for k in range(p.shape[1]):
+        lp, lc = logit(out[:, k][dentro]), logit(piena[:, k][dentro])
+        b = np.where(lc > lp, fd["usato"][1, k], fd["usato"][0, k])
+        out[:, k][dentro] = 1 / (1 + np.exp(-(lp + b * (lc - lp))))
+    out[:, 1] = np.minimum(out[:, 1], out[:, 0])
+    out[:, 2] = np.minimum(out[:, 2], out[:, 1])
+    info = {"giorni_verificati": len(st), "ultimo_giorno": str(max(st).date()) if st else None, "base": "grezza",
             "memorie": {str(D): [None if m is None else [float(m.intercept_[0]), float(m.coef_[0, 0])] for m in ms]
-                        for D, ms in modelli.items()}}
+                        for D, ms in modelli.items()},
+            "fiducia": {k: np.round(v, 4).tolist() for k, v in fd.items()}, "fiducia_righe": ["abbassa", "alza"]}
     attive = sum(m is not None for ms in modelli.values() for m in ms)
     logger.info(f"correzione: {len(st)} giorni verificati (ultimo {info['ultimo_giorno']}), "
-                f"{attive} logistiche su {len(MEMORIE) * len(soglie)}")
-    return applica(p, modelli), info
+                f"{attive} logistiche su {len(MEMORIE) * len(soglie)}; fiducia abbassa / alza per soglia "
+                f"{np.round(fd['usato'][0], 2).tolist()} / {np.round(fd['usato'][1], 2).tolist()}, "
+                f"giorni piovosi equivalenti {np.round(fd['neff'][1], 1).tolist()}")
+    return out, info

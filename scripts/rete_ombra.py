@@ -18,8 +18,10 @@ normalizzazione, taratura, statici e celle): in Actions si scaricano dalla relea
     python scripts/rete_ombra.py --impacchetta insieme       # una volta, sul Mac
     python scripts/rete_ombra.py [--corsa 2026-11-14T12] [--uscita ombra/]
 
-Con --storia (dal 21/11): le probabilità tarate si correggono con quanto la rete ha sbagliato nei giorni appena
-verificati contro il radar (rete_correzione.py); p è la corretta, p_tarata quella di prima, correzione i coefficienti.
+Con --storia (dal 21/11): le probabilità si correggono con quanto la rete ha sbagliato nei giorni appena verificati
+contro il radar (rete_correzione.py). Dal 22/11 la base è la grezza (la taratura fissa dell'arresto non si trasferisce
+ad altri mesi, rete_prova_4mm.py) e la correzione pesa quanto si è dimostrata affidabile sui giorni di pioggia già
+verificati (rete_prova_prudenza.py); p è la corretta, p_tarata resta per confronto, correzione i coefficienti.
 
 Uscita: <uscita>/pioggia_AAAAMMGGHH.npz con p (ore × 3 soglie × 48 × 64, tarata), p_grezza, mm (mm attesi
 nell'ora, rete_mm.py, se nel pacchetto c'è mm.json), tempi (inizio dell'ora
@@ -251,9 +253,9 @@ def main():
         import rete_correzione as rc
         s = np.load(MOD / "statici.npz")
         zona = rd.affidabile(s["x"], list(s["canali"]))
-        p_corr, info = rc.correggi(ris["p"], t0, args.storia, rd.celle(),
+        p_corr, info = rc.correggi(ris["p_grezza"], t0, args.storia, rd.celle(),
                                    pd.read_parquet(MOD / "fattore_radar_mnw.parquet"), zona, o.SOGLIE)
-        ris["p_tarata"], ris["p"] = ris["p"], p_corr.astype("float16")
+        ris["p_tarata"], ris["p"] = ris["p"], p_corr.astype("float16")          # p_tarata solo per confronto
         ris["correzione"] = np.array(json.dumps(info))
     mm = stima_mm(ris["p"], ris["lead_h"])
     if mm is not None:
