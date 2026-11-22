@@ -451,6 +451,37 @@
     return markers;
   }
 
+  // Vento 2D più fluido in zoom e spostamenti (22/11/2026). leaflet-velocity a fine gesto ripartiva dopo 750 ms
+  // e nel frattempo lasciava le scie ferme alla scala vecchia, spostate di colpo (i suoi zoomend/dragend
+  // sono agganciati senza contesto e non fanno nulla): sembrava che il vento si ricaricasse.
+  // Ora a fine gesto le scie già disegnate si rimettono al loro posto geografico, con la nuova scala,
+  // e l'animazione riparte subito: le vecchie sfumano da sole mentre nascono le nuove, come nel 3D.
+  if (L.CanvasLayer && L.VelocityLayer && !L.CanvasLayer.prototype._metekFluido) {
+    const CL = L.CanvasLayer.prototype, VL = L.VelocityLayer.prototype;
+    CL._metekFluido = true;
+    const eventi = CL.getEvents, sposta = CL._onLayerDidMove;
+    CL.getEvents = function () { const ev = eventi.call(this); ev.movestart = this._ricordaVista; return ev; };
+    CL._ricordaVista = function () { if (!this._prima) this._prima = { nw: this._map.containerPointToLatLng([0, 0]), z: this._map.getZoom() }; };
+    CL._onLayerDidMove = function () {
+      const c = this._canvas, p = this._prima; this._prima = null;
+      if (p && c && c.width && c.height) {
+        const m = this._map, k = m.getZoomScale(m.getZoom(), p.z), q = m.latLngToContainerPoint(p.nw);
+        const copia = document.createElement('canvas'); copia.width = c.width; copia.height = c.height;
+        copia.getContext('2d').drawImage(c, 0, 0);
+        const g = c.getContext('2d'); g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+        g.clearRect(0, 0, c.width, c.height); g.drawImage(copia, q.x, q.y, c.width * k, c.height * k); g.restore();
+      }
+      return sposta.apply(this, arguments);
+    };
+    VL.onDrawLayer = function () {
+      if (!this._windy) { this._initWindy(this); return; }
+      if (!this.options.data) return;
+      clearTimeout(this._timer);
+      this._timer = setTimeout(() => this._startWindy(), 30);   // prima 750 ms
+    };
+  }
+
+  const VFPS = Math.max(10, Math.min(60, +new URLSearchParams(location.search).get('vfps') || 15));
   function renderWind(map, windGrid, show = true) {
     if (!windGrid || !windGrid[0] || !windGrid[0].data || windGrid[0].data.length === 0) {
       return null;
@@ -466,8 +497,11 @@
       },
       data:          windGrid,
       colorScale:    ['#ffffff'],
-      velocityScale: 0.004,
-      particleAge:   64,
+      // fotogrammi al secondo delle particelle (la libreria ne fa 15): passo e vita scalati sugli fps,
+      // così la velocità a schermo resta la stessa; più fps = moto più liscio e più calcolo. ?vfps= per le prove.
+      frameRate:     VFPS,
+      velocityScale: 0.004 * 15 / VFPS,
+      particleAge:   Math.round(64 * VFPS / 15),
       lineWidth:     2,
       opacity:       0.9,
     });

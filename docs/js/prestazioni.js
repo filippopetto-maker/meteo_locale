@@ -23,6 +23,10 @@
   const mapFr = []; let mappa = null;
   const aggancia = () => { const m = window.Metek3D?._map; if (m && m !== mappa) { mappa = m; m.on('render', () => mapFr.push(performance.now())); } };
 
+  // tempo speso nelle animazioni (callback di requestAnimationFrame: particelle del vento 2D, mappa 3D…), ultimi 10 s
+  const anim = []; const rafVero = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = cb => rafVero(t => { const a = performance.now(); try { cb(t); } finally { anim.push([a, performance.now() - a]); } });
+
   // compiti lunghi (Chrome/Edge; Safari non li espone)
   const lunghi = []; let lunghiOk = false;
   try { new PerformanceObserver(l => l.getEntries().forEach(e => lunghi.push([e.startTime, e.duration]))).observe({ type: 'longtask', buffered: true }); lunghiOk = true; } catch (e) {}
@@ -56,6 +60,7 @@
       ['fps mappa 3D', mappa && window.Metek3D?.attivo ? (mapFr.length / sec).toFixed(0) : '—'],
       ['fotogr. p95', d.length ? pct(d, .95).toFixed(1) + ' ms' : '—'],
       ['scatti >50ms', String(d.filter(x => x > 50).length) + ' /10 s'],
+      ['calcolo animaz.', (() => { while (anim.length && now - anim[0][0] > 10000) anim.shift(); const ms = anim.reduce((t, x) => t + x[1], 0) / sec; return ms.toFixed(0) + ' ms/s (' + (ms / 10).toFixed(1) + '% CPU)'; })()],
       ['compiti lunghi', lunghiOk ? lunghi.length + ' (' + Math.round(lunghi.reduce((s, x) => s + x[1], 0)) + ' ms) /10 s' : 'n/d'],
       ['ping', okP.length ? pct(okP, .5) + ' ms (max ' + Math.max(...okP) + ')' : (ping.length ? 'errore' : '…')],
       ['rete', c ? `${c.effectiveType || '?'}${c.rtt != null ? ' rtt ' + c.rtt + ' ms' : ''}${c.downlink ? ' ' + c.downlink + ' Mb/s' : ''}` : 'n/d'],
