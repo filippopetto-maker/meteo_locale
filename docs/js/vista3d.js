@@ -186,6 +186,8 @@ self.onmessage = e => { const d = e.data;
   html.vista-3d #map3d { display: block; }
   html.vista-3d #map, html.vista-3d #dock, html.vista-3d .temp-legend, html.vista-3d #legend-ctl { visibility: hidden !important; }
   html.vista-3d #arrow-toggle { display: none !important; }
+  #qualita3d-toggle { display: none !important; }
+  html.vista-3d:not(.is-pwa) #qualita3d-toggle { display: flex !important; }
   #map3d .maplibregl-ctrl-attrib { font-size: 10px; }
   #map3d .maplibregl-popup-content { background: var(--glass); color: var(--text); border: .5px solid var(--border); border-radius: 10px;
     box-shadow: 0 6px 24px rgba(0, 0, 0, .5); padding: 8px 12px; font-size: 12px; line-height: 1.5;
@@ -308,7 +310,17 @@ self.onmessage = e => { const d = e.data;
 
     // densità di pixel della mappa: al massimo 1,5× (sugli schermi a 2–3× il rilievo 3D ridisegnato a ogni ora faceva scattare;
     // a 1,5× sul Mac 59 fps e nessuno scatto, 21/11/2026). ?pr=2 per provare la piena densità
-    const PR = Math.min(devicePixelRatio || 1, +new URLSearchParams(location.search).get('pr') || 1.5);
+    // densità dei pixel: 1,5 di base (a 2× ogni cambio d'ora ridisegnava il terreno con uno scatto);
+    // "Qualità mappa" alta (impostazioni, solo PC) usa tutta la densità dello schermo. ?pr= vince su tutto (prove).
+    const PR_URL = +new URLSearchParams(location.search).get('pr') || 0;
+    let ALTA = false; try { ALTA = localStorage.getItem('metek3d-qualita') === 'alta'; } catch (e) {}
+    const densita = () => Math.min(devicePixelRatio || 1, PR_URL || (ALTA ? 4 : 1.5));
+    const PR = densita();
+    // qualità alta: tessere del rilievo e del terreno chieste un livello più fini (tileSize 128 = un livello di zoom in più
+    // a parità di vista): più dettaglio su creste e ombre, ma circa 4 volte le tessere da scaricare e tenere in memoria
+    const TS = () => (ALTA && !PR_URL ? 128 : 256);
+    const sorgDem = () => ({ type: 'raster-dem', tiles: [dem], encoding: 'terrarium', tileSize: TS(), minzoom: 6, maxzoom: 11, bounds: [11.3, 41.0, 14.7, 43.0] });
+    const sorgRil = () => ({ type: 'raster', tiles: [dem.replace('/dem/', '/rilievo/')], tileSize: TS(), minzoom: 6, maxzoom: 11, bounds: [11.3, 41.0, 14.7, 43.0] });
     const map = new maplibregl.Map({
       container: 'map3d', attributionControl: { compact: true }, pixelRatio: PR, center: [12.72, 41.98], zoom: innerWidth > 700 ? 8.4 : 7.7, pitch: 58, bearing: -10,   // da PC il Lazio riempie lo schermo maxPitch: 80,
       style: {
@@ -316,9 +328,9 @@ self.onmessage = e => { const d = e.data;
         sources: {
           base: { type: 'vector', url: 'https://tiles.openfreemap.org/planet',
             attribution: '© OpenStreetMap · OpenFreeMap · rilievo Copernicus · vento M2 Metek' },
-          dem: { type: 'raster-dem', tiles: [dem], encoding: 'terrarium', tileSize: 256, minzoom: 6, maxzoom: 11, bounds: [11.3, 41.0, 14.7, 43.0] },
+          dem: sorgDem(),
           // rilievo cotto (tools/rilievo_cotto.py): più luci, occlusione ambientale, ombre portate morbide
-          rilievo: { type: 'raster', tiles: [dem.replace('/dem/', '/rilievo/')], tileSize: 256, minzoom: 6, maxzoom: 11, bounds: [11.3, 41.0, 14.7, 43.0] }
+          rilievo: sorgRil()
         },
         layers: [
           { id: 'terra', type: 'background', paint: { 'background-color': '#2b3a32' } },
@@ -777,6 +789,24 @@ self.onmessage = e => { const d = e.data;
       const cc = CC(), wc = WC(), vis = VAR === 'ws' ? 'none' : '';
       if (cc) { cc.checked = ISO; cc.closest('label').style.display = vis; }
       if (wc) { wc.checked = VENTO; wc.disabled = false; const l = wc.closest('label'); l.style.display = vis; l.classList.remove('is-disabled'); }
+    }
+    // Qualità mappa (solo PC): interruttore nelle impostazioni, accanto a Isolinee e Mostra vento
+    const wt = document.getElementById('wind-toggle');
+    if (wt && !document.getElementById('qualita3d-toggle') && (devicePixelRatio || 1) > 1.5) {
+      wt.insertAdjacentHTML('afterend', `<label class="ctrl-row" id="qualita3d-toggle" title="Più nitida, ma più pesante per la scheda grafica">` +
+        `<input type="checkbox" id="qualita3d-check"${ALTA ? ' checked' : ''}><span class="switch"></span><span>Qualità mappa alta</span></label>`);
+      document.getElementById('qualita3d-check').addEventListener('change', e => {
+        if (e.target.checked && !confirm('Qualità mappa alta: la vista 3D usa tutta la risoluzione dello schermo.\n\n' +
+            'Aumentando la risoluzione si rischiano problemi di fluidità (scatti al cambio d\'ora, ventole, batteria), ' +
+            'soprattutto con Temperatura, Umidità e Isolinee.\n\nAttivarla?')) { e.target.checked = false; return; }
+        ALTA = e.target.checked; try { localStorage.setItem('metek3d-qualita', ALTA ? 'alta' : 'base'); } catch (x) {}
+        map.setPixelRatio(densita());
+        // terreno e rilievo rifatti con le tessere della nuova qualità (stesso posto nella pila dei livelli)
+        const lr = map.getStyle().layers.find(l => l.id === 'rilievo');
+        map.setTerrain(null); map.removeLayer('rilievo'); map.removeSource('rilievo'); map.removeSource('dem');
+        map.addSource('dem', sorgDem()); map.addSource('rilievo', sorgRil());
+        map.addLayer(lr, 'strade'); map.setTerrain({ source: 'dem', exaggeration: EXAG });
+      });
     }
     const entra2D = () => { const cc = CC(), wc = WC(); if (stato2D || !cc || !wc) return;
       stato2D = { c: cc.checked, w: wc.checked, wd: wc.disabled, cd: cc.closest('label').style.display, ld: wc.closest('label').style.display,
