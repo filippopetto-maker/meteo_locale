@@ -242,6 +242,26 @@
     .legend-tick:first-child { transform: translateX(0); }
     .legend-tick:last-child  { transform: translateX(-100%); }
 
+    /* ─── Da PC (22/11): la scala colori sta dentro la barra del tempo, sotto il play, come in 3D ─── */
+    .fc48-legend-slot:empty, .radar-legend-slot:empty { display: none; }
+    :is(#fc48-timeline, #radar-timeline) .radar-play-btn { width: 34px; height: 34px; }
+    :is(#fc48-timeline, #radar-timeline) .fc48-now {
+      flex: 0 0 96px; width: 96px; text-align: right; white-space: nowrap; overflow: hidden;
+      font-weight: 600; font-size: 12px; color: var(--text-primary); font-variant-numeric: tabular-nums;
+    }
+    :is(#fc48-timeline, #radar-timeline) .fc48-now.radar-note { text-decoration: none; cursor: help; }
+    :is(#fc48-timeline, #radar-timeline) .temp-legend {
+      position: static; left: auto; right: auto; bottom: auto; width: auto;
+      display: flex; flex-direction: row; align-items: center; gap: 8px;
+      background: none; border: 0; padding: 0; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; text-shadow: none;
+    }
+    :is(#fc48-timeline, #radar-timeline) #legend-title { display: none; }
+    :is(#fc48-timeline, #radar-timeline) #legend-bar { order: 1; flex: 1; height: 5px; margin: 0; box-shadow: none; }
+    :is(#fc48-timeline, #radar-timeline) #legend-labels { display: contents; }
+    :is(#fc48-timeline, #radar-timeline) .legend-tick { position: static; transform: none; order: 0; }
+    :is(#fc48-timeline, #radar-timeline) .legend-tick:last-child { order: 2; }
+    :is(#fc48-timeline, #radar-timeline) .legend-tick:not(:first-child):not(:last-child) { display: none; }
+
     /* ─── Popup Leaflet in tema scuro ─── */
     .meteo-popup .leaflet-popup-content-wrapper {
       background: var(--bg-panel);

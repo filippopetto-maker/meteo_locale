@@ -478,6 +478,8 @@
   }
 
   const _localityCache = {};
+  // anche la vista 3D (js/vista3d.js) dà il nome al punto toccato
+  window.metekLocalita = (lat, lng) => getLocalityName(lat, lng);
 
   async function getLocalityName(lat, lng) {
     const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
@@ -877,7 +879,7 @@
         `<label class="ctrl-row" id="contour-toggle">` +
         `<input type="checkbox" id="contour-check">` +
         `<span class="switch"></span>` +
-        `<span>Linee di livello</span>` +
+        `<span>Isolinee</span>` +
         `</label>` +
         `<label class="ctrl-row" id="wind-toggle">` +
         `<input type="checkbox" id="wind-check" checked>` +
@@ -1204,7 +1206,6 @@
       const RADAR_TIMELINE_BOTTOM = 112; // deve combaciare con .is-pwa .radar-timeline { bottom }
       const RADAR_LEGEND_GAP = 8;
       function updateRadarLegendOffset() {
-        if (!isPWA) return;
         const legendEl = document.querySelector('.temp-legend');
         if (!legendEl) return;
         const radarSlot = document.querySelector('#radar-timeline .radar-legend-slot');
@@ -1378,23 +1379,16 @@
         el.className = 'radar-timeline';
         el.id = 'fc48-timeline';
         el.style.display = 'none';
-        // PWA: card unica e bassa: play, cursore e ora scelta su una riga; sotto, la scala colori
-        // (la .temp-legend viene spostata qui dentro da refresh()). Niente titolo né etichette Ora/+48h.
-        el.innerHTML = isPWA ?
+        // Card unica e bassa (PWA e, dal 22/11, anche PC come la vista 3D): play, cursore e ora scelta su una riga;
+        // sotto, la scala colori (la .temp-legend viene spostata qui dentro da refresh()). Niente etichette Ora/+48h.
+        el.innerHTML =
           `<div class="radar-timeline-row">` +
           `<button id="fc48-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
           `<div class="radar-track-wrap"><input type="range" id="fc48-slider" class="radar-slider" min="0" max="0" step="1" value="0" aria-label="Ora mostrata sulla mappa"></div>` +
           `<span id="fc48-now" class="fc48-now"></span>` +
           `</div>` +
           `<div class="fc48-legend-slot"></div>` +
-          `<span id="fc48-start" hidden></span><span id="fc48-end" hidden></span>`
-          :
-          `<div class="radar-timeline-row">` +
-          `<button id="fc48-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
-          `<div class="radar-track-wrap"><input type="range" id="fc48-slider" class="radar-slider" min="0" max="0" step="1" value="0"></div>` +
-          `</div>` +
-          `<div class="radar-timeline-labels"><span id="fc48-start"></span><span id="fc48-now"></span><span id="fc48-end"></span></div>` +
-          `<div class="radar-credit">Ora: stazioni · poi previsioni M2 fino a +48 h</div>`;
+          `<span id="fc48-start" hidden></span><span id="fc48-end" hidden></span>`;
         document.body.appendChild(el);
         const slider = el.querySelector('#fc48-slider');
         const playBtn = el.querySelector('#fc48-play');
@@ -1730,9 +1724,7 @@
           };
           clearTimeout(timerSecondarie);
           if (scorre) { scorre = false; timerSecondarie = setTimeout(secondarie, 150); } else secondarie();
-          el.querySelector('#fc48-now').textContent = isPWA
-            ? (pos === 0 ? `Ora ${formatTime(latest.generated_at)}` : fmt(data.times[i]))
-            : (pos === 0 ? `Ora · ${fmt(latest.generated_at)}` : `+${i + 1}h · ${fmt(data.times[i])}`);
+          el.querySelector('#fc48-now').textContent = pos === 0 ? `Ora ${formatTime(latest.generated_at)}` : fmt(data.times[i]);
           updateValidLabel();
           if (silent) return;
           if (activeLayer !== 'wind') { switchTime(activeTime); return; }
@@ -1831,8 +1823,8 @@
           // Stesso spazio della timeline radar: la legenda sale sopra la timeline
           const legendEl = document.querySelector('.temp-legend');
           legendEl?.classList.toggle('legend-fc48-mode', on);
-          if (isPWA && legendEl) {
-            // Telefono: la scala colori sta dentro la card della barra; sul radar torna al suo posto
+          if (legendEl) {
+            // La scala colori sta dentro la card della barra, sotto il play (telefono e, dal 22/11, PC); sul radar torna al suo posto
             const slot = el.querySelector('.fc48-legend-slot');
             if (on && legendEl.parentNode !== slot) { legendEl.style.bottom = ''; slot.appendChild(legendEl); }
             else if (!on && legendEl.parentNode === slot) document.body.appendChild(legendEl);

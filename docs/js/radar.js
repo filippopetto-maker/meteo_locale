@@ -40,9 +40,9 @@
     elTimeline.id = 'radar-timeline';
     elTimeline.className = 'radar-timeline';
     elTimeline.style.display = 'none';
-    // PWA: card compatta come la barra Ora/+48 h — play, cursore e ora del fotogramma su una riga,
+    // PWA e PC (dal 22/11): card compatta come la barra Ora/+48 h — play, cursore e ora del fotogramma su una riga,
     // sotto la scala colori (spostata qui da app.js). Credito RainViewer nell'attribuzione della mappa.
-    elTimeline.innerHTML = isPWA ?
+    elTimeline.innerHTML =
       `<div class="radar-timeline-row" id="radar-controls">` +
       `<button id="radar-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
       `<div class="radar-track-wrap">` +
@@ -53,25 +53,7 @@
       `</div>` +
       `<div id="radar-labels-row" hidden><span id="radar-label-start"></span><span id="radar-label-end"></span></div>` +
       `<div class="radar-legend-slot"></div>` +
-      `<div id="radar-unavailable" class="radar-unavailable" style="display:none">⚠️ Radar non disponibile</div>`
-      :
-      `<div class="radar-timeline-row" id="radar-controls">` +
-      `<button id="radar-play" class="radar-play-btn" title="Play/Pausa" type="button">▶</button>` +
-      `<div class="radar-track-wrap">` +
-      `<input type="range" id="radar-slider" class="radar-slider" min="0" max="0" step="1" value="0">` +
-      `<div id="radar-now-marker" class="radar-now-marker"></div>` +
-      `</div>` +
-      `</div>` +
-      `<div class="radar-timeline-labels" id="radar-labels-row">` +
-      `<span id="radar-label-start"></span>` +
-      `<span id="radar-label-now"></span>` +
-      `<span id="radar-label-end"></span>` +
-      `</div>` +
-      `<div id="radar-unavailable" class="radar-unavailable" style="display:none">⚠️ Radar non disponibile</div>` +
-      `<div class="radar-credit">` +
-      `Radar: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>` +
-      ` · <span class="radar-note" title="${RADAR_DISCLAIMER}">ⓘ limiti del dato</span>` +
-      `</div>`;
+      `<div id="radar-unavailable" class="radar-unavailable" style="display:none">⚠️ Radar non disponibile</div>`;
     document.body.appendChild(elTimeline);
 
     elControls    = document.getElementById('radar-controls');
@@ -175,7 +157,7 @@
     if (entry) return entry;
     const layer = L.tileLayer(frame.url, {
       opacity: 0, maxZoom: 19, maxNativeZoom: MAX_NATIVE_ZOOM, className: 'radar-frame',
-      attribution: isPWA ? 'Radar <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>' : '',
+      attribution: 'Radar <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>',
     });
     entry = { layer, loaded: false };
     layer.on('loading', () => { entry.loaded = false; });
@@ -263,7 +245,7 @@
 
   // PWA: l'etichetta a destra del cursore dice l'ora del fotogramma mostrato
   function updateNowLabel() {
-    if (!isPWA || !elLabelNow || currentIndex < 0 || !frames[currentIndex]) return;
+    if (!elLabelNow || currentIndex < 0 || !frames[currentIndex]) return;
     const t = formatEpoch(frames[currentIndex].time);
     elLabelNow.textContent = currentIndex === nowIndex ? `Adesso ${t}` : t;
   }

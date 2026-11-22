@@ -182,11 +182,10 @@ self.onmessage = e => { const d = e.data;
   html.vista-3d { --glass: rgba(20, 22, 34, .86); --border: rgba(255, 255, 255, .12); --text: #e9e9ed; --text-3: rgba(233, 233, 237, .55);
     --text-off: rgba(233, 233, 237, .52); --accent: #9184d9; --accent-on: #14121f; }
   #map3d { position: fixed; inset: 0; z-index: 500; background: #0b0f17; display: none; }
-  html.vista-3d #control-panel .layer-toggle, html.vista-3d #fc48-timeline, html.vista-3d #radar-timeline { display: none !important; }
+  html.vista-3d #control-panel .layer-toggle:not(#layer3d), html.vista-3d #fc48-timeline, html.vista-3d #radar-timeline { display: none !important; }
   html.vista-3d #map3d { display: block; }
   html.vista-3d #map, html.vista-3d #dock, html.vista-3d .temp-legend, html.vista-3d #legend-ctl { visibility: hidden !important; }
-  html.vista-3d #contour-toggle, html.vista-3d #wind-toggle, html.vista-3d #arrow-toggle,
-  html.vista-3d #popup-style-group, html.vista-3d #prefs-popover .prefs-label { display: none !important; }
+  html.vista-3d #arrow-toggle { display: none !important; }
   #map3d .maplibregl-ctrl-attrib { font-size: 10px; }
   #map3d .maplibregl-popup-content { background: var(--glass); color: var(--text); border: .5px solid var(--border); border-radius: 10px;
     box-shadow: 0 6px 24px rgba(0, 0, 0, .5); padding: 8px 12px; font-size: 12px; line-height: 1.5;
@@ -194,6 +193,11 @@ self.onmessage = e => { const d = e.data;
   #map3d .maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--glass); }
   #map3d .maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--glass); }
   #map3d .punto3d .k { color: var(--text-3); }
+  #map3d .meteo-popup3d .maplibregl-popup-content { padding: 10px 26px 10px 12px; line-height: 1.6; }
+  #map3d .meteo-popup3d .maplibregl-popup-close-button { color: var(--text-3); font-size: 18px; right: 4px; top: 4px; background: none; }
+  #map3d .meteo-popup3d .maplibregl-popup-close-button:hover { color: var(--text); }
+  #map3d .meteo-popup3d .pp-link { padding-right: 0; }
+  #map3d .meteo-popup3d .pp:not(.pp-min) b { font-size: inherit; }
   #map3d .punto3d b { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
   #map3d .punto3d small { display: block; color: var(--text-3); }
   #map3d .punto3d i { color: var(--text-off); }
@@ -224,15 +228,14 @@ self.onmessage = e => { const d = e.data;
   #dock3d .leg3d { display: flex; align-items: center; gap: 8px; margin-top: -3px; }
   #dock3d .leg3d i { flex: 1; height: 5px; border-radius: 3px; background: linear-gradient(90deg,#5c6e8f,#b3c7e0 25%,#f2f5fa 50%,#ffc46b 75%,#ff6b5e); }
   #dock3d .leg3d span { font: 400 10px ui-monospace, "SF Mono", monospace; color: rgba(233, 233, 237, .7); white-space: nowrap; }
-  #dock3d .iso3d { flex: 0 0 auto; height: 22px; padding: 0 9px; border-radius: 11px; border: .5px solid rgba(255,255,255,.22); background: rgba(0,0,0,.28);
-    color: rgba(233,233,237,.85); font: 600 10.5px Inter, -apple-system, sans-serif; cursor: pointer; display: flex; align-items: center; gap: 5px; }
-  #dock3d .iso3d[hidden] { display: none; }
-  #dock3d .iso3d.active { background: var(--accent); color: var(--accent-on); border-color: transparent; }
-  #dock3d .iso3d svg { width: 13px; height: 13px; }
   #dock3d .rail3d { display: flex; padding: 3px; border-radius: 14px; background: rgba(0, 0, 0, .28); }
   #dock3d .rail3d .rail-item { flex: 1; width: auto; height: 50px; border-radius: 11px; }
   #dock3d .rail3d .rail-item.active { background: var(--accent); color: var(--accent-on); }
   #dock3d .rail3d .rail-item span { font-size: 10.5px; }
+  /* da PC le sezioni stanno nel pannello in alto, come nel 2D; il dock tiene solo tempo e legenda */
+  #layer3d { display: none !important; }
+  html.vista-3d:not(.is-pwa) #control-panel #layer3d { display: flex !important; }
+  html.vista-3d:not(.is-pwa) #dock3d .rail3d { display: none; }
   .nav3d { display: none; }
   html.vista-3d .nav3d { position: fixed; right: 10px; top: calc(env(safe-area-inset-top, 0px) + 72px); z-index: 1000;
     display: flex; flex-direction: column; gap: 8px; }
@@ -283,7 +286,7 @@ self.onmessage = e => { const d = e.data;
         <div class="riga3d"><button class="radar-play-btn" id="play3d" type="button" title="Play/Pausa">▶</button>
           <div class="radar-track-wrap"><input type="range" id="ora3d-slider" class="radar-slider" min="0" max="1" step="0.02" value="0" aria-label="Ora mostrata"></div>
           <span class="fc48-now" id="ora3d"></span></div>
-        <div class="leg3d"><span>0</span><i></i><span id="leg3d-max"></span><button class="iso3d" id="iso3d" type="button" hidden aria-pressed="false" title="Isolinee"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 11c3-4 5 1 8-2s4-4 6-3"/><path d="M1 6c3-3 5 1 8-1.5S13 1 15 2"/><path d="M1 15c3-3 6 0 9-1.5s3.5-1.5 5-1.5"/></svg>Isolinee</button></div>
+        <div class="leg3d"><span>0</span><i></i><span id="leg3d-max"></span></div>
         <div class="rail3d"><button class="rail-item active" data-var="ws" type="button">${ICON_VENTO}<span>Vento</span></button>
           <button class="rail-item" data-var="t" type="button">${ICON_TEMP}<span>Temp.</span></button>
           <button class="rail-item" data-var="rh" type="button">${ICON_GOCCIA}<span>Umidità</span></button>
@@ -506,11 +509,11 @@ self.onmessage = e => { const d = e.data;
       return [[Wl, N], [E, N], [E, S], [Wl, S]]; };
 
     // pillole delle stazioni, ora per ora, nell'unità scelta
-    const freccia = wd => `<svg width="10" height="10" viewBox="0 0 16 16" style="transform:rotate(${Math.round((wd ?? 0) + 180)}deg)"><path d="M8 1 13 13 8 10 3 13z" fill="currentColor"/></svg>`;
+    const freccia = wd => `<svg width="10" height="10" viewBox="0 0 16 16" style="transform:rotate(calc(${Math.round((wd ?? 0) + 180)}deg - var(--rot3d, 0deg)))"><path d="M8 1 13 13 8 10 3 13z" fill="currentColor"/></svg>`;
     const markers = ST.map(s => {
       const el = document.createElement('div'); el.className = 'st-pin'; el.title = s.name;
       const pop = new maplibregl.Popup({ offset: 12, closeButton: false });
-      const mk = new maplibregl.Marker({ element: el, anchor: 'center', opacityWhenCovered: '0.15' }).setLngLat([s.lon, s.lat]).setPopup(pop);
+      const mk = new maplibregl.Marker({ element: el, anchor: 'center', opacityWhenCovered: '1' }).setLngLat([s.lon, s.lat]).setPopup(pop);
       mk._ora = ms => { const v = s.ore.get(ms) || (ms <= Date.now() + 3.6e6 ? s.ore.get(-1) : null);
         el.style.display = v ? '' : 'none'; if (!v) return;
         el.innerHTML = `${freccia(v[1])}${vU(v[0])}<small>${unitaKts() ? 'kts' : 'km/h'}</small>`;
@@ -622,6 +625,7 @@ self.onmessage = e => { const d = e.data;
     let oraClima = null;
     // isolinee (opzione): ogni 1 °C / 10 %, principali ogni 5 °C / 20 % con l'etichetta
     let ISO = false; try { ISO = localStorage.getItem('metek3d-iso') === '1'; } catch (e) {}
+    let VENTO = true; try { VENTO = localStorage.getItem('metek3d-vento') !== '0'; } catch (e) {}   // scie sopra Temp. e Umidità
     const PASSO_ISO = { t: 1, rh: 10 }, MAGG_ISO = { t: 5, rh: 20 }, LISCIA = { t: 1, rh: 2 }, VUOTO = { type: 'FeatureCollection', features: [] };
     // campo lisciato con medie 3×3 (1 passata la temperatura, 2 l'umidità, più rumorosa): le linee e le fasce non seguono i gradini della griglia
     const CAMPI = new Map();
@@ -748,24 +752,66 @@ self.onmessage = e => { const d = e.data;
       const v = VAR, k1 = oraFile(v, (t + 1) % NT), idle = f => window.requestIdleCallback ? requestIdleCallback(f, { timeout: 400 }) : setTimeout(f, 50);
       if (k1 != null) idle(() => { if (VAR === v) veloDati(v, k1); });
     }
+    // una griglia per variabile, scaricata una volta sola (anche se la chiedono insieme il cursore e il popup)
+    const PROM = {};
+    const dati = key => DATI[key] ? Promise.resolve(DATI[key]) : (PROM[key] ||= griglia(key).then(D => (DATI[key] = D)).catch(e => { delete PROM[key]; throw e; }));
     async function scegli(key) {
       if (key !== 'ws' && !DATI[key]) {
-        try { DATI[key] = await griglia(key); } catch (e) { console.warn('griglia 3D non caricata', key, e); return; }
+        try { await dati(key); } catch (e) { console.warn('griglia 3D non caricata', key, e); return; }
       }
-      VAR = key; TENUE = key === 'ws' ? 1 : .35; oraClima = null;
+      VAR = key; TENUE = key === 'ws' ? 1 : VENTO ? .35 : 0; oraClima = null;
       document.querySelectorAll('#dock3d .rail-item[data-var]').forEach(b => b.classList.toggle('active', b.dataset.var === key));
       const vis = key === 'ws' ? 'none' : 'visible';
       if (map.getLayer('clima')) { map.setLayoutProperty('clima', 'visibility', vis); map.setLayoutProperty('montagne', 'visibility', key === 'ws' ? 'visible' : 'none'); }
       if (map.getLayer('rilievo')) map.setPaintProperty('rilievo', 'raster-opacity', key === 'ws' ? .6 : 1);
-      $('iso3d').hidden = key === 'ws';
+      interruttori();
       climaOra(); oraIso = null; isoOra(); legenda(); oraPunto = -1; aggiornaPunto();
     }
-    const isoBtn = $('iso3d');
-    const isoStato = () => { isoBtn.classList.toggle('active', ISO); isoBtn.setAttribute('aria-pressed', ISO); };
-    isoBtn.addEventListener('click', () => { ISO = !ISO; isoStato(); try { localStorage.setItem('metek3d-iso', ISO ? '1' : '0'); } catch (e) {}
-      oraClima = null; climaOra(); oraIso = null; isoOra(); });
-    isoStato();
+    // Isolinee e Mostra vento: gli stessi interruttori delle impostazioni del 2D. In 3D hanno uno stato loro
+    // (isolinee e scie convivono, nel 2D le linee spengono le particelle): entrando si salva quello del 2D
+    // e si mostra il nostro, uscendo si rimette com'era; i cambi fatti in 3D non arrivano al codice del 2D.
+    const CC = () => document.getElementById('contour-check'), WC = () => document.getElementById('wind-check');
+    let stato2D = null;
+    function interruttori() {
+      if (!document.documentElement.classList.contains('vista-3d')) return;
+      const cc = CC(), wc = WC(), vis = VAR === 'ws' ? 'none' : '';
+      if (cc) { cc.checked = ISO; cc.closest('label').style.display = vis; }
+      if (wc) { wc.checked = VENTO; wc.disabled = false; const l = wc.closest('label'); l.style.display = vis; l.classList.remove('is-disabled'); }
+    }
+    const entra2D = () => { const cc = CC(), wc = WC(); if (stato2D || !cc || !wc) return;
+      stato2D = { c: cc.checked, w: wc.checked, wd: wc.disabled, cd: cc.closest('label').style.display, ld: wc.closest('label').style.display,
+        li: wc.closest('label').classList.contains('is-disabled') };
+      interruttori(); };
+    const esci2D = () => { const cc = CC(), wc = WC(); if (!stato2D || !cc || !wc) return; const s = stato2D; stato2D = null;
+      cc.checked = s.c; cc.closest('label').style.display = s.cd; wc.checked = s.w; wc.disabled = s.wd;
+      const l = wc.closest('label'); l.style.display = s.ld; l.classList.toggle('is-disabled', s.li); };
+    document.addEventListener('change', e => {
+      if (!stato2D || (e.target.id !== 'contour-check' && e.target.id !== 'wind-check')) return;
+      e.stopPropagation();
+      if (e.target.id === 'contour-check') {
+        ISO = e.target.checked; try { localStorage.setItem('metek3d-iso', ISO ? '1' : '0'); } catch (x) {}
+        oraClima = null; climaOra(); oraIso = null; isoOra();
+      } else {
+        VENTO = e.target.checked; try { localStorage.setItem('metek3d-vento', VENTO ? '1' : '0'); } catch (x) {}
+        if (VAR !== 'ws') TENUE = VENTO ? .35 : 0;
+      }
+    }, true);
     document.querySelectorAll('#dock3d .rail-item[data-var]').forEach(b => b.addEventListener('click', () => { if (b.dataset.var !== VAR) { stop(); scegli(b.dataset.var); } }));
+    // da PC: le stesse sezioni nel pannello in alto, con l'aspetto del 2D; ogni pulsante preme quello del dock e ne copia lo stato
+    if (!document.documentElement.classList.contains('is-pwa')) {
+      const prima = document.querySelector('#control-panel .layer-toggle');
+      if (prima && !$('layer3d')) {
+        const box = document.createElement('div'); box.className = 'layer-toggle'; box.id = 'layer3d';
+        const voci = [['ws', '💨 Vento'], ['t', '🌡️ Temperatura'], ['rh', '💧 Umidità'], ['ev', '🎬 Evento']];
+        box.innerHTML = voci.map(([k, l]) => `<button type="button" data-k="${k}">${l}</button>`).join('');
+        prima.after(box);
+        const gemello = k => k === 'ev' ? $('evento3d') : document.querySelector(`#dock3d .rail-item[data-var="${k}"]`);
+        box.addEventListener('click', e => { const b = e.target.closest('button'); if (b) gemello(b.dataset.k)?.click(); });
+        const copia = () => box.querySelectorAll('button').forEach(b => b.classList.toggle('active', !!gemello(b.dataset.k)?.classList.contains('active')));
+        new MutationObserver(copia).observe(document.querySelector('#dock3d .rail3d'), { subtree: true, attributes: true, attributeFilter: ['class'] });
+        copia();
+      }
+    }
     const showT = () => {
       $('ora3d').textContent = new Date(VM.times[Math.min(NT - 1, Math.round(T))]).toLocaleString('it-IT', { timeZone: 'Europe/Rome', weekday: 'short', hour: '2-digit', minute: '2-digit' });
       pilloleOra(); avvisiOra(); climaOra(); isoOra(); aggiornaPunto();
@@ -793,7 +839,24 @@ self.onmessage = e => { const d = e.data;
       const v = (r, c) => S[b + r * G1.nx + c];
       return ((v(y, x) * (1 - ax) + v(y, x + 1) * ax) * (1 - ay) + (v(y + 1, x) * (1 - ax) + v(y + 1, x + 1) * ax) * ay) * G1.passo;
     }
-    const punto = new maplibregl.Popup({ closeButton: false, className: 'punto3d', offset: 6, maxWidth: '240px' });
+    // tocco sulla mappa: lo stesso popup del 2D (completo o minimale, dalle impostazioni) all'ora mostrata.
+    // Il nome del luogo apre la tenda delle previsioni 48 h sul punto (js/luogo.js), come nel 2D.
+    const punto = new maplibregl.Popup({ closeButton: true, closeOnClick: false, className: 'punto3d meteo-popup3d', offset: 6, maxWidth: '240px' });
+    const valore = (key, lng, lat, t) => {
+      const D = DATI[key], k = D && D.ore.get(Date.parse(VM.times[t])); if (k == null) return null;
+      const g = D.g, fx = (lng - g.lon0) / g.dlon, fy = (lat - g.lat0) / g.dlat;
+      if (fx < 0 || fy < 0 || fx > g.nx - 1 || fy > g.ny - 1) return null;
+      const x = Math.min(g.nx - 2, fx | 0), y = Math.min(g.ny - 2, fy | 0), ax = fx - x, ay = fy - y, v = (r, c) => D.F[k * D.n + r * g.nx + c];
+      return ((v(y, x) * (1 - ax) + v(y, x + 1) * ax) * (1 - ay) + (v(y + 1, x) * (1 - ax) + v(y + 1, x + 1) * ax) * ay) * D.passo; };
+    // stesse formule del 2D (app.js): percepita di Steadman (BoM) e bulbo umido di Stull
+    const percepita = (t, rh, kmh) => { if (t == null || rh == null || kmh == null) return null;
+      const e = 6.112 * Math.exp(17.62 * t / (243.12 + t)) * Math.min(100, Math.max(0, rh)) / 100; return t + .33 * e - .7 * Math.max(0, kmh) / 3.6 - 4; };
+    const bulbo = (t, rh) => { if (t == null || rh == null) return null; const r = Math.min(99, Math.max(5, rh));
+      return t * Math.atan(.151977 * Math.sqrt(r + 8.313659)) + Math.atan(t + r) - Math.atan(r - 1.676331) + .00391838 * Math.pow(r, 1.5) * Math.atan(.023101 * r) - 4.686035; };
+    const vento1 = kmh => unitaKts() ? (kmh * KTS).toFixed(1) + ' kts' : kmh.toFixed(1) + ' km/h';
+    const c1 = v => (v != null ? v.toFixed(1) + '°C' : 'n/d');
+    const esc = x => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    let nomePunto = '📍 ...';
     function scriviPunto() {
       if (!punto.isOpen()) return;
       const { lng, lat } = punto.getLngLat(), t = Math.min(NT - 1, Math.round(T)), Tp = T;
@@ -802,21 +865,36 @@ self.onmessage = e => { const d = e.data;
       if (!uv || kmh == null) return punto.remove();
       let dir = Math.atan2(-uv[0], -uv[1]) * 180 / Math.PI; if (dir < 0) dir += 360;
       const sett = SETTORI[Math.round(dir / 22.5) % 16], nome = sett.length <= 2 ? NOMI[sett] : `${NOMI[sett[0]]} - ${NOMI[sett]}`;
-      const ora = new Date(VM.times[t]).toLocaleString('it-IT', { timeZone: 'Europe/Rome', weekday: 'short', hour: '2-digit', minute: '2-digit' });
-      const D = DATI[VAR], k = D && D.ore.get(Date.parse(VM.times[t]));
-      const val = VAR === 'ws' || k == null ? null : (() => { const g = D.g, fx = (lng - g.lon0) / g.dlon, fy = (lat - g.lat0) / g.dlat;
-        if (fx < 0 || fy < 0 || fx > g.nx - 1 || fy > g.ny - 1) return null;
-        const x = Math.min(g.nx - 2, fx | 0), y = Math.min(g.ny - 2, fy | 0), ax = fx - x, ay = fy - y, v = (r, c) => D.F[k * D.n + r * g.nx + c];
-        return ((v(y, x) * (1 - ax) + v(y, x + 1) * ax) * (1 - ay) + (v(y + 1, x) * (1 - ax) + v(y + 1, x + 1) * ax) * ay) * D.passo; })();
-      const vento = `<span class="k">Vento</span> <b>${vU(kmh)} ${nomeU()}</b> <span class="k">${sett}</span>`;
-      punto.setHTML(val == null ? `${vento}<small><i>${nome}</i></small><small>${ora}</small>`
-        : `<span class="k">${VAR === 't' ? 'Temperatura' : 'Umidità'}</span> <b>${VAR === 't' ? val.toFixed(1) + '°C' : Math.round(val) + '%'}</b>` +
-          `<small>vento ${vU(kmh)} ${nomeU()} ${sett}</small><small>${ora}</small>`);
+      const tc = valore('t', lng, lat, t), rh = valore('rh', lng, lat, t);
+      const titolo = `<button class="pp-name pp-link" type="button" data-p48 title="Previsioni 48 ore">${esc(nomePunto)}<span class="pp-chev">›</span></button>`;
+      let corpo;
+      if (localStorage.getItem('metek.popup.stile') === 'min') {
+        corpo = VAR === 't' ? `<span class="pp-k">Temperatura</span> <b class="pp-v">${c1(tc)}</b>`
+          : VAR === 'rh' ? `<span class="pp-k">Umidità</span> <b class="pp-v">${rh != null ? Math.round(rh) + '%' : 'n/d'}</b>`
+          : `<span class="pp-k">Vento</span> <b class="pp-v">${vento1(kmh)}</b> <span class="pp-k">${sett}</span><small class="pp-wname">${nome}</small>`;
+        corpo = `<div class="pp-line">${corpo}</div>`;
+      } else {
+        const a = VAR === 't' ? percepita(tc, rh, kmh) : null, wb = VAR === 'rh' ? bulbo(tc, rh) : null;
+        corpo = `🌡️ <b>${c1(tc)}</b>` + (a != null ? ` · perc. <b>${a.toFixed(1)}°C</b>` : wb != null ? ` · 💦 <b>${wb.toFixed(1)}°C</b>` : '') + '<br>' +
+          `💨 <b>${vento1(kmh)}</b> — ${sett}<br><small class="pp-wname" style="margin-left:1.4em">${nome}</small>` +
+          `💧 Umidità: <b>${rh != null ? Math.round(rh) + '%' : 'n/d'}</b>`;
+      }
+      punto.setHTML(`<div class="pp${localStorage.getItem('metek.popup.stile') === 'min' ? ' pp-min' : ''}">${titolo}${corpo}</div>`);
     }
     let oraPunto = -1;
     map.on('click', e => {
       if (e.originalEvent?.target?.closest?.('.maplibregl-marker, .maplibregl-popup')) return;
-      punto.setLngLat(e.lngLat).addTo(map); oraPunto = -1; scriviPunto();
+      const { lng, lat } = e.lngLat;
+      nomePunto = '📍 ...'; punto.setLngLat(e.lngLat).addTo(map); oraPunto = -1; scriviPunto();
+      // temperatura e umidità servono al popup completo anche guardando il vento: si caricano al primo tocco
+      Promise.allSettled([dati('t'), dati('rh')]).then(() => scriviPunto());
+      (window.metekLocalita ? window.metekLocalita(lat, lng) : Promise.resolve(`${lat.toFixed(3)}°N, ${lng.toFixed(3)}°E`))
+        .then(n => { const ll = punto.getLngLat(); if (ll.lng === lng && ll.lat === lat) { nomePunto = n; scriviPunto(); } });
+    });
+    map.getContainer().addEventListener('click', ev => {
+      if (!ev.target.closest('.meteo-popup3d [data-p48]')) return;
+      const { lng, lat } = punto.getLngLat();
+      window.MeteoLuogo?.open({ name: nomePunto.startsWith('📍') ? 'Punto sulla mappa' : nomePunto, sub: 'punto sulla mappa', lat, lon: lng });
     });
     aggiornaPunto = () => { const t = Math.round(T); if (t !== oraPunto) { oraPunto = t; scriviPunto(); } };
 
@@ -825,6 +903,9 @@ self.onmessage = e => { const d = e.data;
       const p = map.getPitch(), a = p * Math.PI / 180, x = 29 + 24 * Math.sin(a), y = 29 - 24 * Math.cos(a);
       $('incl3d-l').setAttribute('x2', x); $('incl3d-l').setAttribute('y2', y); $('incl3d-p').setAttribute('cx', x); $('incl3d-p').setAttribute('cy', y);
       $('incl3d-t').textContent = p < 3 ? '2D' : Math.round(p) + '°'; };
+    // le frecce del vento nelle pillole seguono la bussola (sono disegnate rispetto allo schermo)
+    const giraFrecce = () => map.getContainer().style.setProperty('--rot3d', map.getBearing() + 'deg');
+    map.on('rotate', giraFrecce); giraFrecce();
     map.on('rotate', segnaNav); map.on('pitch', segnaNav); segnaNav();
     const trascina = (el, giu, muovi, tocco) => { let s = null;
       el.addEventListener('pointerdown', e => { s = { x: e.clientX, y: e.clientY, mosso: false, ...giu(e) }; el.setPointerCapture(e.pointerId); stop(); });
@@ -915,8 +996,8 @@ self.onmessage = e => { const d = e.data;
     }
 
     return {
-      mostra() { if (!tickOn) { tickOn = true; ultimo = 0; map.resize(); tick(); } },
-      nascondi() { tickOn = false; pausa(); stop(); },
+      mostra() { entra2D(); if (!tickOn) { tickOn = true; ultimo = 0; map.resize(); tick(); } },
+      nascondi() { tickOn = false; pausa(); stop(); esci2D(); },
       vaiA, map,
     };
   }
