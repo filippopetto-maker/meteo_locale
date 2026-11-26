@@ -60,6 +60,16 @@ logger = logging.getLogger("rete_ombra")
 
 
 # ─────────────────────────────────────────────────────────── pacchetto dei modelli
+def impronta() -> str:
+    """Impronta delle reti del pacchetto (sha256 dei rete*.pt): la correzione impara solo dalle corse della stessa
+    rete (26/11: la storia della rete vecchia, più sottostimante, gonfiava le probabilità della nuova)."""
+    import hashlib
+    h = hashlib.sha256()
+    for f in sorted(MOD.glob("rete*.pt")):
+        h.update(f.read_bytes())
+    return h.hexdigest()[:12]
+
+
 def impacchetta(nome: str):
     sorg = o.OUT / nome
     if MOD.exists():
@@ -202,7 +212,7 @@ def prevedi(x: np.ndarray, tempi: pd.DatetimeIndex, t0: pd.Timestamp, canali: li
     grezza[:, :, fuori] = np.nan
     return {"p": tarata.astype("float16"), "p_grezza": grezza.astype("float16"),
             "tempi": tempi.values.astype("datetime64[m]"), "lead_h": lead_h.astype("int16"),
-            "soglie": np.array(o.SOGLIE), "corsa": np.datetime64(t0, "m"), "reti": len(p)}
+            "soglie": np.array(o.SOGLIE), "corsa": np.datetime64(t0, "m"), "reti": len(p), "modello": impronta()}
 
 
 def stima_mm(p: np.ndarray, lead_h: np.ndarray) -> np.ndarray | None:
@@ -254,7 +264,8 @@ def main():
         s = np.load(MOD / "statici.npz")
         zona = rd.affidabile(s["x"], list(s["canali"]))
         p_corr, info = rc.correggi(ris["p_grezza"], t0, args.storia, rd.celle(),
-                                   pd.read_parquet(MOD / "fattore_radar_mnw.parquet"), zona, o.SOGLIE)
+                                   pd.read_parquet(MOD / "fattore_radar_mnw.parquet"), zona, o.SOGLIE,
+                                   modello=str(ris["modello"]))
         ris["p_tarata"], ris["p"] = ris["p"], p_corr.astype("float16")          # p_tarata solo per confronto
         ris["correzione"] = np.array(json.dumps(info))
     mm = stima_mm(ris["p"], ris["lead_h"])

@@ -1,10 +1,12 @@
 name: Pioggia oraria in ombra (U-Net, 1–48 h)
 
-# Dopo ogni corsa ICON-2I (00Z, 12Z; su AWS ~2 h dopo) la U-Net oraria (insieme di 6 reti, scripts/rete_ombra.py)
+# Dopo ogni corsa ICON-2I (00Z, 12Z; su AWS ~2 h dopo) la U-Net oraria (3 reti, scripts/rete_ombra.py)
 # prevede la probabilità di ≥ 0,2 / 1 / 4 mm/h da +1 a +48 h su tutte le celle 0,05° del Lazio. Le previsioni
 # vanno come asset nella release del mese pioggia-ombra-AAAA-MM di metek-core: nessun effetto sul sito.
 # I modelli si scaricano dalla release modelli-pioggia-oraria (model/pioggia_oraria/, rete_ombra.py --impacchetta).
 # Dal 21/11 le probabilità si correggono con l'errore dei giorni appena verificati (rete_correzione.py).
+# Dal 24/11 le reti sono base_ott_inv_pulito2 (base + ott e gen–apr 2026, senza i giorni di radar guasto); prima
+# l insieme di 6 (da rifare con rete_ombra.py --impacchetta insieme).
 # Trigger esterno: cron-job.org alle 03:30 e 15:30 UTC, body {"ref":"main"}. A mano: "corsa" = AAAA-MM-GGTHH.
 on:
   workflow_dispatch:

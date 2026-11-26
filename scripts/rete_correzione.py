@@ -26,7 +26,9 @@ giorno; β·β²/(β²+se²), con se² gonfiato a ν/(ν−2) per i pochi gradi 
 3 giorni piovosi equivalenti l'errore non si conosce e β = 0, cioè la grezza). Nessuna soglia di giorni o di casi.
 Ottobre–novembre e ombra: mai sotto la grezza; 6/10 a 0,144.
 
-Base: la probabilità grezza (dal 22/11; prima la tarata).
+Base: la probabilità grezza (dal 22/11; prima la tarata). Dal 26/11 la storia è solo delle corse della stessa rete
+(campo «modello», impronta dei rete*.pt): con la storia della rete vecchia la correzione gonfiava la nuova (17–25/11,
+1 mm: BSS .256 contro .342 della grezza; con la storia rifatta con la rete nuova .345).
 Verità come in verifica_pioggia_ombra.py: radar DPC orario × fattore dei pluviometri MeteoNetwork.
 """
 
@@ -59,8 +61,9 @@ def logit(p: np.ndarray) -> np.ndarray:
 
 
 def storia(t0: pd.Timestamp, cartella_ombra: Path, cartella_radar: Path, celle: pd.DataFrame,
-           fattore: pd.DataFrame, zona: np.ndarray) -> dict:
-    """{giorno: (p (n, 3), y (n,))} dalle corse in ombra prima di t0, sulle ore con il radar, zona affidabile."""
+           fattore: pd.DataFrame, zona: np.ndarray, modello: str | None = None) -> dict:
+    """{giorno: (p (n, 3), y (n,))} dalle corse in ombra prima di t0, sulle ore con il radar, zona affidabile.
+    Con modello, solo le corse fatte da quelle reti (campo «modello» del file; i file senza non contano)."""
     oss = {}
     inizio = t0.normalize() - pd.Timedelta(days=max(MEMORIE) + 3)
     for f in sorted(cartella_radar.glob("sri_italia_*.npz")):
@@ -73,6 +76,8 @@ def storia(t0: pd.Timestamp, cartella_ombra: Path, cartella_radar: Path, celle: 
         if not inizio - pd.Timedelta(days=2) <= corsa < t0:
             continue
         d = np.load(f)
+        if modello is not None and ("modello" not in d or str(d["modello"]) != modello):
+            continue                                                       # altra rete: altro errore
         p = d["p_grezza"]                                                  # la base della correzione
         for n, t in enumerate(pd.DatetimeIndex(d["tempi"])):
             if t not in oss:
@@ -144,9 +149,9 @@ def curve(st: dict, soglie: list[float], rng) -> dict:
     return out
 
 
-def fiducia(C: dict) -> dict:
-    """β (2 direzioni × soglie) dalle curve dei giorni verificati, con stima, errore e giorni piovosi equivalenti."""
-    n_s = next(iter(C.values()))[0].shape[1] if C else 0
+def fiducia(C: dict, n_s: int) -> dict:
+    """β (2 direzioni × soglie) dalle curve dei giorni verificati, con stima, errore e giorni piovosi equivalenti;
+    senza curve (meno di 3 giorni di storia) β = 0: la grezza."""
     r = {k: np.zeros((2, n_s)) for k in ("stima", "usato", "neff")}
     r["se"] = np.full((2, n_s), np.nan)
     if not C:
@@ -172,12 +177,12 @@ def fiducia(C: dict) -> dict:
 
 
 def correggi(p: np.ndarray, t0: pd.Timestamp, cartella: Path, celle: pd.DataFrame, fattore: pd.DataFrame,
-             zona: np.ndarray, soglie: list[float]) -> tuple[np.ndarray, dict]:
+             zona: np.ndarray, soglie: list[float], modello: str | None = None) -> tuple[np.ndarray, dict]:
     """Corregge p (grezza) con la storia in cartella/ombra e cartella/radar, pesata con la fiducia; info per il file."""
     rng = np.random.default_rng(0)
-    st = storia(t0, cartella / "ombra", cartella / "radar", celle, fattore, zona)
+    st = storia(t0, cartella / "ombra", cartella / "radar", celle, fattore, zona, modello)
     modelli = adatta(st, soglie, rng)
-    fd = fiducia(curve(st, soglie, rng))
+    fd = fiducia(curve(st, soglie, rng), len(soglie))
     piena = applica(p, modelli)
     out = np.array(p, dtype="float32", copy=True)
     dentro = np.isfinite(out[:, 0])
@@ -187,7 +192,7 @@ def correggi(p: np.ndarray, t0: pd.Timestamp, cartella: Path, celle: pd.DataFram
         out[:, k][dentro] = 1 / (1 + np.exp(-(lp + b * (lc - lp))))
     out[:, 1] = np.minimum(out[:, 1], out[:, 0])
     out[:, 2] = np.minimum(out[:, 2], out[:, 1])
-    info = {"giorni_verificati": len(st), "ultimo_giorno": str(max(st).date()) if st else None, "base": "grezza",
+    info = {"modello": modello, "giorni_verificati": len(st), "ultimo_giorno": str(max(st).date()) if st else None, "base": "grezza",
             "memorie": {str(D): [None if m is None else [float(m.intercept_[0]), float(m.coef_[0, 0])] for m in ms]
                         for D, ms in modelli.items()},
             "fiducia": {k: np.round(v, 4).tolist() for k, v in fd.items()}, "fiducia_righe": ["abbassa", "alza"]}
